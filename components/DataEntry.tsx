@@ -857,8 +857,8 @@ export const DataEntry: React.FC = () => {
         if (!shipmentModalOrder) return;
         
         const itemsToShip = Object.entries(shipmentQtys)
-            .filter(([_, qty]) => qty > 0)
-            .map(([itemId, qty]) => ({ itemId, shipQty: qty }));
+            .filter(([_, qty]) => (qty as number) > 0)
+            .map(([itemId, qty]) => ({ itemId, shipQty: qty as number }));
 
         if (itemsToShip.length === 0) {
             alert('Please enter quantity to ship for at least one item.');
