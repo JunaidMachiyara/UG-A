@@ -17,6 +17,11 @@ import { HRModule } from './components/HRModule';
 import { ChatModule } from './components/ChatModule';
 import { CustomsModule } from './components/CustomsModule';
 import { DatabaseSetup } from './components/DatabaseSetup';
+import { OriginalStockReport } from './components/reports/OriginalStockReport';
+import { ItemPerformanceReport } from './components/reports/ItemPerformanceReport';
+import { OrderFulfillmentDashboard } from './components/reports/OrderFulfillmentDashboard';
+import { DataImportExport } from './components/DataImportExport';
+import { AdminModule } from './components/AdminModule';
 
 // Error Boundary Component
 class ErrorBoundary extends React.Component<
@@ -91,9 +96,13 @@ const App: React.FC = () => {
               <Route path="/setup" element={<SetupModule />} />
               
               <Route path="/reports" element={<ReportsModuleV2 />} />
+              <Route path="/reports/original-stock" element={<OriginalStockReport />} />
+              <Route path="/reports/item-performance" element={<ItemPerformanceReport />} />
+              <Route path="/reports/order-fulfillment" element={<OrderFulfillmentDashboard />} />
               
-              <Route path="/admin" element={<Placeholder title="Administration" />} />
+              <Route path="/admin" element={<AdminModule />} />
               <Route path="/db-setup" element={<DatabaseSetup />} />
+              <Route path="/import-export" element={<DataImportExport />} />
               
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

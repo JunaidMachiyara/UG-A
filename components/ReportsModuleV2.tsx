@@ -31,10 +31,13 @@ import {
     Plus,
     Trash2,
     ShieldAlert, 
-    ChevronRight 
+    ChevronRight,
+    ExternalLink,
+    Truck
 } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
 import { EntitySelector } from './EntitySelector';
+import { Link } from 'react-router-dom';
 
 // --- Helper Functions for Planners ---
 function getNextPeriodDates(periodType: PlannerPeriodType, currentDate: Date): { currentPeriod: string, nextPeriodStartDate: Date, lastPeriodStartDate: Date, lastPeriodEndDate: Date } {
@@ -1382,6 +1385,39 @@ export const ReportsModuleV2: React.FC = () => {
 
     return (
         <div className="flex flex-col h-[calc(100vh-80px)] bg-slate-50">
+            {/* Quick Links Section */}
+            <div className="bg-gradient-to-r from-blue-600 to-emerald-600 px-8 py-4 shrink-0">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-white font-bold text-sm uppercase tracking-wide">📊 Specialized Reports</h3>
+                    <div className="flex gap-3">
+                        <Link 
+                            to="/reports/order-fulfillment" 
+                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-purple-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                        >
+                            <Truck size={16} />
+                            Order Fulfillment
+                            <ExternalLink size={14} />
+                        </Link>
+                        <Link 
+                            to="/reports/original-stock" 
+                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-blue-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                        >
+                            <Package size={16} />
+                            Original Stock
+                            <ExternalLink size={14} />
+                        </Link>
+                        <Link 
+                            to="/reports/item-performance" 
+                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-emerald-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                        >
+                            <TrendingUp size={16} />
+                            Item Performance
+                            <ExternalLink size={14} />
+                        </Link>
+                    </div>
+                </div>
+            </div>
+
             <div className="bg-white border-b border-slate-200 px-8 flex items-center gap-8 shadow-sm shrink-0 overflow-x-auto">
                 {[
                     { id: 'BI', label: 'Executive Dashboard', icon: LayoutDashboard },
