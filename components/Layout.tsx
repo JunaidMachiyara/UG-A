@@ -24,10 +24,44 @@ const SidebarItem = ({ to, icon: Icon, label, badge }: { to: string, icon: any, 
 };
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { state } = useData();
+    const { state, isFirestoreLoaded, firestoreStatus, firestoreError } = useData();
     
     // Calculate global unread chat messages
     const unreadCount = state.chatMessages.filter(m => !m.readBy.includes(CURRENT_USER.id)).length;
+    
+    // Database Status Indicator
+    const getStatusIndicator = () => {
+        switch (firestoreStatus) {
+            case 'loading':
+                return (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                        <span className="text-xs text-yellow-700 font-medium">Loading from Firebase...</span>
+                    </div>
+                );
+            case 'loaded':
+                return (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                        <span className="text-xs text-emerald-700 font-medium">🔥 Live Sync Active</span>
+                    </div>
+                );
+            case 'error':
+                return (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg">
+                        <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                        <span className="text-xs text-red-700 font-medium">Error: {firestoreError}</span>
+                    </div>
+                );
+            default:
+                return (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg">
+                        <div className="w-2 h-2 bg-slate-400 rounded-full"></div>
+                        <span className="text-xs text-slate-600 font-medium">Disconnected</span>
+                    </div>
+                );
+        }
+    };
 
     return (
         <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -76,6 +110,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         Overview
                     </h2>
                     <div className="flex items-center gap-4">
+                        {getStatusIndicator()}
+                        <div className="h-4 w-px bg-slate-300"></div>
                         <span className="text-sm text-slate-500">Cash: <span className="text-emerald-600 font-mono font-medium">${state.accounts.find(a=>a.name.includes('Cash'))?.balance.toLocaleString() ?? 0}</span></span>
                         <div className="h-4 w-px bg-slate-300"></div>
                          <span className="text-sm text-slate-500">Bank: <span className="text-blue-600 font-mono font-medium">${state.accounts.find(a=>a.name.includes('Bank'))?.balance.toLocaleString() ?? 0}</span></span>

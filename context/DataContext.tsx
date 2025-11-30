@@ -1,13 +1,18 @@
 
-import React, { createContext, useContext, useReducer, useCallback } from 'react';
-import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument } from '../types';
+import React, { createContext, useContext, useReducer, useCallback, useEffect, useState, useRef } from 'react';
+import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument } from '../types';
 import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS } from '../constants';
+import { db } from '../services/firebase';
+import { collection, onSnapshot, doc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 // Helper for simple ID generation
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 type Action =
     | { type: 'POST_TRANSACTION'; payload: { entries: Omit<LedgerEntry, 'id'>[] } }
+    | { type: 'RESTORE_STATE'; payload: AppState }
+    | { type: 'LOAD_PARTNERS'; payload: Partner[] }
+    | { type: 'LOAD_ACCOUNTS'; payload: Account[] }
     | { type: 'ADD_PARTNER'; payload: Partner }
     | { type: 'ADD_ITEM'; payload: Item }
     | { type: 'ADD_ACCOUNT'; payload: Account }
@@ -52,8 +57,8 @@ type Action =
     | { type: 'ADD_CUSTOMS_DOCUMENT'; payload: CustomsDocument };
 
 const initialState: AppState = {
-    accounts: INITIAL_ACCOUNTS,
-    partners: INITIAL_PARTNERS,
+    accounts: [], // Will load from Firebase
+    partners: [], // Will load from Firebase
     items: INITIAL_ITEMS,
     divisions: INITIAL_DIVISIONS,
     subDivisions: INITIAL_SUB_DIVISIONS,
@@ -88,6 +93,18 @@ const initialState: AppState = {
 
 const dataReducer = (state: AppState, action: Action): AppState => {
     switch (action.type) {
+        case 'RESTORE_STATE': {
+            console.log('✅ RESTORING STATE FROM FIREBASE');
+            return action.payload;
+        }
+        case 'LOAD_PARTNERS': {
+            console.log('✅ LOADED PARTNERS FROM FIREBASE:', action.payload.length);
+            return { ...state, partners: action.payload };
+        }
+        case 'LOAD_ACCOUNTS': {
+            console.log('✅ LOADED ACCOUNTS FROM FIREBASE:', action.payload.length);
+            return { ...state, accounts: action.payload };
+        }
         case 'POST_TRANSACTION': {
             const newEntries = action.payload.entries.map(e => ({
                 ...e,
@@ -264,6 +281,9 @@ const dataReducer = (state: AppState, action: Action): AppState => {
 
 interface DataContextType {
     state: AppState;
+    isFirestoreLoaded: boolean;
+    firestoreStatus: 'disconnected' | 'loading' | 'loaded' | 'error';
+    firestoreError: string | null;
     postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => void;
     deleteTransaction: (transactionId: string, reason?: string, user?: string) => void;
     addPartner: (partner: Partner) => void;
@@ -316,6 +336,92 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [state, dispatch] = useReducer(dataReducer, initialState);
+    
+    // 🛡️ CRITICAL SAFEGUARD: Firebase Connection State
+    const [isFirestoreLoaded, setIsFirestoreLoaded] = useState(false);
+    const [firestoreStatus, setFirestoreStatus] = useState<'disconnected' | 'loading' | 'loaded' | 'error'>('disconnected');
+    const [firestoreError, setFirestoreError] = useState<string | null>(null);
+    const isUpdatingFromFirestore = useRef(false);
+
+    // 🔥 FIREBASE SYNC: Load partners and accounts from Firestore in real-time
+    useEffect(() => {
+        console.log('🔥 Connecting to Firebase Collections...');
+        setFirestoreStatus('loading');
+
+        // Listen to Partners collection
+        const unsubscribePartners = onSnapshot(
+            collection(db, 'partners'),
+            (snapshot) => {
+                const partners: Partner[] = [];
+                snapshot.forEach((doc) => {
+                    partners.push({
+                        id: doc.id,
+                        ...doc.data()
+                    } as Partner);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_PARTNERS', payload: partners });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => {
+                console.error('❌ Error loading partners:', error);
+                setFirestoreError(error.message);
+            }
+        );
+
+        // Listen to Accounts collection
+        const unsubscribeAccounts = onSnapshot(
+            collection(db, 'accounts'),
+            (snapshot) => {
+                const accounts: Account[] = [];
+                snapshot.forEach((doc) => {
+                    accounts.push({
+                        id: doc.id,
+                        ...doc.data()
+                    } as Account);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ACCOUNTS', payload: accounts });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => {
+                console.error('❌ Error loading accounts:', error);
+                setFirestoreError(error.message);
+            }
+        );
+
+        // Mark as loaded after initial connection
+        setTimeout(() => {
+            setIsFirestoreLoaded(true);
+            setFirestoreStatus('loaded');
+            console.log('🟢 Firebase sync enabled!');
+        }, 1000);
+
+        return () => {
+            unsubscribePartners();
+            unsubscribeAccounts();
+        };
+    }, []);
+
+    // 🛡️ CRITICAL: This effect is DISABLED in Phase 1 (READ-ONLY)
+    // It will be enabled in Phase 2 after user confirmation
+    /* WRITE OPERATIONS DISABLED
+    useEffect(() => {
+        if (!isFirestoreLoaded) {
+            console.log('⛔ Waiting for Firestore to load before syncing changes...');
+            return;
+        }
+        
+        if (isUpdatingFromFirestore.current) {
+            console.log('⛔ Skip sync - update came from Firestore');
+            return;
+        }
+        
+        // Phase 2: Auto-sync will be enabled here
+        console.log('💾 Would sync to Firebase (currently disabled)');
+    }, [state, isFirestoreLoaded]);
+    */
+
 
     const postTransaction = (entries: Omit<LedgerEntry, 'id'>[]) => dispatch({ type: 'POST_TRANSACTION', payload: { entries } });
     const deleteTransaction = (transactionId: string, reason?: string, user?: string) => dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
@@ -353,7 +459,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         postTransaction(entries);
     };
     const addPartner = (partner: Partner) => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, partner not saved to database');
+            dispatch({ type: 'ADD_PARTNER', payload: partner });
+            return;
+        }
+
+        // First update local state immediately (optimistic update)
         dispatch({ type: 'ADD_PARTNER', payload: partner });
+
+        // Then save to Firebase
+        const partnerData = {
+            ...partner,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        Object.keys(partnerData).forEach(key => {
+            if ((partnerData as any)[key] === undefined) {
+                (partnerData as any)[key] = null;
+            }
+        });
+
+        addDoc(collection(db, 'partners'), partnerData)
+            .then((docRef) => {
+                console.log('✅ Partner saved to Firebase:', docRef.id);
+            })
+            .catch((error) => {
+                console.error('❌ Error saving partner to Firebase:', error);
+                alert('Failed to save partner: ' + error.message);
+            });
+
+        // Handle opening balance if needed
         if (partner.balance !== 0) {
             const prevYear = new Date().getFullYear() - 1; const date = `${prevYear}-12-31`; const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301'; const arId = state.accounts.find(a => a.name.includes('Receivable'))?.id || '103'; const apId = state.accounts.find(a => a.name.includes('Payable'))?.id || '201';
             let entries: Omit<LedgerEntry, 'id'>[] = []; const currency = partner.defaultCurrency || 'USD'; const rate = EXCHANGE_RATES[currency] || 1; const fcyAmt = partner.balance * rate; const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
@@ -469,6 +608,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return (
         <DataContext.Provider value={{
             state,
+            isFirestoreLoaded,
+            firestoreStatus,
+            firestoreError,
             postTransaction,
             deleteTransaction,
             addPartner,

@@ -2030,4 +2030,7 @@ export const DataEntry: React.FC = () => {
             )}
             
             {/* Sales Invoice Summary Modal (Mock PDF) */}
+        </div>
+    );
+};
             
