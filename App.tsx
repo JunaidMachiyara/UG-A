@@ -36,18 +36,14 @@ interface ErrorBoundaryState {
 
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   declare readonly props: ErrorBoundaryProps;
+  state: ErrorBoundaryState = { hasError: false, error: null };
 
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('🔥 App Error:', error, errorInfo);
+    console.error('App Error:', error, errorInfo);
   }
 
   render() {
@@ -55,13 +51,13 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
       return (
         <div className="flex flex-col items-center justify-center h-screen bg-slate-50 p-8">
           <div className="bg-red-50 border-2 border-red-200 rounded-lg p-6 max-w-2xl">
-            <h1 className="text-2xl font-bold text-red-800 mb-4">⚠️ Application Error</h1>
+            <h1 className="text-2xl font-bold text-red-800 mb-4">Application Error</h1>
             <p className="text-red-700 mb-4">Something went wrong while loading the app.</p>
             <div className="bg-white p-4 rounded border border-red-200 mb-4">
               <p className="font-mono text-sm text-red-600">{this.state.error?.message}</p>
             </div>
-            <button 
-              onClick={() => window.location.reload()} 
+            <button
+              onClick={() => window.location.reload()}
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
             >
               Reload Application
