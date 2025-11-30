@@ -1,0 +1,196 @@
+
+import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
+import { ChevronDown, X, Plus } from 'lucide-react';
+
+export interface Entity {
+    id: string;
+    name: string;
+}
+
+interface EntitySelectorProps {
+    entities: Entity[];
+    selectedId: string;
+    onSelect: (id: string) => void;
+    placeholder?: string;
+    disabled?: boolean;
+    className?: string;
+    required?: boolean;
+    onQuickAdd?: () => void; // NEW: Callback to trigger quick add modal
+    quickAddLabel?: string; // NEW: Custom label for the add button
+}
+
+export const EntitySelector: React.FC<EntitySelectorProps> = ({
+    entities,
+    selectedId,
+    onSelect,
+    placeholder = "Select...",
+    disabled = false,
+    className = "",
+    required = false,
+    onQuickAdd,
+    quickAddLabel = "Add New"
+}) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [highlightedIndex, setHighlightedIndex] = useState(0);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const listRef = useRef<HTMLDivElement>(null);
+
+    const filteredEntities = entities.filter(e =>
+        e.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    useEffect(() => {
+        const selected = entities.find(e => e.id === selectedId);
+        if (selected) {
+            setSearchTerm(selected.name);
+        } else if (selectedId === '') {
+            setSearchTerm('');
+        }
+    }, [selectedId, entities]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+                const selected = entities.find(e => e.id === selectedId);
+                if (selected) setSearchTerm(selected.name);
+                else if (!selectedId) setSearchTerm('');
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [selectedId, entities]);
+
+    const handleSelect = (entity: Entity) => {
+        onSelect(entity.id);
+        setSearchTerm(entity.name);
+        setIsOpen(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+        if (disabled) return;
+
+        if (!isOpen && e.key === 'ArrowDown') {
+            e.preventDefault();
+            setIsOpen(true);
+            return;
+        }
+
+        switch (e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev + 1) % filteredEntities.length);
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev - 1 + filteredEntities.length) % filteredEntities.length);
+                break;
+            case 'Enter':
+                e.preventDefault();
+                if (isOpen && filteredEntities[highlightedIndex]) {
+                    handleSelect(filteredEntities[highlightedIndex]);
+                } else if (!isOpen) {
+                    setIsOpen(true);
+                }
+                break;
+            case 'Escape':
+                setIsOpen(false);
+                inputRef.current?.blur();
+                break;
+            case 'Tab':
+                setIsOpen(false);
+                break;
+        }
+    };
+
+    useEffect(() => {
+        if (isOpen && listRef.current && filteredEntities.length > 0) {
+            const el = listRef.current.children[highlightedIndex] as HTMLElement;
+            if (el) el.scrollIntoView({ block: 'nearest' });
+        }
+    }, [highlightedIndex, isOpen, filteredEntities.length]);
+
+    const clearSelection = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onSelect('');
+        setSearchTerm('');
+        inputRef.current?.focus();
+    };
+
+    return (
+        <div className={`relative ${className}`} ref={containerRef}>
+            <div className="relative group">
+                <input
+                    ref={inputRef}
+                    type="text"
+                    className={`w-full pl-3 pr-10 py-2.5 border rounded-lg text-sm bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all shadow-sm ${disabled ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'border-slate-300'}`}
+                    placeholder={placeholder}
+                    value={searchTerm}
+                    onChange={e => {
+                        setSearchTerm(e.target.value);
+                        setIsOpen(true);
+                        setHighlightedIndex(0);
+                    }}
+                    onFocus={() => !disabled && setIsOpen(true)}
+                    onClick={() => !disabled && setIsOpen(true)}
+                    onKeyDown={handleKeyDown}
+                    disabled={disabled}
+                    required={required && !selectedId}
+                    autoComplete="off"
+                />
+                <div className="absolute right-3 top-2.5 flex items-center gap-1">
+                    {selectedId && !disabled && (
+                        <button 
+                            type="button" 
+                            onClick={clearSelection}
+                            className="text-slate-400 hover:text-red-500 transition-colors p-0.5"
+                            tabIndex={-1}
+                        >
+                            <X size={14} />
+                        </button>
+                    )}
+                    <ChevronDown size={16} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+                </div>
+            </div>
+
+            {isOpen && !disabled && (
+                <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-60 flex flex-col animate-in fade-in zoom-in-95 duration-100 overflow-hidden">
+                    <div className="overflow-y-auto p-1" ref={listRef}>
+                        {filteredEntities.length > 0 ? (
+                            filteredEntities.map((entity, index) => (
+                                <div
+                                    key={entity.id}
+                                    className={`px-3 py-2 text-sm rounded-md cursor-pointer transition-colors ${
+                                        index === highlightedIndex ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                                    }`}
+                                    onClick={() => handleSelect(entity)}
+                                    onMouseEnter={() => setHighlightedIndex(index)}
+                                >
+                                    {entity.name}
+                                </div>
+                            ))
+                        ) : (
+                            <div className="p-3 text-center text-xs text-slate-400 italic">No matches found</div>
+                        )}
+                    </div>
+                    {onQuickAdd && (
+                        <div className="border-t border-slate-100 p-1 bg-slate-50">
+                            <button
+                                onMouseDown={(e) => {
+                                    e.preventDefault(); // Prevent input blur
+                                    onQuickAdd();
+                                    setIsOpen(false);
+                                }}
+                                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-blue-600 font-medium hover:bg-blue-100 rounded-md transition-colors"
+                            >
+                                <Plus size={14} /> {quickAddLabel}
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};

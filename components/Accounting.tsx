@@ -1,0 +1,802 @@
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useData } from '../context/DataContext';
+import { TransactionType, AccountType, Currency, PartnerType, LedgerEntry } from '../types';
+import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
+import { EntitySelector } from './EntitySelector';
+import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag } from 'lucide-react';
+
+type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB';
+
+interface JvRow {
+    id: string;
+    accountId: string;
+    desc: string;
+    debit: number;
+    credit: number;
+    currency: Currency;
+    exchangeRate: number;
+}
+
+// Supervisor PIN for secure actions (Hardcoded for clone)
+const SUPERVISOR_PIN = '7860';
+
+export const Accounting: React.FC = () => {
+    const { state, postTransaction, deleteTransaction } = useData();
+    const [activeTab, setActiveTab] = useState<'voucher' | 'ledger'>('voucher');
+
+    // --- Voucher State ---
+    const [vType, setVType] = useState<VoucherType>('RV');
+    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+    const [voucherNo, setVoucherNo] = useState('');
+    
+    // Entities / Accounts Selection
+    const [sourceId, setSourceId] = useState(''); // Paid From / Transfer From / Customer / Vendor (Credit in PB)
+    const [destId, setDestId] = useState('');   // Paid To / Transfer To / Deposit To / Expense (Debit in PB)
+    const [pbPaymentMode, setPbPaymentMode] = useState<'CREDIT' | 'CASH'>('CREDIT');
+    const [pbVendorId, setPbVendorId] = useState(''); // Used specifically for PB Cash Mode to track vendor for narration
+    
+    // Financials (Single Sided - RV, PV, EV, PB)
+    const [amount, setAmount] = useState('');
+    const [currency, setCurrency] = useState<Currency>('USD');
+    const [exchangeRate, setExchangeRate] = useState<number>(1);
+    
+    // Financials (Dual Sided - TR / Exchange)
+    const [fromAmount, setFromAmount] = useState('');
+    const [fromCurrency, setFromCurrency] = useState<Currency>('USD');
+    const [fromRate, setFromRate] = useState<number>(1);
+    
+    const [toAmount, setToAmount] = useState('');
+    const [toCurrency, setToCurrency] = useState<Currency>('USD');
+    const [toRate, setToRate] = useState<number>(1);
+
+    const [description, setDescription] = useState('');
+
+    // Journal Voucher Rows
+    const [jvRows, setJvRows] = useState<JvRow[]>([
+        { id: '1', accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 },
+        { id: '2', accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }
+    ]);
+
+    // --- Ledger Filtering State ---
+    const [filterDateFrom, setFilterDateFrom] = useState('');
+    const [filterDateTo, setFilterDateTo] = useState('');
+    const [filterType, setFilterType] = useState('');
+    const [filterMinAmount, setFilterMinAmount] = useState('');
+    const [filterMaxAmount, setFilterMaxAmount] = useState('');
+
+    // --- Auth Modal State ---
+    const [authModalOpen, setAuthModalOpen] = useState(false);
+    const [authPin, setAuthPin] = useState('');
+    const [pendingAction, setPendingAction] = useState<{ type: 'DELETE' | 'EDIT', transactionId: string } | null>(null);
+
+    // --- Computed Options ---
+    const cashBankAccounts = useMemo(() => 
+        state.accounts.filter(a => a.name.toLowerCase().includes('cash') || a.name.toLowerCase().includes('bank') || a.type === AccountType.ASSET)
+        .map(a => ({ id: a.id, name: `${a.code} - ${a.name}` })), 
+    [state.accounts]);
+
+    const expenseAccounts = useMemo(() => 
+        state.accounts.filter(a => a.type === AccountType.EXPENSE)
+        .map(a => ({ id: a.id, name: `${a.code} - ${a.name}` })), 
+    [state.accounts]);
+
+    const allAccounts = useMemo(() => 
+        state.accounts.map(a => ({ id: a.id, name: `${a.code} - ${a.name}` })), 
+    [state.accounts]);
+
+    const payees = useMemo(() => {
+        // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
+        // Also used for PB Vendors
+        const partners = state.partners.filter(p => 
+            [PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.COMMISSION_AGENT, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.SUB_SUPPLIER].includes(p.type)
+        ).map(p => ({ id: p.id, name: `${p.name} (${p.type})` }));
+        const employees = state.employees.map(e => ({ id: e.id, name: `${e.name} (Employee)` }));
+        const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY || a.type === AccountType.EQUITY).map(a => ({ id: a.id, name: `${a.name} (Account)` }));
+        const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER).map(p => ({ id: p.id, name: `${p.name} (Customer Refund)` }));
+        return [...partners, ...employees, ...liabilities, ...customers];
+    }, [state.partners, state.employees, state.accounts]);
+
+    const payers = useMemo(() => {
+        // RV: Used for Customers, Revenue, OR receiving Capital/Loans
+        const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER).map(p => ({ id: p.id, name: p.name }));
+        // Include Equity (Capital) and Liability (Loans) here for receiving money
+        const fundingAccs = state.accounts.filter(a => a.type === AccountType.REVENUE || a.type === AccountType.EQUITY || a.type === AccountType.LIABILITY).map(a => ({ id: a.id, name: `${a.name} (${a.type})` }));
+        const suppliers = state.partners.filter(p => p.type === PartnerType.SUPPLIER).map(p => ({ id: p.id, name: `${p.name} (Supplier Refund)` }));
+        return [...customers, ...fundingAccs, ...suppliers];
+    }, [state.partners, state.accounts]);
+
+    // --- Helpers for ID Generation ---
+    const generateVoucherId = useCallback((type: VoucherType) => {
+        const prefix = type + '-';
+        const maxId = state.ledger
+            .filter(l => l.transactionId.startsWith(prefix))
+            .map(l => parseInt(l.transactionId.replace(prefix, '')))
+            .filter(n => !isNaN(n))
+            .reduce((max, curr) => curr > max ? curr : max, 1000);
+        return `${prefix}${maxId + 1}`;
+    }, [state.ledger]);
+
+    // --- Form Reset Logic ---
+    const resetForm = (type: VoucherType) => {
+        setVType(type);
+        setVoucherNo(generateVoucherId(type));
+        
+        // Clear all fields
+        setSourceId(''); setDestId(''); 
+        setAmount(''); setDescription('');
+        setFromAmount(''); setToAmount('');
+        setCurrency('USD'); setExchangeRate(1);
+        setJvRows([{ id: Math.random().toString(), accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }, { id: Math.random().toString(), accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }]);
+        
+        setPbPaymentMode('CREDIT');
+        setPbVendorId('');
+    };
+
+    // Initial Load
+    useEffect(() => {
+        if (!voucherNo) resetForm('RV');
+    }, []);
+
+    // Rate Effects
+    useEffect(() => { setExchangeRate(EXCHANGE_RATES[currency] || 1); }, [currency]);
+    useEffect(() => { setFromRate(EXCHANGE_RATES[fromCurrency] || 1); }, [fromCurrency]);
+    useEffect(() => { setToRate(EXCHANGE_RATES[toCurrency] || 1); }, [toCurrency]);
+
+    const handleCalculateTransfer = () => {
+        if (!fromAmount) return;
+        const baseUSD = parseFloat(fromAmount) / fromRate;
+        const targetAmount = baseUSD * toRate;
+        setToAmount(targetAmount.toFixed(2));
+    };
+
+    const getTransferVariance = () => {
+        const fromBase = parseFloat(fromAmount || '0') / fromRate;
+        const toBase = parseFloat(toAmount || '0') / toRate;
+        return toBase - fromBase;
+    };
+
+    // --- Actions ---
+    const handleSave = () => {
+        if (!date) return alert("Date is required");
+        if (vType !== 'JV' && vType !== 'TR' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
+        if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
+        if (vType !== 'JV' && !description) return alert("Description is required");
+
+        let entries: Omit<LedgerEntry, 'id'>[] = [];
+        const baseAmount = parseFloat(amount) / exchangeRate;
+        const fcyAmount = parseFloat(amount);
+
+        const common = {
+            date,
+            transactionId: voucherNo,
+            currency,
+            exchangeRate,
+            fcyAmount,
+            narration: description
+        };
+
+        if (vType === 'RV') {
+            if (!sourceId || !destId) return alert("Select Received From and Deposit To");
+            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: destId, accountName: 'Cash/Bank', debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: sourceId, accountName: 'Payer/Capital/Loan', debit: 0, credit: baseAmount });
+        } else if (vType === 'PV') {
+            if (!sourceId || !destId) return alert("Select Paid To and Paid From");
+            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: destId, accountName: 'Payee/Drawings', debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceId, accountName: 'Bank/Cash', debit: 0, credit: baseAmount });
+        } else if (vType === 'EV') {
+            if (!sourceId || !destId) return alert("Select Expense and Paid From");
+            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: destId, accountName: 'Expense', debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: sourceId, accountName: 'Bank/Cash', debit: 0, credit: baseAmount });
+        } else if (vType === 'PB') {
+            if (!destId) return alert("Select Expense Account");
+            
+            // PB Mapping: destId = Expense (Debit)
+            // If Credit Mode: sourceId = Vendor (Credit)
+            // If Cash Mode: sourceId = Cash/Bank (Credit), pbVendorId = Vendor Name
+            
+            let creditAccount = '';
+            let vendorName = '';
+            
+            if (pbPaymentMode === 'CREDIT') {
+                if (!sourceId) return alert("Select Vendor");
+                creditAccount = sourceId;
+                vendorName = state.partners.find(p => p.id === sourceId)?.name || 'Unknown';
+            } else {
+                if (!sourceId) return alert("Select Pay From Account"); // Cash Account
+                creditAccount = sourceId;
+                vendorName = pbVendorId ? (state.partners.find(p => p.id === pbVendorId)?.name || 'Vendor') : 'Cash Vendor';
+            }
+
+            const narr = pbPaymentMode === 'CASH' ? `Cash Bill: ${vendorName} - ${description}` : `Credit Bill: ${vendorName} - ${description}`;
+
+            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: destId, accountName: 'Expense', debit: baseAmount, credit: 0 });
+            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: creditAccount, accountName: pbPaymentMode === 'CREDIT' ? 'Vendor Payable' : 'Cash/Bank', debit: 0, credit: baseAmount });
+
+        } else if (vType === 'TR') {
+            if (!sourceId || !destId) return alert("Select Transfer From and To");
+            if (sourceId === destId) return alert("Source and Destination cannot be the same");
+            const fromBase = parseFloat(fromAmount) / fromRate;
+            const toBase = parseFloat(toAmount) / toRate;
+            const variance = toBase - fromBase;
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: sourceId, accountName: 'Transfer From', currency: fromCurrency, exchangeRate: fromRate, fcyAmount: parseFloat(fromAmount), debit: 0, credit: fromBase });
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: destId, accountName: 'Transfer To', currency: toCurrency, exchangeRate: toRate, fcyAmount: parseFloat(toAmount), debit: toBase, credit: 0 });
+            if (Math.abs(variance) > 0.01) {
+                const varianceAccountId = state.accounts.find(a => a.name.includes('Exchange'))?.id || '502';
+                if (variance < 0) {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Loss', accountId: varianceAccountId, accountName: 'Exchange Variance', currency: 'USD', exchangeRate: 1, fcyAmount: Math.abs(variance), debit: Math.abs(variance), credit: 0 });
+                } else {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Gain', accountId: varianceAccountId, accountName: 'Exchange Variance', currency: 'USD', exchangeRate: 1, fcyAmount: variance, debit: 0, credit: variance });
+                }
+            }
+        } else if (vType === 'JV') {
+            const totalDr = jvRows.reduce((sum, r) => sum + (r.debit / r.exchangeRate), 0);
+            const totalCr = jvRows.reduce((sum, r) => sum + (r.credit / r.exchangeRate), 0);
+            if (Math.abs(totalDr - totalCr) > 0.01) return alert(`Journal is unbalanced! Diff: $${(totalDr - totalCr).toFixed(2)}`);
+            entries = jvRows.map(row => ({ date, transactionId: voucherNo, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: row.accountId, accountName: 'Journal Entry', currency: row.currency, exchangeRate: row.exchangeRate, fcyAmount: row.debit > 0 ? row.debit : row.credit, debit: row.debit / row.exchangeRate, credit: row.credit / row.exchangeRate, narration: row.desc || description || 'Manual Journal' }));
+        }
+
+        postTransaction(entries);
+        alert(`${voucherNo} Posted Successfully!`);
+        
+        // Reset for next entry
+        resetForm(vType);
+    };
+
+    // JV Helpers
+    const updateJvRow = (id: string, field: keyof JvRow, value: any) => setJvRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+    const addJvRow = () => setJvRows([...jvRows, { id: Math.random().toString(), accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }]);
+    const removeJvRow = (id: string) => setJvRows(prev => prev.filter(r => r.id !== id));
+
+    // --- Ledger Logic ---
+    const filteredLedger = useMemo(() => {
+        return state.ledger.filter(entry => {
+            if (filterDateFrom && entry.date < filterDateFrom) return false;
+            if (filterDateTo && entry.date > filterDateTo) return false;
+            if (filterType && entry.transactionType !== filterType) return false;
+            if (filterMinAmount && entry.fcyAmount < parseFloat(filterMinAmount)) return false;
+            if (filterMaxAmount && entry.fcyAmount > parseFloat(filterMaxAmount)) return false;
+            return true;
+        }).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [state.ledger, filterDateFrom, filterDateTo, filterType, filterMinAmount, filterMaxAmount]);
+
+    // --- Secure Action Handlers ---
+    const initiateAction = (type: 'DELETE' | 'EDIT', transactionId: string) => {
+        setPendingAction({ type, transactionId });
+        setAuthPin('');
+        setAuthModalOpen(true);
+    };
+
+    const confirmAuthAction = () => {
+        if (authPin !== SUPERVISOR_PIN) {
+            alert("Invalid PIN. Access Denied.");
+            return;
+        }
+        
+        if (pendingAction) {
+            if (pendingAction.type === 'DELETE') {
+                deleteTransaction(pendingAction.transactionId, 'Manual Deletion', authPin); // Pass PIN as User ID
+                alert(`Transaction ${pendingAction.transactionId} deleted.`);
+            } else if (pendingAction.type === 'EDIT') {
+                // Edit Workflow: Load data -> Delete Old -> Switch Tab
+                // Crucially, we do NOT call resetForm here, so state persists.
+                const entries = state.ledger.filter(l => l.transactionId === pendingAction.transactionId);
+                if (entries.length === 0) return;
+
+                const first = entries[0];
+                
+                // Try to determine Type
+                let loadedType: VoucherType = 'JV';
+                if (first.transactionType === TransactionType.RECEIPT_VOUCHER) loadedType = 'RV';
+                else if (first.transactionType === TransactionType.PAYMENT_VOUCHER) loadedType = 'PV';
+                else if (first.transactionType === TransactionType.EXPENSE_VOUCHER) loadedType = 'EV';
+                else if (first.transactionType === TransactionType.INTERNAL_TRANSFER) loadedType = 'TR';
+                else if (first.transactionType === TransactionType.PURCHASE_BILL) loadedType = 'PB';
+
+                // Basic Hydration
+                setVType(loadedType);
+                setDate(first.date);
+                setVoucherNo(first.transactionId); // Keep ID for edit (re-post)
+                setDescription(first.narration);
+                
+                // Hydrate JV rows
+                if (loadedType === 'JV') {
+                    setJvRows(entries.map(e => ({
+                        id: Math.random().toString(),
+                        accountId: e.accountId,
+                        desc: e.narration,
+                        debit: e.debit * e.exchangeRate, // Convert back to entered amount
+                        credit: e.credit * e.exchangeRate,
+                        currency: e.currency,
+                        exchangeRate: e.exchangeRate
+                    })));
+                } else if (loadedType === 'TR') {
+                    const creditEntry = entries.find(e => e.credit > 0);
+                    const debitEntry = entries.find(e => e.debit > 0 && e.accountId !== '502'); // Ignore variance acc for display
+                    if (creditEntry) {
+                        setSourceId(creditEntry.accountId);
+                        setFromAmount(creditEntry.fcyAmount.toString());
+                        setFromCurrency(creditEntry.currency);
+                        setFromRate(creditEntry.exchangeRate);
+                    }
+                    if (debitEntry) {
+                        setDestId(debitEntry.accountId);
+                        setToAmount(debitEntry.fcyAmount.toString());
+                        setToCurrency(debitEntry.currency);
+                        setToRate(debitEntry.exchangeRate);
+                    }
+                } else {
+                    // Simple vouchers (RV, PV, EV, PB)
+                    setAmount(first.fcyAmount.toString());
+                    setCurrency(first.currency);
+                    setExchangeRate(first.exchangeRate);
+                    
+                    // Guess IDs based on Debit/Credit patterns
+                    if (loadedType === 'PV') {
+                        // PV: Credit is Source (Cash/Bank), Debit is Dest (Payee)
+                        setSourceId(entries.find(e => e.credit > 0)?.accountId || '');
+                        setDestId(entries.find(e => e.debit > 0)?.accountId || '');
+                    } else if (loadedType === 'RV') {
+                        // RV: Debit is Dest (Bank), Credit is Source (Customer)
+                        setDestId(entries.find(e => e.debit > 0)?.accountId || '');
+                        setSourceId(entries.find(e => e.credit > 0)?.accountId || '');
+                    } else if (loadedType === 'EV') {
+                        setSourceId(entries.find(e => e.credit > 0)?.accountId || '');
+                        setDestId(entries.find(e => e.debit > 0)?.accountId || '');
+                    } else if (loadedType === 'PB') {
+                        // PB: Debit is Expense (Dest), Credit is Vendor/Cash (Source)
+                        setDestId(entries.find(e => e.debit > 0)?.accountId || '');
+                        const creditEntry = entries.find(e => e.credit > 0);
+                        if (creditEntry) {
+                            setSourceId(creditEntry.accountId);
+                            // Detect Cash vs Credit based on account type
+                            const acc = state.accounts.find(a => a.id === creditEntry.accountId);
+                            if (acc?.type === AccountType.ASSET) {
+                                setPbPaymentMode('CASH');
+                                // Hard to recover original vendor ID if just narration, so we leave it or parse narration
+                            } else {
+                                setPbPaymentMode('CREDIT');
+                            }
+                        }
+                    }
+                }
+
+                // Delete old one using Context Action with Metadata
+                deleteTransaction(pendingAction.transactionId, 'Edit Reversal', authPin);
+                setActiveTab('voucher'); // Switch to edit mode
+            }
+        }
+        setAuthModalOpen(false);
+        setPendingAction(null);
+    };
+
+    return (
+        <div className="space-y-6 max-w-6xl mx-auto">
+            {/* Navigation Tabs */}
+            <div className="flex gap-4 border-b border-slate-200">
+                <button onClick={() => setActiveTab('voucher')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'voucher' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>New Voucher</button>
+                <button onClick={() => setActiveTab('ledger')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'ledger' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>General Ledger</button>
+            </div>
+
+            {activeTab === 'voucher' && (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
+                    <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                        <div className="flex items-center gap-4">
+                            <div className="p-2 bg-blue-600 text-white rounded-lg"><FileText size={24}/></div>
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-800">Financial Entry</h2>
+                                <p className="text-sm text-slate-500">Record payments, receipts, and adjustments</p>
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <label className="block text-xs font-bold text-slate-400 uppercase">Voucher ID</label>
+                            <div className="text-xl font-mono font-bold text-slate-700">{voucherNo}</div>
+                        </div>
+                    </div>
+
+                    <div className="p-8 space-y-8">
+                        {/* 1. Voucher Type Selection - Now manually triggers reset */}
+                        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                            {[
+                                { id: 'RV', label: 'Receipt Voucher', icon: ArrowRight, color: 'text-emerald-600' },
+                                { id: 'PV', label: 'Payment Voucher', icon: CreditCard, color: 'text-red-600' },
+                                { id: 'PB', label: 'Purchase Bill', icon: ShoppingBag, color: 'text-orange-600' },
+                                { id: 'EV', label: 'Expense Voucher', icon: DollarSign, color: 'text-amber-600' },
+                                { id: 'JV', label: 'Journal Voucher', icon: FileText, color: 'text-blue-600' },
+                                { id: 'TR', label: 'Internal Transfer', icon: RefreshCw, color: 'text-purple-600' },
+                            ].map(type => (
+                                <button
+                                    key={type.id}
+                                    onClick={() => resetForm(type.id as VoucherType)}
+                                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${vType === type.id ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-slate-100 bg-white hover:border-blue-200 hover:bg-slate-50'}`}
+                                >
+                                    <type.icon className={`mb-1 ${type.color}`} size={20} />
+                                    <span className={`font-bold text-xs ${vType === type.id ? 'text-blue-800' : 'text-slate-600'}`}>{type.label}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* 2. Common Header */}
+                        <div className="grid grid-cols-3 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={date} onChange={e => setDate(e.target.value)} /></div>
+                            {vType !== 'JV' && vType !== 'TR' && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Currency</label>
+                                        <select className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={currency} onChange={e => setCurrency(e.target.value as Currency)}>
+                                            {Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Exchange Rate</label>
+                                        <input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={exchangeRate} onChange={e => setExchangeRate(parseFloat(e.target.value))} />
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* 3. Dynamic Form */}
+                        {vType === 'JV' ? (
+                            <div className="space-y-4">
+                                <h3 className="font-bold text-slate-700">Journal Entries</h3>
+                                <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-slate-100 font-bold text-slate-600">
+                                            <tr>
+                                                <th className="px-4 py-3">Account</th>
+                                                <th className="px-4 py-3">Description</th>
+                                                <th className="px-4 py-3 w-24">Currency</th>
+                                                <th className="px-4 py-3 w-20">Rate</th>
+                                                <th className="px-4 py-3 text-right">Debit</th>
+                                                <th className="px-4 py-3 text-right">Credit</th>
+                                                <th className="px-4 py-3 text-center">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {jvRows.map(row => (
+                                                <tr key={row.id}>
+                                                    <td className="px-2 py-2">
+                                                        <EntitySelector 
+                                                            entities={allAccounts} 
+                                                            selectedId={row.accountId} 
+                                                            onSelect={(id) => updateJvRow(row.id, 'accountId', id)} 
+                                                            placeholder="Select Account"
+                                                        />
+                                                    </td>
+                                                    <td className="px-2 py-2"><input type="text" className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.desc} onChange={e => updateJvRow(row.id, 'desc', e.target.value)} /></td>
+                                                    <td className="px-2 py-2">
+                                                        <select className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.currency} onChange={e => { updateJvRow(row.id, 'currency', e.target.value); updateJvRow(row.id, 'exchangeRate', EXCHANGE_RATES[e.target.value as Currency] || 1); }}>
+                                                            {Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}
+                                                        </select>
+                                                    </td>
+                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-center bg-white text-slate-800" value={row.exchangeRate} onChange={e => updateJvRow(row.id, 'exchangeRate', parseFloat(e.target.value))} /></td>
+                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.credit > 0} value={row.debit} onChange={e => updateJvRow(row.id, 'debit', parseFloat(e.target.value))} /></td>
+                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.debit > 0} value={row.credit} onChange={e => updateJvRow(row.id, 'credit', parseFloat(e.target.value))} /></td>
+                                                    <td className="px-2 py-2 text-center"><button onClick={() => removeJvRow(row.id)} className="text-red-500 hover:text-red-700"><Trash2 size={16}/></button></td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot className="bg-slate-50 font-bold text-slate-700">
+                                            <tr>
+                                                <td colSpan={4} className="px-4 py-3 text-right">Totals (Base USD):</td>
+                                                <td className="px-4 py-3 text-right">{jvRows.reduce((s, r) => s + (r.debit/r.exchangeRate), 0).toFixed(2)}</td>
+                                                <td className="px-4 py-3 text-right">{jvRows.reduce((s, r) => s + (r.credit/r.exchangeRate), 0).toFixed(2)}</td>
+                                                <td></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                                <button onClick={addJvRow} className="text-blue-600 hover:text-blue-800 text-sm font-bold flex items-center gap-1"><Plus size={16}/> Add Line</button>
+                            </div>
+                        ) : vType === 'TR' ? (
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                                    {/* Left: Source (Credit) */}
+                                    <div className="md:col-span-5 space-y-4 p-6 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h3 className="font-bold text-slate-700 text-sm uppercase flex items-center gap-2"><ArrowRight size={16} className="text-red-500"/> Withdrawing From (Source)</h3>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">Source Account</label>
+                                            <EntitySelector entities={cashBankAccounts} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Source Account..." />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={fromCurrency} onChange={e => setFromCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Ex. Rate (to Base)</label><input type="number" className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={fromRate} onChange={e => setFromRate(parseFloat(e.target.value))} /></div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">Amount Sent</label>
+                                            <input type="number" className="w-full bg-white border border-slate-300 rounded p-2 font-bold text-slate-800" value={fromAmount} onChange={e => setFromAmount(e.target.value)} placeholder="0.00" />
+                                        </div>
+                                    </div>
+
+                                    {/* Middle: Converter */}
+                                    <div className="md:col-span-2 flex flex-col items-center justify-center h-full py-8">
+                                        <div className="p-3 bg-blue-50 rounded-full text-blue-600 mb-2"><ArrowLeftRight size={24} /></div>
+                                        <button onClick={handleCalculateTransfer} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-slate-700">Auto Convert</button>
+                                    </div>
+
+                                    {/* Right: Dest (Debit) */}
+                                    <div className="md:col-span-5 space-y-4 p-6 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h3 className="font-bold text-slate-700 text-sm uppercase flex items-center gap-2"><ArrowRight size={16} className="text-emerald-500"/> Depositing To (Destination)</h3>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">Destination Account</label>
+                                            <EntitySelector entities={cashBankAccounts} selectedId={destId} onSelect={setDestId} placeholder="Select Dest Account..." />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={toCurrency} onChange={e => setToCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Ex. Rate (to Base)</label><input type="number" className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={toRate} onChange={e => setToRate(parseFloat(e.target.value))} /></div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">Amount Received</label>
+                                            <input type="number" className="w-full bg-white border border-slate-300 rounded p-2 font-bold text-slate-800" value={toAmount} onChange={e => setToAmount(e.target.value)} placeholder="0.00" />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Variance Check */}
+                                {(fromAmount && toAmount) && (
+                                    <div className="flex justify-center items-center gap-4 text-sm mt-4 bg-slate-100 p-2 rounded-lg">
+                                        <span>Sent Value: <strong>${(parseFloat(fromAmount)/fromRate).toFixed(2)}</strong></span>
+                                        <span>Received Value: <strong>${(parseFloat(toAmount)/toRate).toFixed(2)}</strong></span>
+                                        <span className={`font-bold px-2 py-1 rounded ${getTransferVariance() >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                            Exchange {getTransferVariance() >= 0 ? 'Gain' : 'Loss'}: ${Math.abs(getTransferVariance()).toFixed(2)}
+                                        </span>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 mb-2">Transfer Description</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                        placeholder="E.g. Exchange EUR to USD for Payment..." 
+                                        value={description} 
+                                        onChange={e => setDescription(e.target.value)} 
+                                    />
+                                </div>
+                            </div>
+                        ) : (
+                            // STANDARD FORM (RV, PV, EV, PB)
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {/* LEFT SIDE: SOURCE & DESTINATION */}
+                                <div className="space-y-6">
+                                    <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                                        {/* Dynamic Labels based on Voucher Type */}
+                                        {vType === 'RV' && (
+                                            <>
+                                                <div className="mb-4">
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><User size={16}/> Received From (Credit)</label>
+                                                    <EntitySelector entities={payers} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Payer (Customer/Capital/Loan)..." />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Building size={16}/> Deposit To (Debit)</label>
+                                                    <EntitySelector entities={cashBankAccounts} selectedId={destId} onSelect={setDestId} placeholder="Select Cash/Bank..." />
+                                                </div>
+                                            </>
+                                        )}
+                                        {vType === 'PV' && (
+                                            <>
+                                                <div className="mb-4">
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><User size={16}/> Paid To (Debit)</label>
+                                                    <EntitySelector entities={payees} selectedId={destId} onSelect={setDestId} placeholder="Select Supplier/Vendor/Account..." />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Building size={16}/> Paid From (Credit)</label>
+                                                    <EntitySelector entities={cashBankAccounts} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Cash/Bank..." />
+                                                </div>
+                                            </>
+                                        )}
+                                        {vType === 'EV' && (
+                                            <>
+                                                <div className="mb-4">
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><FileText size={16}/> Expense Account (Debit)</label>
+                                                    <EntitySelector entities={expenseAccounts} selectedId={destId} onSelect={setDestId} placeholder="Select Expense..." />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Building size={16}/> Paid From (Credit)</label>
+                                                    <EntitySelector entities={cashBankAccounts} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Cash/Bank..." />
+                                                </div>
+                                            </>
+                                        )}
+                                        {vType === 'PB' && (
+                                            <>
+                                                <div className="mb-4">
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><FileText size={16}/> Purchase / Expense (Debit)</label>
+                                                    <EntitySelector entities={expenseAccounts} selectedId={destId} onSelect={setDestId} placeholder="Select Item/Expense Category..." />
+                                                </div>
+                                                
+                                                <div className="flex bg-slate-200 p-1 rounded-lg mb-4">
+                                                    <button onClick={() => setPbPaymentMode('CREDIT')} className={`flex-1 py-1 text-xs font-bold rounded-md ${pbPaymentMode === 'CREDIT' ? 'bg-white shadow text-blue-700' : 'text-slate-500'}`}>Pay Later (Credit)</button>
+                                                    <button onClick={() => setPbPaymentMode('CASH')} className={`flex-1 py-1 text-xs font-bold rounded-md ${pbPaymentMode === 'CASH' ? 'bg-white shadow text-blue-700' : 'text-slate-500'}`}>Pay Now (Cash)</button>
+                                                </div>
+
+                                                {pbPaymentMode === 'CREDIT' ? (
+                                                    <div>
+                                                        <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><User size={16}/> Vendor (Credit)</label>
+                                                        <EntitySelector entities={payees} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Supplier/Vendor..." />
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-4">
+                                                        <div>
+                                                            <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><User size={16}/> Vendor (Reference)</label>
+                                                            <EntitySelector entities={payees} selectedId={pbVendorId} onSelect={setPbVendorId} placeholder="Select Vendor (Optional)..." />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2"><Building size={16}/> Pay From (Credit)</label>
+                                                            <EntitySelector entities={cashBankAccounts} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Cash/Bank..." />
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* RIGHT SIDE: AMOUNT & DESC */}
+                                <div className="space-y-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Amount ({currency})</label>
+                                        <div className="relative">
+                                            <span className="absolute left-4 top-4 text-slate-400 font-bold">{CURRENCY_SYMBOLS[currency]}</span>
+                                            <input 
+                                                type="number" 
+                                                className="w-full pl-10 pr-4 py-4 bg-white border border-slate-300 rounded-xl text-3xl font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none placeholder-slate-200" 
+                                                placeholder="0.00" 
+                                                value={amount} 
+                                                onChange={e => setAmount(e.target.value)} 
+                                            />
+                                        </div>
+                                        {exchangeRate !== 1 && amount && (
+                                            <p className="text-right text-sm text-slate-500 mt-2 font-mono">
+                                                ≈ ${(parseFloat(amount) / exchangeRate).toLocaleString()} USD
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Description / Narration</label>
+                                        <textarea 
+                                            className="w-full bg-white border border-slate-300 rounded-xl p-4 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none h-32" 
+                                            placeholder="Enter transaction details..." 
+                                            value={description} 
+                                            onChange={e => setDescription(e.target.value)} 
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="border-t border-slate-100 pt-6 flex justify-end">
+                            <button 
+                                onClick={handleSave}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform active:scale-95 flex items-center gap-2"
+                            >
+                                <CheckCircle size={20} /> Post {vType} Voucher
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* LEDGER TAB */}
+            {activeTab === 'ledger' && (
+                <div className="space-y-4 animate-in fade-in">
+                    {/* Advanced Filter Bar */}
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-4 items-end">
+                        <div className="flex items-center gap-2 text-slate-500 mb-1"><Filter size={16} /><span className="text-xs font-bold uppercase">Filters</span></div>
+                        <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">From Date</label>
+                            <input type="date" className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">To Date</label>
+                            <input type="date" className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Type</label>
+                            <select className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-32" value={filterType} onChange={e => setFilterType(e.target.value)}>
+                                <option value="">All Types</option>
+                                <option value={TransactionType.RECEIPT_VOUCHER}>Receipt (RV)</option>
+                                <option value={TransactionType.PAYMENT_VOUCHER}>Payment (PV)</option>
+                                <option value={TransactionType.EXPENSE_VOUCHER}>Expense (EV)</option>
+                                <option value={TransactionType.PURCHASE_BILL}>Purchase Bill (PB)</option>
+                                <option value={TransactionType.JOURNAL_VOUCHER}>Journal (JV)</option>
+                                <option value={TransactionType.INTERNAL_TRANSFER}>Transfer (TR)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Min Amount</label>
+                            <input type="number" placeholder="Min" className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-24" value={filterMinAmount} onChange={e => setFilterMinAmount(e.target.value)} />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Max Amount</label>
+                            <input type="number" placeholder="Max" className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-24" value={filterMaxAmount} onChange={e => setFilterMaxAmount(e.target.value)} />
+                        </div>
+                        <div className="flex-1 text-right">
+                            <span className="text-xs text-slate-400">Showing {filteredLedger.length} records</span>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
+                                <tr>
+                                    <th className="px-6 py-4">Date</th>
+                                    <th className="px-6 py-4">Voucher</th>
+                                    <th className="px-6 py-4">Account</th>
+                                    <th className="px-6 py-4 text-right bg-blue-50/50">Amount (FCY)</th>
+                                    <th className="px-6 py-4 text-center">Rate</th>
+                                    <th className="px-6 py-4 text-right">Debit ($)</th>
+                                    <th className="px-6 py-4 text-right">Credit ($)</th>
+                                    <th className="px-6 py-4">Narration</th>
+                                    <th className="px-6 py-4 text-center">Manage</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 text-slate-700">
+                                {filteredLedger.map((entry) => (
+                                    <tr key={entry.id} className="hover:bg-slate-50 group">
+                                        <td className="px-6 py-4 whitespace-nowrap">{new Date(entry.date).toLocaleDateString()}</td>
+                                        <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                                            <div className="font-bold text-slate-700">{entry.transactionId}</div>
+                                            <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
+                                        </td>
+                                        <td className="px-6 py-4 font-medium">{entry.accountName}</td>
+                                        <td className="px-6 py-4 text-right font-mono bg-blue-50/30">
+                                            {entry.fcyAmount ? (
+                                                <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                            ) : '-'}
+                                        </td>
+                                        <td className="px-6 py-4 text-center text-xs text-slate-500">{entry.exchangeRate !== 1 ? entry.exchangeRate.toFixed(4) : '-'}</td>
+                                        <td className="px-6 py-4 text-right font-mono">{entry.debit > 0 ? entry.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                        <td className="px-6 py-4 text-right font-mono">{entry.credit > 0 ? entry.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                        <td className="px-6 py-4 max-w-xs truncate text-slate-500">{entry.narration}</td>
+                                        <td className="px-6 py-4 text-center">
+                                            <div className="flex justify-center gap-2 opacity-20 group-hover:opacity-100 transition-opacity">
+                                                <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="Edit Voucher"><Edit2 size={16} /></button>
+                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded" title="Delete Voucher"><Trash2 size={16} /></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Auth Modal */}
+            {authModalOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 w-96 animate-in zoom-in-95">
+                        <div className="flex justify-between items-start mb-4">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <ShieldAlert className="text-red-600" /> Supervisor Access
+                            </h3>
+                            <button onClick={() => setAuthModalOpen(false)}><X className="text-slate-400 hover:text-slate-600" /></button>
+                        </div>
+                        <p className="text-sm text-slate-600 mb-4">
+                            This action ({pendingAction?.type}) requires authorization. Please enter the Supervisor PIN.
+                        </p>
+                        <div className="mb-4">
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">PIN Code</label>
+                            <div className="relative">
+                                <Lock className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                                <input 
+                                    type="password" 
+                                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-slate-800 focus:ring-2 focus:ring-red-500 outline-none" 
+                                    value={authPin}
+                                    onChange={e => setAuthPin(e.target.value)}
+                                    autoFocus
+                                />
+                            </div>
+                        </div>
+                        <button 
+                            onClick={confirmAuthAction}
+                            className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg"
+                        >
+                            Verify & Proceed
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
