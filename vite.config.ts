@@ -11,6 +11,9 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       build: {
+        sourcemap: false, // Disable source maps to speed up build
+        minify: 'esbuild',
+        target: 'es2015',
         rollupOptions: {
           output: {
             manualChunks: {
