@@ -22,6 +22,7 @@ import { ItemPerformanceReport } from './components/reports/ItemPerformanceRepor
 import { OrderFulfillmentDashboard } from './components/reports/OrderFulfillmentDashboard';
 import { DataImportExport } from './components/DataImportExport';
 import { AdminModule } from './components/AdminModule';
+import { CSVValidator } from './components/CSVValidator';
 
 // Error Boundary Component
 class ErrorBoundary extends React.Component<
@@ -103,6 +104,7 @@ const App: React.FC = () => {
               <Route path="/admin" element={<AdminModule />} />
               <Route path="/db-setup" element={<DatabaseSetup />} />
               <Route path="/import-export" element={<DataImportExport />} />
+              <Route path="/csv-validator" element={<CSVValidator />} />
               
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

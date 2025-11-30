@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload } from 'lucide-react';
+import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload, CheckSquare } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import { CURRENT_USER } from '../constants';
 
@@ -90,6 +90,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     <SidebarItem to="/hr" icon={Users} label="HR & Fleet" />
                     <SidebarItem to="/chat" icon={MessageSquare} label="Chat" badge={unreadCount > 0 ? unreadCount : undefined} />
                     <SidebarItem to="/setup" icon={Database} label="Setup" />
+                    <SidebarItem to="/csv-validator" icon={CheckSquare} label="CSV Validator" />
                     <SidebarItem to="/import-export" icon={Upload} label="Import/Export" />
                     <SidebarItem to="/admin" icon={Settings} label="Admin" />
                 </nav>
