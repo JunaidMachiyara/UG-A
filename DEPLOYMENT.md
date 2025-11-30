@@ -6,17 +6,20 @@ React + TypeScript + Vite + Firebase inventory management application.
 
 ### Netlify Environment Variables
 
-Add these to **Site configuration → Environment variables**:
+Add these to **Site configuration → Environment variables** (replace with your actual Firebase config values):
 
 ```
-VITE_FIREBASE_API_KEY=AIzaSyAHdAvXANJDg-CtlLM2DuHDWo1c38H1QZg
-VITE_FIREBASE_AUTH_DOMAIN=ug-a-64252.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=ug-a-64252
-VITE_FIREBASE_STORAGE_BUCKET=ug-a-64252.firebasestorage.app
-VITE_FIREBASE_MESSAGING_SENDER_ID=66668419350
-VITE_FIREBASE_APP_ID=1:66668419350:web:319b793e25046f64571837
-VITE_FIREBASE_MEASUREMENT_ID=G-F6GXB091P9
+VITE_FIREBASE_API_KEY=your_firebase_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your_project_id
+VITE_FIREBASE_STORAGE_BUCKET=your_project.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+VITE_FIREBASE_APP_ID=your_app_id
+VITE_FIREBASE_MEASUREMENT_ID=your_measurement_id
 ```
+
+**Get your Firebase config values from:**
+Firebase Console → Project Settings → General → Your apps → Web app → Config
 
 **Note:** Firebase client-side API keys are safe to expose publicly. They are designed to be included in web apps and are protected by Firebase Security Rules.
 
