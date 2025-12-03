@@ -28,6 +28,12 @@ type Action =
     | { type: 'LOAD_PURCHASES'; payload: Purchase[] }
     | { type: 'LOAD_BUNDLE_PURCHASES'; payload: BundlePurchase[] }
     | { type: 'LOAD_LEDGER'; payload: LedgerEntry[] }
+    | { type: 'LOAD_PRODUCTIONS'; payload: ProductionEntry[] }
+    | { type: 'LOAD_ORIGINAL_OPENINGS'; payload: OriginalOpening[] }
+    | { type: 'LOAD_LOGISTICS_ENTRIES'; payload: LogisticsEntry[] }
+    | { type: 'LOAD_SALES_INVOICES'; payload: SalesInvoice[] }
+    | { type: 'LOAD_ONGOING_ORDERS'; payload: OngoingOrder[] }
+    | { type: 'LOAD_ATTENDANCE'; payload: AttendanceRecord[] }
     | { type: 'ADD_PARTNER'; payload: Partner }
     | { type: 'ADD_ITEM'; payload: Item }
     | { type: 'ADD_ACCOUNT'; payload: Account }
@@ -183,6 +189,30 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'LOAD_LEDGER': {
             console.log('✅ LOADED LEDGER ENTRIES FROM FIREBASE:', action.payload.length);
             return { ...state, ledger: action.payload };
+        }
+        case 'LOAD_PRODUCTIONS': {
+            console.log('✅ LOADED PRODUCTIONS FROM FIREBASE:', action.payload.length);
+            return { ...state, productions: action.payload };
+        }
+        case 'LOAD_ORIGINAL_OPENINGS': {
+            console.log('✅ LOADED ORIGINAL OPENINGS FROM FIREBASE:', action.payload.length);
+            return { ...state, originalOpenings: action.payload };
+        }
+        case 'LOAD_LOGISTICS_ENTRIES': {
+            console.log('✅ LOADED LOGISTICS ENTRIES FROM FIREBASE:', action.payload.length);
+            return { ...state, logisticsEntries: action.payload };
+        }
+        case 'LOAD_SALES_INVOICES': {
+            console.log('✅ LOADED SALES INVOICES FROM FIREBASE:', action.payload.length);
+            return { ...state, salesInvoices: action.payload };
+        }
+        case 'LOAD_ONGOING_ORDERS': {
+            console.log('✅ LOADED ONGOING ORDERS FROM FIREBASE:', action.payload.length);
+            return { ...state, ongoingOrders: action.payload };
+        }
+        case 'LOAD_ATTENDANCE': {
+            console.log('✅ LOADED ATTENDANCE FROM FIREBASE:', action.payload.length);
+            return { ...state, attendance: action.payload };
         }
         case 'POST_TRANSACTION': {
             const newEntries = action.payload.entries.map(e => ({
@@ -717,6 +747,102 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (error) => console.error('❌ Error loading ledger:', error)
         );
 
+        // Listen to Productions collection - FILTERED by factoryId
+        const productionsQuery = query(collection(db, 'productions'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeProductions = onSnapshot(
+            productionsQuery,
+            (snapshot) => {
+                const productions: ProductionEntry[] = [];
+                snapshot.forEach((doc) => {
+                    productions.push({ id: doc.id, ...doc.data() } as ProductionEntry);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_PRODUCTIONS', payload: productions });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading productions:', error)
+        );
+
+        // Listen to Original Openings collection - FILTERED by factoryId
+        const originalOpeningsQuery = query(collection(db, 'originalOpenings'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeOriginalOpenings = onSnapshot(
+            originalOpeningsQuery,
+            (snapshot) => {
+                const originalOpenings: OriginalOpening[] = [];
+                snapshot.forEach((doc) => {
+                    originalOpenings.push({ id: doc.id, ...doc.data() } as OriginalOpening);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ORIGINAL_OPENINGS', payload: originalOpenings });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading original openings:', error)
+        );
+
+        // Listen to Logistics Entries collection - FILTERED by factoryId
+        const logisticsEntriesQuery = query(collection(db, 'logisticsEntries'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeLogisticsEntries = onSnapshot(
+            logisticsEntriesQuery,
+            (snapshot) => {
+                const logisticsEntries: LogisticsEntry[] = [];
+                snapshot.forEach((doc) => {
+                    logisticsEntries.push({ id: doc.id, ...doc.data() } as LogisticsEntry);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_LOGISTICS_ENTRIES', payload: logisticsEntries });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading logistics entries:', error)
+        );
+
+        // Listen to Sales Invoices collection - FILTERED by factoryId
+        const salesInvoicesQuery = query(collection(db, 'salesInvoices'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeSalesInvoices = onSnapshot(
+            salesInvoicesQuery,
+            (snapshot) => {
+                const salesInvoices: SalesInvoice[] = [];
+                snapshot.forEach((doc) => {
+                    salesInvoices.push({ id: doc.id, ...doc.data() } as SalesInvoice);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_SALES_INVOICES', payload: salesInvoices });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading sales invoices:', error)
+        );
+
+        // Listen to Ongoing Orders collection - FILTERED by factoryId
+        const ongoingOrdersQuery = query(collection(db, 'ongoingOrders'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeOngoingOrders = onSnapshot(
+            ongoingOrdersQuery,
+            (snapshot) => {
+                const ongoingOrders: OngoingOrder[] = [];
+                snapshot.forEach((doc) => {
+                    ongoingOrders.push({ id: doc.id, ...doc.data() } as OngoingOrder);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ONGOING_ORDERS', payload: ongoingOrders });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading ongoing orders:', error)
+        );
+
+        // Listen to Attendance collection - FILTERED by factoryId
+        const attendanceQuery = query(collection(db, 'attendance'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeAttendance = onSnapshot(
+            attendanceQuery,
+            (snapshot) => {
+                const attendance: AttendanceRecord[] = [];
+                snapshot.forEach((doc) => {
+                    attendance.push({ id: doc.id, ...doc.data() } as AttendanceRecord);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ATTENDANCE', payload: attendance });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading attendance:', error)
+        );
+
         // Mark as loaded after initial connection
         setTimeout(() => {
             setIsFirestoreLoaded(true);
@@ -741,6 +867,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             unsubscribePurchases();
             unsubscribeBundlePurchases();
             unsubscribeLedger();
+            unsubscribeProductions();
+            unsubscribeOriginalOpenings();
+            unsubscribeLogisticsEntries();
+            unsubscribeSalesInvoices();
+            unsubscribeOngoingOrders();
+            unsubscribeAttendance();
         };
     }, [currentFactory]); // Re-run when factory changes
 
@@ -988,21 +1120,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
     const addOriginalOpening = (opening: OriginalOpening) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, original opening not saved to database');
+            return;
+        }
+        
         const openingWithFactory = {
             ...opening,
             factoryId: currentFactory?.id || ''
         };
-        dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: openingWithFactory });
+        
+        // Save to Firebase
+        const { id, ...openingData } = openingWithFactory;
+        addDoc(collection(db, 'originalOpenings'), { ...openingData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Original Opening saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving original opening:', error));
         const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105'; const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const transactionId = `OO-${openingWithFactory.id}`;
         const entries: Omit<LedgerEntry, 'id'>[] = [ { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: fgInvId, accountName: 'Inventory - Finished Goods (WIP)', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: openingWithFactory.totalValue, credit: 0, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` }, { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: 0, credit: openingWithFactory.totalValue, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` } ]; postTransaction(entries);
     };
     const deleteOriginalOpening = (id: string) => { dispatch({ type: 'DELETE_ENTITY', payload: { type: 'originalOpenings', id } }); const transactionId = `OO-${id}`; dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason: 'Delete Original Opening', user: 'Admin' } }); };
     const addProduction = (productions: ProductionEntry[]) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, production not saved to database');
+            return;
+        }
+        
         const productionsWithFactory = productions.map(prod => ({
             ...prod,
             factoryId: currentFactory?.id || ''
         }));
-        dispatch({ type: 'ADD_PRODUCTION', payload: productionsWithFactory });
+        
+        // Save each production entry to Firebase
+        productionsWithFactory.forEach(prod => {
+            const { id, ...prodData } = prod;
+            addDoc(collection(db, 'productions'), { ...prodData, createdAt: serverTimestamp() })
+                .then(() => console.log('✅ Production entry saved to Firebase'))
+                .catch((error) => console.error('❌ Error saving production:', error));
+        });
     };
     const postBaleOpening = (stagedItems: { itemId: string, qty: number, date: string }[]) => {
         if (stagedItems.length === 0) return;
@@ -1020,18 +1174,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dispatch({ type: 'ADD_PRODUCTION', payload: productionEntries }); postTransaction(journalEntries);
     };
     const saveLogisticsEntry = (entry: LogisticsEntry) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, logistics entry not saved to database');
+            return;
+        }
+        
         const entryWithFactory = {
             ...entry,
             factoryId: currentFactory?.id || ''
         };
-        dispatch({ type: 'SAVE_LOGISTICS_ENTRY', payload: entryWithFactory });
+        
+        // Save to Firebase
+        const { purchaseId, ...entryData } = entryWithFactory;
+        addDoc(collection(db, 'logisticsEntries'), { ...entryData, purchaseId, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Logistics entry saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving logistics entry:', error));
     };
     const addSalesInvoice = (invoice: SalesInvoice) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, sales invoice not saved to database');
+            return;
+        }
+        
         const invoiceWithFactory = {
             ...invoice,
             factoryId: currentFactory?.id || ''
         };
-        dispatch({ type: 'ADD_SALES_INVOICE', payload: invoiceWithFactory });
+        
+        // Save to Firebase
+        const { id, ...invoiceData } = invoiceWithFactory;
+        addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Sales invoice saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving sales invoice:', error));
     };
     const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
     const postSalesInvoice = (invoice: SalesInvoice) => {
@@ -1055,11 +1229,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         postTransaction(entries);
     };
     const addOngoingOrder = (order: OngoingOrder) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, ongoing order not saved to database');
+            return;
+        }
+        
         const orderWithFactory = {
             ...order,
             factoryId: currentFactory?.id || ''
         };
-        dispatch({ type: 'ADD_ONGOING_ORDER', payload: orderWithFactory });
+        
+        // Save to Firebase
+        const { id, ...orderData } = orderWithFactory;
+        addDoc(collection(db, 'ongoingOrders'), { ...orderData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Ongoing order saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving ongoing order:', error));
     };
     const processOrderShipment = (orderId: string, shipmentItems: { itemId: string, shipQty: number }[]) => {
         const order = state.ongoingOrders.find(o => o.id === orderId); if (!order) return;
@@ -1095,7 +1279,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updateEnquiry = (enquiry: Enquiry) => dispatch({ type: 'UPDATE_ENQUIRY', payload: enquiry });
     const addVehicle = (vehicle: Vehicle) => dispatch({ type: 'ADD_VEHICLE', payload: vehicle });
     const updateVehicle = (vehicle: Vehicle) => dispatch({ type: 'UPDATE_VEHICLE', payload: vehicle });
-    const saveAttendance = (record: AttendanceRecord) => dispatch({ type: 'SAVE_ATTENDANCE', payload: record });
+    const saveAttendance = (record: AttendanceRecord) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, attendance not saved to database');
+            return;
+        }
+        
+        const recordWithFactory = {
+            ...record,
+            factoryId: currentFactory?.id || ''
+        };
+        
+        // Save to Firebase
+        addDoc(collection(db, 'attendance'), { ...recordWithFactory, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Attendance saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving attendance:', error));
+    };
     const processPayroll = (payment: SalaryPayment, sourceAccountId: string) => {
         dispatch({ type: 'PROCESS_PAYROLL', payload: payment });
         const salaryExpenseId = state.accounts.find(a => a.name.includes('Salaries'))?.id || '504';
