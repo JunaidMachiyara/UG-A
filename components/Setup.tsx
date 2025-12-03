@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
-import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
 import { PartnerType, AccountType, PackingType } from '../types';
-import { EXCHANGE_RATES } from '../constants';
+import { EXCHANGE_RATES, INITIAL_ACCOUNTS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 
 // --- Types for Generic CRUD ---
@@ -131,8 +131,15 @@ export const GenericForm: React.FC<{
                             <input
                                 type={field.type}
                                 className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none bg-white text-slate-800 disabled:bg-slate-100 disabled:text-slate-500 border-slate-300"
-                                value={formData[field.name] || ''}
-                                onChange={e => handleChange(field.name, field.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
+                                value={formData[field.name] ?? ''}
+                                onChange={e => {
+                                    let value = e.target.value;
+                                    if (field.type === 'number') {
+                                        value = value === '' ? 0 : parseFloat(value);
+                                        if (isNaN(value)) value = 0;
+                                    }
+                                    handleChange(field.name, value);
+                                }}
                                 placeholder={field.placeholder}
                                 required={field.required}
                                 disabled={field.readOnly}
@@ -431,7 +438,7 @@ export const useSetupConfigs = () => {
                 required: false,
                 hidden: (data) => !data.divisionId
             },
-            { name: 'defaultCurrency', label: 'Default Currency', type: 'select', options: Object.keys(EXCHANGE_RATES), required: true, defaultValue: 'USD' },
+            { name: 'defaultCurrency', label: 'Default Currency', type: 'select', options: () => state.currencies.length > 0 ? state.currencies.map(c => c.code) : ['USD'], required: true, defaultValue: 'USD' },
             { name: 'contact', label: 'Contact Person', type: 'text' },
             { name: 'phone', label: 'Phone', type: 'text' },
             { name: 'email', label: 'Email', type: 'text' },
@@ -568,50 +575,6 @@ export const useSetupConfigs = () => {
         onDelete: (id) => deleteEntity('items', id)
     };
 
-    const accountConfig: CrudConfig = {
-        title: 'Chart of Accounts',
-        entityKey: 'accounts',
-        columns: [
-            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
-            { header: 'Name', key: 'name' },
-            { header: 'Type', key: 'type' },
-            { header: 'Balance', key: 'balance' }
-        ],
-        fields: [
-            { name: 'type', label: 'Type', type: 'select', options: Object.values(AccountType), required: true },
-            { 
-                name: 'code', 
-                label: 'GL Code (Auto)', 
-                type: 'text', 
-                required: true, 
-                readOnly: true,
-                placeholder: 'Select Type first',
-                compute: (formData, allData) => {
-                    if (!formData.type) return '';
-                    let prefix = '1';
-                    switch(formData.type) {
-                        case AccountType.ASSET: prefix = '1'; break;
-                        case AccountType.LIABILITY: prefix = '2'; break;
-                        case AccountType.EQUITY: prefix = '3'; break;
-                        case AccountType.REVENUE: prefix = '4'; break;
-                        case AccountType.EXPENSE: prefix = '5'; break;
-                    }
-                    const existingCodes = allData
-                        .filter(a => a.code.startsWith(prefix))
-                        .map(a => parseInt(a.code))
-                        .filter(n => !isNaN(n))
-                        .sort((a, b) => b - a);
-                    const nextCode = existingCodes.length > 0 ? existingCodes[0] + 1 : parseInt(prefix + '001');
-                    return nextCode.toString();
-                }
-            },
-            { name: 'name', label: 'Account Name', type: 'text', required: true },
-            { name: 'balance', label: 'Opening Balance', type: 'number' }
-        ],
-        onSave: (data) => addAccount(data),
-        onDelete: (id) => deleteEntity('accounts', id)
-    };
-
      const warehouseConfig: CrudConfig = {
         title: 'Warehouses',
         entityKey: 'warehouses',
@@ -689,13 +652,365 @@ export const useSetupConfigs = () => {
         subDivisionConfig,
         logoConfig,
         itemConfig,
-        accountConfig,
         warehouseConfig,
         categoryConfig,
         sectionConfig,
         originalTypeConfig,
         originalProductConfig
     };
+};
+
+// --- Currency Manager ---
+const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
+    const { addCurrency, updateCurrency, deleteEntity } = useData();
+    const [showForm, setShowForm] = useState(false);
+    const [editingCurrency, setEditingCurrency] = useState<any>(null);
+    const [formData, setFormData] = useState({
+        code: '',
+        name: '',
+        symbol: '',
+        exchangeRate: 1,
+        isBaseCurrency: false
+    });
+
+    const resetForm = () => {
+        setFormData({ code: '', name: '', symbol: '', exchangeRate: 1, isBaseCurrency: false });
+        setEditingCurrency(null);
+        setShowForm(false);
+    };
+
+    const handleSave = () => {
+        if (!formData.code || !formData.name || !formData.symbol || formData.exchangeRate <= 0) {
+            alert('Please fill all required fields');
+            return;
+        }
+
+        if (editingCurrency) {
+            updateCurrency(editingCurrency.id, formData);
+        } else {
+            addCurrency({ ...formData, id: Math.random().toString(36).substr(2, 9) });
+        }
+        resetForm();
+    };
+
+    const handleEdit = (currency: any) => {
+        setEditingCurrency(currency);
+        setFormData({
+            code: currency.code,
+            name: currency.name,
+            symbol: currency.symbol,
+            exchangeRate: currency.exchangeRate,
+            isBaseCurrency: currency.isBaseCurrency
+        });
+        setShowForm(true);
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-md p-6 border border-slate-200">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-bold text-slate-800">Currency Management</h3>
+                <button onClick={() => setShowForm(!showForm)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                    {showForm ? 'Cancel' : '+ Add Currency'}
+                </button>
+            </div>
+
+            {showForm && (
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Currency Code *</label>
+                            <input
+                                type="text"
+                                placeholder="USD, EUR, GBP..."
+                                maxLength={3}
+                                value={formData.code}
+                                onChange={e => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+                                className="w-full border border-slate-300 rounded-lg p-2 uppercase"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Symbol *</label>
+                            <input
+                                type="text"
+                                placeholder="$, €, £..."
+                                value={formData.symbol}
+                                onChange={e => setFormData({ ...formData, symbol: e.target.value })}
+                                className="w-full border border-slate-300 rounded-lg p-2"
+                            />
+                        </div>
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Currency Name *</label>
+                            <input
+                                type="text"
+                                placeholder="US Dollar, Euro..."
+                                value={formData.name}
+                                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                className="w-full border border-slate-300 rounded-lg p-2"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Exchange Rate (1 USD = ?) *</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                min="0"
+                                value={formData.exchangeRate}
+                                onChange={e => setFormData({ ...formData, exchangeRate: parseFloat(e.target.value) })}
+                                className="w-full border border-slate-300 rounded-lg p-2"
+                            />
+                        </div>
+                        <div className="flex items-center">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={formData.isBaseCurrency}
+                                    onChange={e => setFormData({ ...formData, isBaseCurrency: e.target.checked })}
+                                    className="w-4 h-4 text-blue-600"
+                                />
+                                <span className="text-sm font-medium text-slate-700">Base Currency (USD)</span>
+                            </label>
+                        </div>
+                    </div>
+                    <button onClick={handleSave} className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium">
+                        {editingCurrency ? 'Update Currency' : 'Add Currency'}
+                    </button>
+                </div>
+            )}
+
+            {data.length === 0 ? (
+                <div className="text-center py-8 text-slate-500">
+                    <p>No currencies configured. Add currencies to enable multi-currency transactions.</p>
+                </div>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead>
+                            <tr className="border-b border-slate-200 bg-slate-50">
+                                <th className="text-left p-3 text-sm font-semibold text-slate-700">Code</th>
+                                <th className="text-left p-3 text-sm font-semibold text-slate-700">Name</th>
+                                <th className="text-left p-3 text-sm font-semibold text-slate-700">Symbol</th>
+                                <th className="text-right p-3 text-sm font-semibold text-slate-700">Rate (1 USD =)</th>
+                                <th className="text-center p-3 text-sm font-semibold text-slate-700">Base</th>
+                                <th className="text-right p-3 text-sm font-semibold text-slate-700">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.map((currency, idx) => (
+                                <tr key={currency.id} className={`border-b border-slate-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                                    <td className="p-3 font-mono text-sm font-bold text-slate-800">{currency.code}</td>
+                                    <td className="p-3 text-sm text-slate-700">{currency.name}</td>
+                                    <td className="p-3 text-sm font-medium text-slate-700">{currency.symbol}</td>
+                                    <td className="p-3 text-right font-mono text-sm text-slate-800">{currency.exchangeRate.toFixed(4)}</td>
+                                    <td className="p-3 text-center">
+                                        {currency.isBaseCurrency && <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-bold">BASE</span>}
+                                    </td>
+                                    <td className="p-3 text-right space-x-2">
+                                        <button onClick={() => handleEdit(currency)} className="text-blue-600 hover:text-blue-800 font-medium text-sm">Edit</button>
+                                        {!currency.isBaseCurrency && (
+                                            <button onClick={() => confirm(`Delete ${currency.name}?`) && deleteEntity('currencies', currency.id)} className="text-red-600 hover:text-red-800 font-medium text-sm">Delete</button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- Chart of Accounts Manager with Bulk Import ---
+const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
+    const { addAccount, deleteEntity } = useData();
+    const [isImporting, setIsImporting] = useState(false);
+    const [showForm, setShowForm] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true);
+
+    const handleBulkImport = async () => {
+        if (!confirm(`Import ${INITIAL_ACCOUNTS.length} professional accounts into this factory?\n\nThis will add:\n• Assets (1000-1999)\n• Liabilities (2000-2999)\n• Equity (3000-3999)\n• Revenue (4000-4999)\n• Expenses (5000-5999)`)) {
+            return;
+        }
+
+        setIsImporting(true);
+        let imported = 0;
+        let skipped = 0;
+        const existingCodes = new Set(data.map(a => a.code)); // Track codes we've seen
+
+        for (const account of INITIAL_ACCOUNTS) {
+            try {
+                // Check if account code already exists
+                if (!existingCodes.has(account.code)) {
+                    addAccount({
+                        ...account,
+                        id: undefined, // Let Firebase generate new ID
+                        currency: 'USD', // Default currency
+                        balance: account.balance || 0 // Ensure balance is set
+                    });
+                    existingCodes.add(account.code); // Mark as imported
+                    imported++;
+                    
+                    // Small delay to avoid overwhelming Firebase
+                    if (imported % 20 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                } else {
+                    skipped++;
+                }
+            } catch (error) {
+                console.error(`Failed to import account ${account.code}:`, error);
+            }
+        }
+
+        setIsImporting(false);
+        alert(`✅ Successfully imported ${imported} accounts!\n${skipped > 0 ? `Skipped ${skipped} existing accounts.` : ''}`);
+    };
+
+    const accountConfig: CrudConfig = {
+        title: 'Chart of Accounts',
+        entityKey: 'accounts',
+        columns: [
+            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
+            { header: 'Name', key: 'name' },
+            { header: 'Type', key: 'type' },
+            { header: 'Balance', key: 'balance', render: (r) => <span>${(r.balance || 0).toFixed(2)}</span> }
+        ],
+        fields: [
+            { name: 'type', label: 'Type', type: 'select', options: Object.values(AccountType), required: true },
+            { 
+                name: 'code', 
+                label: 'GL Code (Auto)', 
+                type: 'text', 
+                required: true, 
+                readOnly: true,
+                placeholder: 'Select Type first',
+                compute: (formData, allData) => {
+                    if (!formData.type) return '';
+                    let prefix = '1';
+                    switch(formData.type) {
+                        case AccountType.ASSET: prefix = '1'; break;
+                        case AccountType.LIABILITY: prefix = '2'; break;
+                        case AccountType.EQUITY: prefix = '3'; break;
+                        case AccountType.REVENUE: prefix = '4'; break;
+                        case AccountType.EXPENSE: prefix = '5'; break;
+                    }
+                    const existingCodes = allData
+                        .filter(a => a.code.startsWith(prefix))
+                        .map(a => parseInt(a.code))
+                        .filter(n => !isNaN(n))
+                        .sort((a, b) => b - a);
+                    const nextCode = existingCodes.length > 0 ? existingCodes[0] + 1 : parseInt(prefix + '001');
+                    return nextCode.toString();
+                }
+            },
+            { name: 'name', label: 'Account Name', type: 'text', required: true },
+            { 
+                name: 'currency', 
+                label: 'Currency (for Bank/Cash accounts)', 
+                type: 'select', 
+                options: Object.keys(EXCHANGE_RATES),
+                defaultValue: 'USD'
+            },
+            { name: 'balance', label: 'Opening Balance', type: 'number', defaultValue: 0 }
+        ],
+        onSave: (data) => addAccount(data),
+        onDelete: (id) => deleteEntity('accounts', id)
+    };
+
+    return (
+        <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setIsExpanded(!isExpanded)}
+                        className="text-slate-600 hover:text-slate-800"
+                    >
+                        {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                    </button>
+                    <h3 className="text-xl font-bold text-slate-800">Chart of Accounts</h3>
+                </div>
+                <div className="flex gap-2">
+                    {data.length < 50 && (
+                        <button
+                            onClick={handleBulkImport}
+                            disabled={isImporting}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                        >
+                            <Download size={16} />
+                            {isImporting ? 'Importing...' : `Import 166 Accounts`}
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setShowForm(!showForm)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                        <Plus size={16} />
+                        Add Manual
+                    </button>
+                </div>
+            </div>
+
+            {isExpanded && (
+                <>
+                    {data.length === 0 && !isImporting && (
+                        <div className="text-center py-8 text-slate-500">
+                    <CreditCard size={48} className="mx-auto mb-4 opacity-30" />
+                    <p className="text-lg font-medium">No Chart of Accounts found</p>
+                    <p className="text-sm mt-2">Click "Import 166 Accounts" to load the professional accounting structure</p>
+                </div>
+            )}
+
+            {showForm && (
+                <div className="mb-4 border-t pt-4">
+                    <GenericForm 
+                        config={accountConfig} 
+                        data={data} 
+                        onCancel={() => setShowForm(false)} 
+                        onSuccess={() => setShowForm(false)} 
+                    />
+                </div>
+            )}
+
+            {data.length > 0 && (
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead className="bg-slate-50">
+                            <tr>
+                                <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Code</th>
+                                <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Name</th>
+                                <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Type</th>
+                                <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Balance</th>
+                                <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                            {data.map((account) => (
+                                <tr key={account.id} className="hover:bg-slate-50">
+                                    <td className="px-4 py-2 font-mono text-xs">{account.code}</td>
+                                    <td className="px-4 py-2 text-sm">{account.name}</td>
+                                    <td className="px-4 py-2 text-sm">{account.type}</td>
+                                    <td className="px-4 py-2 text-sm text-right">${account.balance || 0}</td>
+                                    <td className="px-4 py-2 text-right">
+                                        <button
+                                            onClick={() => deleteEntity('accounts', account.id)}
+                                            className="text-red-600 hover:text-red-800"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mt-4 text-sm text-slate-600">
+                        Total: {data.length} accounts
+                    </div>
+                </div>
+            )}
+                </>
+            )}
+        </div>
+    );
 };
 
 // --- Main Setup Component ---
@@ -742,7 +1057,8 @@ export const SetupModule: React.FC = () => {
                         <CreditCard className="text-slate-400" size={20} />
                         <h2 className="text-lg font-bold text-slate-800 uppercase tracking-wide">Financials</h2>
                     </div>
-                    <CrudManager config={configs.accountConfig} data={state.accounts} />
+                    <CurrencyManager data={state.currencies} />
+                    <ChartOfAccountsManager data={state.accounts} />
                 </div>
             </div>
         </div>

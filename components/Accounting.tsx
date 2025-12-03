@@ -424,7 +424,7 @@ export const Accounting: React.FC = () => {
                                     <div>
                                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Currency</label>
                                         <select className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={currency} onChange={e => setCurrency(e.target.value as Currency)}>
-                                            {Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}
+                                            {state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}
                                         </select>
                                     </div>
                                     <div>
@@ -465,8 +465,8 @@ export const Accounting: React.FC = () => {
                                                     </td>
                                                     <td className="px-2 py-2"><input type="text" className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.desc} onChange={e => updateJvRow(row.id, 'desc', e.target.value)} /></td>
                                                     <td className="px-2 py-2">
-                                                        <select className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.currency} onChange={e => { updateJvRow(row.id, 'currency', e.target.value); updateJvRow(row.id, 'exchangeRate', EXCHANGE_RATES[e.target.value as Currency] || 1); }}>
-                                                            {Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}
+                                                        <select className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.currency} onChange={e => { updateJvRow(row.id, 'currency', e.target.value); const selectedCurrency = state.currencies.find(curr => curr.code === e.target.value); updateJvRow(row.id, 'exchangeRate', selectedCurrency?.exchangeRate || 1); }}>
+                                                            {state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}
                                                         </select>
                                                     </td>
                                                     <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-center bg-white text-slate-800" value={row.exchangeRate} onChange={e => updateJvRow(row.id, 'exchangeRate', parseFloat(e.target.value))} /></td>
@@ -499,7 +499,7 @@ export const Accounting: React.FC = () => {
                                             <EntitySelector entities={cashBankAccounts} selectedId={sourceId} onSelect={setSourceId} placeholder="Select Source Account..." />
                                         </div>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={fromCurrency} onChange={e => setFromCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={fromCurrency} onChange={e => setFromCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                             <div><label className="block text-xs font-semibold text-slate-500 mb-1">Ex. Rate (to Base)</label><input type="number" className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={fromRate} onChange={e => setFromRate(parseFloat(e.target.value))} /></div>
                                         </div>
                                         <div>
@@ -522,7 +522,7 @@ export const Accounting: React.FC = () => {
                                             <EntitySelector entities={cashBankAccounts} selectedId={destId} onSelect={setDestId} placeholder="Select Dest Account..." />
                                         </div>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={toCurrency} onChange={e => setToCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={toCurrency} onChange={e => setToCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                             <div><label className="block text-xs font-semibold text-slate-500 mb-1">Ex. Rate (to Base)</label><input type="number" className="w-full bg-white border border-slate-300 rounded p-2 text-sm text-slate-800" value={toRate} onChange={e => setToRate(parseFloat(e.target.value))} /></div>
                                         </div>
                                         <div>

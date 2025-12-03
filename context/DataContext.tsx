@@ -1,9 +1,10 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useState, useRef } from 'react';
-import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument } from '../types';
-import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS } from '../constants';
+import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
+import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where } from 'firebase/firestore';
+import { useAuth } from './AuthContext';
 
 // Helper for simple ID generation
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -13,6 +14,17 @@ type Action =
     | { type: 'RESTORE_STATE'; payload: AppState }
     | { type: 'LOAD_PARTNERS'; payload: Partner[] }
     | { type: 'LOAD_ACCOUNTS'; payload: Account[] }
+    | { type: 'LOAD_ITEMS'; payload: Item[] }
+    | { type: 'LOAD_CATEGORIES'; payload: Category[] }
+    | { type: 'LOAD_SECTIONS'; payload: Section[] }
+    | { type: 'LOAD_WAREHOUSES'; payload: Warehouse[] }
+    | { type: 'LOAD_DIVISIONS'; payload: Division[] }
+    | { type: 'LOAD_SUBDIVISIONS'; payload: SubDivision[] }
+    | { type: 'LOAD_LOGOS'; payload: Logo[] }
+    | { type: 'LOAD_ORIGINAL_TYPES'; payload: OriginalType[] }
+    | { type: 'LOAD_ORIGINAL_PRODUCTS'; payload: OriginalProduct[] }
+    | { type: 'LOAD_EMPLOYEES'; payload: Employee[] }
+    | { type: 'LOAD_CURRENCIES'; payload: CurrencyRate[] }
     | { type: 'ADD_PARTNER'; payload: Partner }
     | { type: 'ADD_ITEM'; payload: Item }
     | { type: 'ADD_ACCOUNT'; payload: Account }
@@ -26,8 +38,9 @@ type Action =
     | { type: 'ADD_ORIGINAL_PRODUCT'; payload: OriginalProduct }
     | { type: 'ADD_CATEGORY'; payload: Category }
     | { type: 'ADD_SECTION'; payload: Section }
+    | { type: 'ADD_CURRENCY'; payload: CurrencyRate }
     | { type: 'UPDATE_STOCK'; payload: { itemId: string; qtyChange: number } }
-    | { type: 'DELETE_ENTITY'; payload: { type: 'partners' | 'items' | 'accounts' | 'employees' | 'divisions' | 'subDivisions' | 'logos' | 'warehouses' | 'originalTypes' | 'originalProducts' | 'categories' | 'sections' | 'originalOpenings' | 'salesInvoices' | 'ongoingOrders' | 'tasks' | 'enquiries' | 'vehicles' | 'planners' | 'guaranteeCheques' | 'customsDocuments'; id: string } }
+    | { type: 'DELETE_ENTITY'; payload: { type: 'partners' | 'items' | 'accounts' | 'employees' | 'divisions' | 'subDivisions' | 'logos' | 'warehouses' | 'originalTypes' | 'originalProducts' | 'categories' | 'sections' | 'originalOpenings' | 'salesInvoices' | 'ongoingOrders' | 'tasks' | 'enquiries' | 'vehicles' | 'planners' | 'guaranteeCheques' | 'customsDocuments' | 'currencies'; id: string } }
     | { type: 'DELETE_LEDGER_ENTRIES'; payload: { transactionId: string; reason?: string; user?: string } }
     | { type: 'ADD_ORIGINAL_OPENING'; payload: OriginalOpening }
     | { type: 'ADD_PRODUCTION'; payload: ProductionEntry[] }
@@ -57,6 +70,12 @@ type Action =
     | { type: 'ADD_CUSTOMS_DOCUMENT'; payload: CustomsDocument };
 
 const initialState: AppState = {
+    // Factory & User Management
+    factories: [],
+    users: [],
+    currentUser: null,
+    currentFactory: null,
+    
     accounts: [], // Will load from Firebase
     partners: [], // Will load from Firebase
     items: INITIAL_ITEMS,
@@ -64,6 +83,7 @@ const initialState: AppState = {
     subDivisions: INITIAL_SUB_DIVISIONS,
     logos: INITIAL_LOGOS,
     warehouses: INITIAL_WAREHOUSES,
+    currencies: [], // Will load from Firebase
     employees: INITIAL_EMPLOYEES,
     attendance: [],
     salaryPayments: [],
@@ -104,6 +124,50 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'LOAD_ACCOUNTS': {
             console.log('✅ LOADED ACCOUNTS FROM FIREBASE:', action.payload.length);
             return { ...state, accounts: action.payload };
+        }
+        case 'LOAD_ITEMS': {
+            console.log('✅ LOADED ITEMS FROM FIREBASE:', action.payload.length);
+            return { ...state, items: action.payload };
+        }
+        case 'LOAD_CATEGORIES': {
+            console.log('✅ LOADED CATEGORIES FROM FIREBASE:', action.payload.length);
+            return { ...state, categories: action.payload };
+        }
+        case 'LOAD_SECTIONS': {
+            console.log('✅ LOADED SECTIONS FROM FIREBASE:', action.payload.length);
+            return { ...state, sections: action.payload };
+        }
+        case 'LOAD_WAREHOUSES': {
+            console.log('✅ LOADED WAREHOUSES FROM FIREBASE:', action.payload.length);
+            return { ...state, warehouses: action.payload };
+        }
+        case 'LOAD_DIVISIONS': {
+            console.log('✅ LOADED DIVISIONS FROM FIREBASE:', action.payload.length);
+            return { ...state, divisions: action.payload };
+        }
+        case 'LOAD_SUBDIVISIONS': {
+            console.log('✅ LOADED SUBDIVISIONS FROM FIREBASE:', action.payload.length);
+            return { ...state, subDivisions: action.payload };
+        }
+        case 'LOAD_LOGOS': {
+            console.log('✅ LOADED LOGOS FROM FIREBASE:', action.payload.length);
+            return { ...state, logos: action.payload };
+        }
+        case 'LOAD_ORIGINAL_TYPES': {
+            console.log('✅ LOADED ORIGINAL_TYPES FROM FIREBASE:', action.payload.length);
+            return { ...state, originalTypes: action.payload };
+        }
+        case 'LOAD_ORIGINAL_PRODUCTS': {
+            console.log('✅ LOADED ORIGINAL_PRODUCTS FROM FIREBASE:', action.payload.length);
+            return { ...state, originalProducts: action.payload };
+        }
+        case 'LOAD_EMPLOYEES': {
+            console.log('✅ LOADED EMPLOYEES FROM FIREBASE:', action.payload.length);
+            return { ...state, employees: action.payload };
+        }
+        case 'LOAD_CURRENCIES': {
+            console.log('✅ LOADED CURRENCIES FROM FIREBASE:', action.payload.length);
+            return { ...state, currencies: action.payload };
         }
         case 'POST_TRANSACTION': {
             const newEntries = action.payload.entries.map(e => ({
@@ -194,6 +258,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'ADD_ORIGINAL_PRODUCT': return { ...state, originalProducts: [...state.originalProducts, action.payload] };
         case 'ADD_CATEGORY': return { ...state, categories: [...state.categories, action.payload] };
         case 'ADD_SECTION': return { ...state, sections: [...state.sections, action.payload] };
+        case 'ADD_CURRENCY': return { ...state, currencies: [...state.currencies, action.payload] };
         case 'ADD_ORIGINAL_OPENING': return { ...state, originalOpenings: [action.payload, ...state.originalOpenings] };
         case 'ADD_PURCHASE': return { ...state, purchases: [action.payload, ...state.purchases] };
         case 'ADD_BUNDLE_PURCHASE': return { ...state, bundlePurchases: [action.payload, ...state.bundlePurchases] };
@@ -288,7 +353,7 @@ interface DataContextType {
     deleteTransaction: (transactionId: string, reason?: string, user?: string) => void;
     addPartner: (partner: Partner) => void;
     addItem: (item: Item, openingStock?: number) => void;
-    addAccount: (account: Account) => void;
+    addAccount: (account: Account) => Promise<void>;
     addDivision: (division: Division) => void;
     addSubDivision: (subDivision: SubDivision) => void;
     addLogo: (logo: Logo) => void;
@@ -310,6 +375,8 @@ interface DataContextType {
     addOriginalProduct: (prod: OriginalProduct) => void;
     addCategory: (cat: Category) => void;
     addSection: (sec: Section) => void;
+    addCurrency: (currency: CurrencyRate) => void;
+    updateCurrency: (currencyId: string, updates: Partial<CurrencyRate>) => Promise<void>;
     addOriginalOpening: (opening: OriginalOpening) => void;
     deleteOriginalOpening: (id: string) => void;
     addProduction: (productions: ProductionEntry[]) => void;
@@ -336,6 +403,7 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [state, dispatch] = useReducer(dataReducer, initialState);
+    const { currentFactory } = useAuth(); // Access current factory for filtering
     
     // 🛡️ CRITICAL SAFEGUARD: Firebase Connection State
     const [isFirestoreLoaded, setIsFirestoreLoaded] = useState(false);
@@ -345,20 +413,37 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 🔥 FIREBASE SYNC: Load partners and accounts from Firestore in real-time
     useEffect(() => {
-        console.log('🔥 Connecting to Firebase Collections...');
+        if (!currentFactory) {
+            console.log('⏳ Waiting for factory selection...');
+            return;
+        }
+
+        console.log(`🔥 Connecting to Firebase Collections for factory: ${currentFactory.name}...`);
         setFirestoreStatus('loading');
 
-        // Listen to Partners collection
-        const unsubscribePartners = onSnapshot(
+        // Listen to Partners collection - FILTERED by factoryId
+        const partnersQuery = query(
             collection(db, 'partners'),
+            where('factoryId', '==', currentFactory.id)
+        );
+        const unsubscribePartners = onSnapshot(
+            partnersQuery,
             (snapshot) => {
                 const partners: Partner[] = [];
                 snapshot.forEach((doc) => {
+                    const partnerData = doc.data();
+                    const { id: _, ...dataWithoutId } = partnerData; // Remove old client-generated id from data
+                    console.log(`👥 Loading partner from Firebase:`, {
+                        firestoreId: doc.id,
+                        oldDataId: partnerData.id,
+                        name: partnerData.name
+                    });
                     partners.push({
-                        id: doc.id,
-                        ...doc.data()
+                        ...dataWithoutId,
+                        id: doc.id // Use Firebase document ID
                     } as Partner);
                 });
+                console.log(`✅ LOADED ${partners.length} PARTNERS FROM FIREBASE`);
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PARTNERS', payload: partners });
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
@@ -369,9 +454,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         );
 
-        // Listen to Accounts collection
-        const unsubscribeAccounts = onSnapshot(
+        // Listen to Accounts collection - FILTERED by factoryId
+        const accountsQuery = query(
             collection(db, 'accounts'),
+            where('factoryId', '==', currentFactory.id)
+        );
+        const unsubscribeAccounts = onSnapshot(
+            accountsQuery,
             (snapshot) => {
                 const accounts: Account[] = [];
                 snapshot.forEach((doc) => {
@@ -390,6 +479,181 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         );
 
+        // Listen to Items collection - FILTERED by factoryId
+        const itemsQuery = query(collection(db, 'items'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeItems = onSnapshot(
+            itemsQuery,
+            (snapshot) => {
+                const items: Item[] = [];
+                snapshot.forEach((doc) => {
+                    items.push({ id: doc.id, ...doc.data() } as Item);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ITEMS', payload: items });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading items:', error)
+        );
+
+        // Listen to Categories collection - FILTERED by factoryId
+        const categoriesQuery = query(collection(db, 'categories'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeCategories = onSnapshot(
+            categoriesQuery,
+            (snapshot) => {
+                const categories: Category[] = [];
+                snapshot.forEach((doc) => {
+                    categories.push({ id: doc.id, ...doc.data() } as Category);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_CATEGORIES', payload: categories });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading categories:', error)
+        );
+
+        // Listen to Sections collection - FILTERED by factoryId
+        const sectionsQuery = query(collection(db, 'sections'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeSections = onSnapshot(
+            sectionsQuery,
+            (snapshot) => {
+                const sections: Section[] = [];
+                snapshot.forEach((doc) => {
+                    sections.push({ id: doc.id, ...doc.data() } as Section);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_SECTIONS', payload: sections });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading sections:', error)
+        );
+
+        // Listen to Warehouses collection - FILTERED by factoryId
+        const warehousesQuery = query(collection(db, 'warehouses'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeWarehouses = onSnapshot(
+            warehousesQuery,
+            (snapshot) => {
+                const warehouses: Warehouse[] = [];
+                snapshot.forEach((doc) => {
+                    warehouses.push({ id: doc.id, ...doc.data() } as Warehouse);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_WAREHOUSES', payload: warehouses });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading warehouses:', error)
+        );
+
+        // Listen to Divisions collection - FILTERED by factoryId
+        const divisionsQuery = query(collection(db, 'divisions'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeDivisions = onSnapshot(
+            divisionsQuery,
+            (snapshot) => {
+                const divisions: Division[] = [];
+                snapshot.forEach((doc) => {
+                    divisions.push({ id: doc.id, ...doc.data() } as Division);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_DIVISIONS', payload: divisions });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading divisions:', error)
+        );
+
+        // Listen to SubDivisions collection - FILTERED by factoryId
+        const subDivisionsQuery = query(collection(db, 'subDivisions'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeSubDivisions = onSnapshot(
+            subDivisionsQuery,
+            (snapshot) => {
+                const subDivisions: SubDivision[] = [];
+                snapshot.forEach((doc) => {
+                    subDivisions.push({ id: doc.id, ...doc.data() } as SubDivision);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_SUBDIVISIONS', payload: subDivisions });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading subDivisions:', error)
+        );
+
+        // Listen to Logos collection - FILTERED by factoryId
+        const logosQuery = query(collection(db, 'logos'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeLogos = onSnapshot(
+            logosQuery,
+            (snapshot) => {
+                const logos: Logo[] = [];
+                snapshot.forEach((doc) => {
+                    logos.push({ id: doc.id, ...doc.data() } as Logo);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_LOGOS', payload: logos });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading logos:', error)
+        );
+
+        // Listen to OriginalTypes collection - FILTERED by factoryId
+        const originalTypesQuery = query(collection(db, 'originalTypes'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeOriginalTypes = onSnapshot(
+            originalTypesQuery,
+            (snapshot) => {
+                const originalTypes: OriginalType[] = [];
+                snapshot.forEach((doc) => {
+                    originalTypes.push({ id: doc.id, ...doc.data() } as OriginalType);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ORIGINAL_TYPES', payload: originalTypes });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading originalTypes:', error)
+        );
+
+        // Listen to OriginalProducts collection - FILTERED by factoryId
+        const originalProductsQuery = query(collection(db, 'originalProducts'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeOriginalProducts = onSnapshot(
+            originalProductsQuery,
+            (snapshot) => {
+                const originalProducts: OriginalProduct[] = [];
+                snapshot.forEach((doc) => {
+                    originalProducts.push({ id: doc.id, ...doc.data() } as OriginalProduct);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_ORIGINAL_PRODUCTS', payload: originalProducts });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading originalProducts:', error)
+        );
+
+        // Listen to Employees collection - FILTERED by factoryId
+        const employeesQuery = query(collection(db, 'employees'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeEmployees = onSnapshot(
+            employeesQuery,
+            (snapshot) => {
+                const employees: Employee[] = [];
+                snapshot.forEach((doc) => {
+                    employees.push({ id: doc.id, ...doc.data() } as Employee);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_EMPLOYEES', payload: employees });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading employees:', error)
+        );
+
+        const currenciesQuery = query(collection(db, 'currencies'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeCurrencies = onSnapshot(
+            currenciesQuery,
+            (snapshot) => {
+                const currencies: CurrencyRate[] = [];
+                snapshot.forEach((doc) => {
+                    currencies.push({ id: doc.id, ...doc.data() } as CurrencyRate);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_CURRENCIES', payload: currencies });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading currencies:', error)
+        );
+
         // Mark as loaded after initial connection
         setTimeout(() => {
             setIsFirestoreLoaded(true);
@@ -400,8 +664,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return () => {
             unsubscribePartners();
             unsubscribeAccounts();
+            unsubscribeItems();
+            unsubscribeCategories();
+            unsubscribeSections();
+            unsubscribeWarehouses();
+            unsubscribeDivisions();
+            unsubscribeSubDivisions();
+            unsubscribeLogos();
+            unsubscribeOriginalTypes();
+            unsubscribeOriginalProducts();
+            unsubscribeEmployees();
+            unsubscribeCurrencies();
         };
-    }, []);
+    }, [currentFactory]); // Re-run when factory changes
 
     // 🛡️ CRITICAL: This effect is DISABLED in Phase 1 (READ-ONLY)
     // It will be enabled in Phase 2 after user confirmation
@@ -423,30 +698,44 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     */
 
 
-    const postTransaction = (entries: Omit<LedgerEntry, 'id'>[]) => dispatch({ type: 'POST_TRANSACTION', payload: { entries } });
+    const postTransaction = (entries: Omit<LedgerEntry, 'id'>[]) => {
+        const entriesWithFactory = entries.map(entry => ({
+            ...entry,
+            factoryId: currentFactory?.id || ''
+        }));
+        dispatch({ type: 'POST_TRANSACTION', payload: { entries: entriesWithFactory } });
+    };
     const deleteTransaction = (transactionId: string, reason?: string, user?: string) => dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
     const addPurchase = (purchase: Purchase) => {
-        const typeDef = state.originalTypes.find(t => t.id === purchase.originalTypeId);
+        const purchaseWithFactory = {
+            ...purchase,
+            factoryId: currentFactory?.id || ''
+        };
+        const typeDef = state.originalTypes.find(t => t.id === purchaseWithFactory.originalTypeId);
         const packingSize = typeDef ? typeDef.packingSize : 1; 
-        const calculatedQty = purchase.weightPurchased / packingSize;
-        const purchaseWithQty = { ...purchase, qtyPurchased: calculatedQty };
+        const calculatedQty = purchaseWithFactory.weightPurchased / packingSize;
+        const purchaseWithQty = { ...purchaseWithFactory, qtyPurchased: calculatedQty };
         dispatch({ type: 'ADD_PURCHASE', payload: purchaseWithQty });
         const inventoryId = '104'; 
         const apId = '201'; 
-        const transactionId = `PI-${purchase.batchNumber || purchase.id.toUpperCase()}`;
+        const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            { date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: purchase.totalLandedCost, debit: purchase.totalLandedCost, credit: 0, narration: `Purchase: ${purchase.originalType} (Batch: ${purchase.batchNumber})` }
+            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})` }
         ];
-        const materialCostUSD = purchase.totalCostFCY / purchase.exchangeRate;
-        entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: purchase.currency, exchangeRate: purchase.exchangeRate, fcyAmount: purchase.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${state.partners.find(p=>p.id===purchase.supplierId)?.name}` });
-        purchase.additionalCosts.forEach(cost => {
+        const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
+        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name}` });
+        purchaseWithFactory.additionalCosts.forEach(cost => {
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
             entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}` });
         });
         postTransaction(entries);
     };
     const addBundlePurchase = (bundle: BundlePurchase) => {
-        dispatch({ type: 'ADD_BUNDLE_PURCHASE', payload: bundle });
+        const bundleWithFactory = {
+            ...bundle,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'ADD_BUNDLE_PURCHASE', payload: bundleWithFactory });
         const apId = '201'; const inventoryAssetId = '105'; const transactionId = `BUN-${bundle.batchNumber}`; const entries: Omit<LedgerEntry, 'id'>[] = [];
         const materialCostUSD = bundle.items.reduce((sum, item) => sum + item.totalUSD, 0); const materialCostFCY = bundle.items.reduce((sum, item) => sum + item.totalFCY, 0);
         entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: materialCostUSD, debit: materialCostUSD, credit: 0, narration: `Bundle Purchase Material: ${bundle.batchNumber}` });
@@ -466,12 +755,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
         }
 
-        // First update local state immediately (optimistic update)
-        dispatch({ type: 'ADD_PARTNER', payload: partner });
-
-        // Then save to Firebase
-        const partnerData = {
+        // Auto-add factoryId from current factory
+        const partnerWithFactory = {
             ...partner,
+            factoryId: currentFactory?.id || ''
+        };
+
+        // Remove id and prepare data for Firebase
+        const { id, ...partnerDataToSave } = partnerWithFactory;
+        const partnerData = {
+            ...partnerDataToSave,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
         };
@@ -486,6 +779,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addDoc(collection(db, 'partners'), partnerData)
             .then((docRef) => {
                 console.log('✅ Partner saved to Firebase:', docRef.id);
+                // Firebase listener will handle adding to local state
             })
             .catch((error) => {
                 console.error('❌ Error saving partner to Firebase:', error);
@@ -495,26 +789,53 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Handle opening balance if needed
         if (partner.balance !== 0) {
             const prevYear = new Date().getFullYear() - 1; const date = `${prevYear}-12-31`; const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301'; const arId = state.accounts.find(a => a.name.includes('Receivable'))?.id || '103'; const apId = state.accounts.find(a => a.name.includes('Payable'))?.id || '201';
-            let entries: Omit<LedgerEntry, 'id'>[] = []; const currency = partner.defaultCurrency || 'USD'; const rate = EXCHANGE_RATES[currency] || 1; const fcyAmt = partner.balance * rate; const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+            let entries: Omit<LedgerEntry, 'id'>[] = []; 
+            const currency = partner.defaultCurrency || 'USD'; 
+            const exchangeRates = getExchangeRates(state.currencies);
+            const rate = exchangeRates[currency] || 1; 
+            const fcyAmt = partner.balance * rate; 
+            const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
             if (partner.balance > 0) { entries = [ { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: arId, accountName: 'Accounts Receivable', debit: partner.balance, credit: 0, narration: `Opening Balance - ${partner.name}` }, { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: openingEquityId, accountName: 'Opening Equity', debit: 0, credit: partner.balance, narration: `Opening Balance - ${partner.name}` } ]; } 
             else { const absBalance = Math.abs(partner.balance); entries = [ { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: openingEquityId, accountName: 'Opening Equity', debit: absBalance, credit: 0, narration: `Opening Balance - ${partner.name}` }, { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: apId, accountName: 'Accounts Payable', debit: 0, credit: absBalance, narration: `Opening Balance - ${partner.name}` } ]; }
             postTransaction(entries);
         }
     };
     const addItem = (item: Item, openingStock: number = 0) => {
-        const nextSerial = openingStock + 1; const itemWithStock = { ...item, stockQty: openingStock, nextSerial: nextSerial }; dispatch({ type: 'ADD_ITEM', payload: itemWithStock });
+        const itemWithFactory = {
+            ...item,
+            factoryId: currentFactory?.id || ''
+        };
+        const nextSerial = openingStock + 1; const itemWithStock = { ...itemWithFactory, stockQty: openingStock, nextSerial: nextSerial }; 
+        
+        dispatch({ type: 'ADD_ITEM', payload: itemWithStock });
+        
+        // Save to Firebase (remove id field)
+        const { id: _, ...itemData } = itemWithStock;
+        addDoc(collection(db, 'items'), { ...itemData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Item saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving item:', error));
         if (openingStock > 0 && item.avgCost > 0) {
              const prevYear = new Date().getFullYear() - 1; const date = `${prevYear}-12-31`; const stockValue = openingStock * item.avgCost; const inventoryId = item.category === 'Raw Material' ? '104' : '105'; const capitalId = '301';
              const entries: Omit<LedgerEntry, 'id'>[] = [ { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: inventoryId, accountName: 'Inventory Asset', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: stockValue, credit: 0, narration: `Opening Stock - ${item.name}` }, { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: capitalId, accountName: 'Capital', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: 0, credit: stockValue, narration: `Opening Stock - ${item.name}` } ]; postTransaction(entries);
         }
     };
     const addOriginalOpening = (opening: OriginalOpening) => {
-        dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: opening });
-        const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105'; const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const transactionId = `OO-${opening.id}`;
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: opening.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: fgInvId, accountName: 'Inventory - Finished Goods (WIP)', currency: 'USD', exchangeRate: 1, fcyAmount: opening.totalValue, debit: opening.totalValue, credit: 0, narration: `Consumption: ${opening.originalType} (${opening.weightOpened}kg)` }, { date: opening.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: opening.totalValue, debit: 0, credit: opening.totalValue, narration: `Consumption: ${opening.originalType} (${opening.weightOpened}kg)` } ]; postTransaction(entries);
+        const openingWithFactory = {
+            ...opening,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: openingWithFactory });
+        const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105'; const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const transactionId = `OO-${openingWithFactory.id}`;
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: fgInvId, accountName: 'Inventory - Finished Goods (WIP)', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: openingWithFactory.totalValue, credit: 0, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` }, { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: 0, credit: openingWithFactory.totalValue, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` } ]; postTransaction(entries);
     };
     const deleteOriginalOpening = (id: string) => { dispatch({ type: 'DELETE_ENTITY', payload: { type: 'originalOpenings', id } }); const transactionId = `OO-${id}`; dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason: 'Delete Original Opening', user: 'Admin' } }); };
-    const addProduction = (productions: ProductionEntry[]) => dispatch({ type: 'ADD_PRODUCTION', payload: productions });
+    const addProduction = (productions: ProductionEntry[]) => {
+        const productionsWithFactory = productions.map(prod => ({
+            ...prod,
+            factoryId: currentFactory?.id || ''
+        }));
+        dispatch({ type: 'ADD_PRODUCTION', payload: productionsWithFactory });
+    };
     const postBaleOpening = (stagedItems: { itemId: string, qty: number, date: string }[]) => {
         if (stagedItems.length === 0) return;
         const transactionId = generateId(); const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105';
@@ -530,8 +851,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         dispatch({ type: 'ADD_PRODUCTION', payload: productionEntries }); postTransaction(journalEntries);
     };
-    const saveLogisticsEntry = (entry: LogisticsEntry) => dispatch({ type: 'SAVE_LOGISTICS_ENTRY', payload: entry });
-    const addSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'ADD_SALES_INVOICE', payload: invoice });
+    const saveLogisticsEntry = (entry: LogisticsEntry) => {
+        const entryWithFactory = {
+            ...entry,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'SAVE_LOGISTICS_ENTRY', payload: entryWithFactory });
+    };
+    const addSalesInvoice = (invoice: SalesInvoice) => {
+        const invoiceWithFactory = {
+            ...invoice,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'ADD_SALES_INVOICE', payload: invoiceWithFactory });
+    };
     const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
     const postSalesInvoice = (invoice: SalesInvoice) => {
         dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
@@ -553,20 +886,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
         postTransaction(entries);
     };
-    const addOngoingOrder = (order: OngoingOrder) => dispatch({ type: 'ADD_ONGOING_ORDER', payload: order });
+    const addOngoingOrder = (order: OngoingOrder) => {
+        const orderWithFactory = {
+            ...order,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'ADD_ONGOING_ORDER', payload: orderWithFactory });
+    };
     const processOrderShipment = (orderId: string, shipmentItems: { itemId: string, shipQty: number }[]) => {
         const order = state.ongoingOrders.find(o => o.id === orderId); if (!order) return;
         const updatedItems = order.items.map(item => { const ship = shipmentItems.find(s => s.itemId === item.itemId); if (ship) return { ...item, shippedQuantity: item.shippedQuantity + ship.shipQty }; return item; });
         const isFullyShipped = updatedItems.every(i => i.shippedQuantity >= i.quantity); const hasSomeShipped = updatedItems.some(i => i.shippedQuantity > 0); const newStatus = isFullyShipped ? 'Completed' : hasSomeShipped ? 'PartiallyShipped' : 'Active';
         const updatedOrder: OngoingOrder = { ...order, items: updatedItems, status: newStatus }; dispatch({ type: 'UPDATE_ONGOING_ORDER', payload: updatedOrder });
-        const customer = state.partners.find(p => p.id === order.customerId); const currency = customer?.defaultCurrency || 'USD'; const rate = EXCHANGE_RATES[currency] || 1; const invoiceItems: SalesInvoiceItem[] = [];
+        const customer = state.partners.find(p => p.id === order.customerId); 
+        const currency = customer?.defaultCurrency || 'USD'; 
+        const exchangeRates = getExchangeRates(state.currencies);
+        const rate = exchangeRates[currency] || 1; 
+        const invoiceItems: SalesInvoiceItem[] = [];
         shipmentItems.forEach(ship => { if (ship.shipQty <= 0) return; const itemDef = state.items.find(i => i.id === ship.itemId); if (!itemDef) return; const unitRate = itemDef.salePrice || 0; invoiceItems.push({ id: generateId(), itemId: ship.itemId, itemName: itemDef.name, qty: ship.shipQty, rate: unitRate, total: ship.shipQty * unitRate, totalKg: ship.shipQty * itemDef.weightPerUnit, currency: currency, exchangeRate: rate, sourceOrderId: order.id }); });
         if (invoiceItems.length === 0) return;
         const maxInv = state.salesInvoices.map(i => parseInt(i.invoiceNo.replace('SINV-', ''))).filter(n => !isNaN(n)).reduce((max, curr) => curr > max ? curr : max, 1000); const nextInvNo = `SINV-${maxInv + 1}`; const grossTotal = invoiceItems.reduce((sum, i) => sum + i.total, 0);
         const newInvoice: SalesInvoice = { id: generateId(), invoiceNo: nextInvNo, date: new Date().toISOString().split('T')[0], status: 'Unposted', customerId: order.customerId, logoId: state.logos[0]?.id || '', currency: currency, exchangeRate: rate, divisionId: customer?.divisionId, subDivisionId: customer?.subDivisionId, discount: 0, surcharge: 0, items: invoiceItems, additionalCosts: [], grossTotal: grossTotal, netTotal: grossTotal };
         dispatch({ type: 'ADD_SALES_INVOICE', payload: newInvoice });
     };
-    const addEmployee = (employee: Employee) => dispatch({ type: 'ADD_EMPLOYEE', payload: employee });
+    const addEmployee = (employee: Employee) => {
+        const employeeWithFactory = {
+            ...employee,
+            factoryId: currentFactory?.id || ''
+        };
+        dispatch({ type: 'ADD_EMPLOYEE', payload: employeeWithFactory });
+        const { id: _, ...employeeData } = employeeWithFactory;
+        addDoc(collection(db, 'employees'), { ...employeeData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Employee saved to Firebase'))
+            .catch((error) => console.error('❌ Error saving employee:', error));
+    };
     const updateEmployee = (employee: Employee) => dispatch({ type: 'UPDATE_EMPLOYEE', payload: employee });
     const addTask = (task: Task) => dispatch({ type: 'ADD_TASK', payload: task });
     const updateTask = (task: Task) => dispatch({ type: 'UPDATE_TASK', payload: task });
@@ -588,16 +941,118 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     const sendMessage = (msg: ChatMessage) => dispatch({ type: 'SEND_MESSAGE', payload: msg });
     const markChatRead = (chatId: string) => dispatch({ type: 'MARK_CHAT_READ', payload: { chatId, userId: CURRENT_USER.id } });
-    const addOriginalType = (type: OriginalType) => dispatch({ type: 'ADD_ORIGINAL_TYPE', payload: type });
-    const addOriginalProduct = (prod: OriginalProduct) => dispatch({ type: 'ADD_ORIGINAL_PRODUCT', payload: prod });
-    const addCategory = (cat: Category) => dispatch({ type: 'ADD_CATEGORY', payload: cat });
-    const addSection = (sec: Section) => dispatch({ type: 'ADD_SECTION', payload: sec });
-    const addAccount = (account: Account) => dispatch({ type: 'ADD_ACCOUNT', payload: account });
-    const addDivision = (division: Division) => dispatch({ type: 'ADD_DIVISION', payload: division });
-    const addSubDivision = (subDivision: SubDivision) => dispatch({ type: 'ADD_SUB_DIVISION', payload: subDivision });
-    const addLogo = (logo: Logo) => dispatch({ type: 'ADD_LOGO', payload: logo });
-    const addWarehouse = (warehouse: Warehouse) => dispatch({ type: 'ADD_WAREHOUSE', payload: warehouse });
-    const deleteEntity = (type: any, id: string) => dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+    const addOriginalType = (type: OriginalType) => {
+        const typeWithFactory = { ...type, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_ORIGINAL_TYPE', payload: typeWithFactory });
+        const { id: _, ...typeData } = typeWithFactory;
+        addDoc(collection(db, 'originalTypes'), { ...typeData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ OriginalType saved'))
+            .catch((error) => console.error('❌ Error saving originalType:', error));
+    };
+    const addOriginalProduct = (prod: OriginalProduct) => {
+        const prodWithFactory = { ...prod, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_ORIGINAL_PRODUCT', payload: prodWithFactory });
+        const { id: _, ...prodData } = prodWithFactory;
+        addDoc(collection(db, 'originalProducts'), { ...prodData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ OriginalProduct saved'))
+            .catch((error) => console.error('❌ Error saving originalProduct:', error));
+    };
+    const addCategory = (cat: Category) => {
+        const categoryWithFactory = { ...cat, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_CATEGORY', payload: categoryWithFactory });
+        const { id: _, ...categoryData } = categoryWithFactory;
+        addDoc(collection(db, 'categories'), { ...categoryData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Category saved'))
+            .catch((error) => console.error('❌ Error saving category:', error));
+    };
+    const addSection = (sec: Section) => {
+        const sectionWithFactory = { ...sec, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_SECTION', payload: sectionWithFactory });
+        const { id: _, ...sectionData } = sectionWithFactory;
+        addDoc(collection(db, 'sections'), { ...sectionData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Section saved'))
+            .catch((error) => console.error('❌ Error saving section:', error));
+    };
+
+    const addCurrency = (currency: CurrencyRate) => {
+        const currencyWithFactory = { ...currency, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_CURRENCY', payload: currencyWithFactory });
+        const { id: _, ...currencyData } = currencyWithFactory;
+        addDoc(collection(db, 'currencies'), { ...currencyData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Currency saved'))
+            .catch((error) => console.error('❌ Error saving currency:', error));
+    };
+
+    const updateCurrency = async (currencyId: string, updates: Partial<CurrencyRate>) => {
+        try {
+            await updateDoc(doc(db, 'currencies', currencyId), updates);
+            console.log('✅ Currency updated');
+        } catch (error) {
+            console.error('❌ Error updating currency:', error);
+        }
+    };
+
+    const addAccount = async (account: Account): Promise<void> => {
+        const accountWithFactory = {
+            ...account,
+            factoryId: currentFactory?.id || ''
+        };
+        
+        // Remove id field - Firebase generates it
+        const { id, ...accountData } = accountWithFactory;
+        
+        // Save to Firebase (listener will add to local state)
+        try {
+            const docRef = await addDoc(collection(db, 'accounts'), { ...accountData, createdAt: serverTimestamp() });
+            // Firebase listener will handle adding to local state with real ID
+        } catch (error) {
+            console.error('❌ Error saving account:', error);
+            throw error;
+        }
+    };
+    const addDivision = (division: Division) => {
+        const divisionWithFactory = { ...division, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_DIVISION', payload: divisionWithFactory });
+        const { id: _, ...divisionData } = divisionWithFactory;
+        addDoc(collection(db, 'divisions'), { ...divisionData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Division saved'))
+            .catch((error) => console.error('❌ Error saving division:', error));
+    };
+    const addSubDivision = (subDivision: SubDivision) => {
+        const subDivisionWithFactory = { ...subDivision, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_SUB_DIVISION', payload: subDivisionWithFactory });
+        const { id: _, ...subDivisionData } = subDivisionWithFactory;
+        addDoc(collection(db, 'subDivisions'), { ...subDivisionData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ SubDivision saved'))
+            .catch((error) => console.error('❌ Error saving subDivision:', error));
+    };
+    const addLogo = (logo: Logo) => {
+        const logoWithFactory = { ...logo, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_LOGO', payload: logoWithFactory });
+        const { id: _, ...logoData } = logoWithFactory;
+        addDoc(collection(db, 'logos'), { ...logoData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Logo saved'))
+            .catch((error) => console.error('❌ Error saving logo:', error));
+    };
+    const addWarehouse = (warehouse: Warehouse) => {
+        const warehouseWithFactory = { ...warehouse, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_WAREHOUSE', payload: warehouseWithFactory });
+        const { id: _, ...warehouseData } = warehouseWithFactory;
+        addDoc(collection(db, 'warehouses'), { ...warehouseData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Warehouse saved'))
+            .catch((error) => console.error('❌ Error saving warehouse:', error));
+    };
+    const deleteEntity = (type: any, id: string) => {
+        console.log(`🗑️ Attempting to delete ${type}/${id}`);
+        dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+        // Delete from Firebase
+        deleteDoc(doc(db, type, id))
+            .then(() => console.log(`✅ Deleted ${type}/${id} from Firebase`))
+            .catch((error) => {
+                console.error(`❌ Error deleting ${type}/${id}:`, error);
+                console.error('Full error:', error);
+            });
+    };
     const updateStock = (itemId: string, qtyChange: number) => dispatch({ type: 'UPDATE_STOCK', payload: { itemId, qtyChange } });
     const addPlannerEntry = (entry: PlannerEntry) => dispatch({ type: 'ADD_PLANNER_ENTRY', payload: entry });
     const updatePlannerEntry = (entry: PlannerEntry) => dispatch({ type: 'UPDATE_PLANNER_ENTRY', payload: entry });
@@ -637,6 +1092,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addOriginalProduct,
             addCategory,
             addSection,
+            addCurrency,
+            updateCurrency,
             addOriginalOpening,
             deleteOriginalOpening,
             addProduction,
@@ -669,4 +1126,13 @@ export const useData = () => {
         throw new Error("useData must be used within a DataProvider");
     }
     return context;
+};
+
+// Helper function to get exchange rates from currencies
+export const getExchangeRates = (currencies: CurrencyRate[]): Record<string, number> => {
+    const rates: Record<string, number> = { USD: 1 }; // Always include USD as base
+    currencies.forEach(currency => {
+        rates[currency.code] = currency.exchangeRate;
+    });
+    return rates;
 };

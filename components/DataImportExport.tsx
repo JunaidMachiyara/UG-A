@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
 import Papa from 'papaparse';
 import { collection, writeBatch, doc } from 'firebase/firestore';
@@ -58,6 +59,7 @@ const CSV_TEMPLATES = {
 
 export const DataImportExport: React.FC = () => {
     const { state, addItem, addPartner, addAccount } = useData();
+    const { currentFactory } = useAuth();
     const [selectedEntity, setSelectedEntity] = useState<ImportableEntity>('items');
     const [parsedData, setParsedData] = useState<any[]>([]);
     const [importing, setImporting] = useState(false);
@@ -107,6 +109,12 @@ export const DataImportExport: React.FC = () => {
             const batch = writeBatch(db);
             const collectionName = selectedEntity;
 
+            if (!currentFactory) {
+                alert('No factory selected. Please select a factory first.');
+                setImporting(false);
+                return;
+            }
+
             parsedData.forEach((row: any, index: number) => {
                 try {
                     // Basic validation
@@ -116,7 +124,10 @@ export const DataImportExport: React.FC = () => {
                     }
 
                     // Entity-specific transformations
-                    let document: any = { ...row };
+                    let document: any = { 
+                        ...row,
+                        factoryId: currentFactory.id // Add factoryId to all imports
+                    };
 
                     if (selectedEntity === 'items') {
                         document = {

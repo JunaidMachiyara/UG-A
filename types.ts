@@ -18,6 +18,32 @@ export enum AccountType {
     EXPENSE = 'EXPENSE'
 }
 
+export enum UserRole {
+    SUPER_ADMIN = 'SUPER_ADMIN',
+    FACTORY_ADMIN = 'FACTORY_ADMIN',
+    MODULE_USER = 'MODULE_USER',
+    DATA_ENTRY_INVENTORY = 'DATA_ENTRY_INVENTORY',
+    DATA_ENTRY_ACCOUNTING = 'DATA_ENTRY_ACCOUNTING'
+}
+
+export enum PermissionModule {
+    DASHBOARD = 'DASHBOARD',
+    DATA_ENTRY = 'DATA_ENTRY',
+    SALES = 'SALES',
+    PURCHASES = 'PURCHASES',
+    PRODUCTION = 'PRODUCTION',
+    ACCOUNTING = 'ACCOUNTING',
+    LOGISTICS = 'LOGISTICS',
+    HR = 'HR',
+    REPORTS = 'REPORTS',
+    CUSTOMS = 'CUSTOMS',
+    SETUP = 'SETUP',
+    ADMIN = 'ADMIN',
+    POSTING = 'POSTING',
+    OFFLOADING = 'OFFLOADING',
+    CHAT = 'CHAT'
+}
+
 export enum TransactionType {
     SALES_INVOICE = 'SI',
     PURCHASE_INVOICE = 'PI',
@@ -40,7 +66,49 @@ export enum PackingType {
     BAG = 'Bag'
 }
 
-export type Currency = 'USD' | 'EUR' | 'GBP' | 'AED' | 'SAR' | 'AUD';
+export type Currency = string; // Dynamic currency codes (USD, EUR, GBP, AED, SAR, etc.)
+
+// Currency Management
+export interface CurrencyRate {
+    id: string;
+    code: string; // Currency code (USD, EUR, GBP, etc.)
+    name: string; // Full name (US Dollar, Euro, etc.)
+    symbol: string; // Currency symbol ($, €, £, etc.)
+    exchangeRate: number; // Exchange rate to base currency (1 USD = X FCY)
+    isBaseCurrency: boolean; // True for USD (base currency)
+    factoryId: string; // Factory assignment
+}
+
+// Factory & User Management Interfaces
+export interface Factory {
+    id: string;
+    name: string; // MAAZ, TALHA, AL ANWAR
+    code: string; // Short code (MAZ, TLH, ANW)
+    location: string;
+    isActive: boolean;
+    createdDate: string;
+}
+
+export interface User {
+    id: string;
+    username: string; // Login ID (no email)
+    password: string; // Hashed (Firebase Auth will handle this)
+    displayName: string;
+    role: UserRole;
+    factoryId: string; // Which factory user belongs to
+    allowedModules?: PermissionModule[]; // For MODULE_USER - which modules they can access
+    isActive: boolean;
+    createdDate: string;
+    lastLogin?: string;
+}
+
+export interface Permission {
+    module: PermissionModule;
+    canView: boolean;
+    canCreate: boolean;
+    canEdit: boolean;
+    canDelete: boolean;
+}
 
 // Interfaces for Inventory Classification
 export interface OriginalType {
@@ -72,6 +140,8 @@ export interface Account {
     name: string;
     type: AccountType;
     balance: number; // In USD (Base Currency)
+    currency?: Currency; // For Bank/Cash accounts in foreign currency
+    factoryId: string; // Factory assignment
 }
 
 export interface Partner {
@@ -84,6 +154,9 @@ export interface Partner {
     country: string;
     email?: string;
     phone?: string;
+    
+    // Factory Assignment
+    factoryId: string;
     
     // Structure Fields
     divisionId?: string;
@@ -110,6 +183,7 @@ export interface Item {
     weightPerUnit: number; // Approx Kg per unit
     salePrice?: number; // USD
     nextSerial?: number; // Auto-increment for Bales/Sacks/Boxes/Bags. (Opening Stock + 1)
+    factoryId: string; // Factory assignment
 }
 
 export interface Division {
@@ -141,6 +215,7 @@ export interface Employee {
     designation: string;
     status: 'Active' | 'Inactive' | 'Terminated';
     onDuty: 'Yes' | 'No';
+    factoryId: string; // Factory assignment
     offDutyReason?: string;
     offDutyStart?: string;
     offDutyEnd?: string;
@@ -242,6 +317,7 @@ export interface LedgerEntry {
     transactionType: TransactionType;
     accountId: string;
     accountName: string; // Denormalized for ease
+    factoryId: string; // Factory assignment
     
     // Multi-Currency Fields
     currency: Currency;
@@ -300,6 +376,7 @@ export interface Purchase {
     
     date: string;
     supplierId: string;
+    factoryId: string; // Factory assignment
     originalTypeId: string; // ID of OriginalType (Strict Linking)
     originalType: string; // Display Name
     originalProductId?: string; // ID of OriginalProduct
@@ -349,6 +426,7 @@ export interface ProductionEntry {
     itemId: string;
     itemName: string;
     packingType: PackingType;
+    factoryId: string; // Factory assignment
     qtyProduced: number; // Units
     weightProduced: number; // Total Kg
     serialStart?: number; // Was baleStart. Start of the sequence for this batch
@@ -443,6 +521,7 @@ export interface SalesInvoice {
     status: 'Unposted' | 'Posted';
     
     customerId: string;
+    factoryId: string; // Factory assignment
     logoId: string;
     packingColor?: string;
     
@@ -557,6 +636,12 @@ export interface CustomsDocument {
 
 // Global State
 export interface AppState {
+    // Factory & User Management
+    factories: Factory[];
+    users: User[];
+    currentUser: User | null;
+    currentFactory: Factory | null;
+    
     partners: Partner[];
     accounts: Account[];
     items: Item[];
@@ -564,6 +649,7 @@ export interface AppState {
     subDivisions: SubDivision[];
     logos: Logo[];
     warehouses: Warehouse[];
+    currencies: CurrencyRate[]; // Currency management
     
     // HR & Fleet
     employees: Employee[];

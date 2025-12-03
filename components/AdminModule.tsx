@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
-import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { UserRole } from '../types';
+import { useNavigate } from 'react-router-dom';
+import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
@@ -8,6 +11,8 @@ type ResetType = 'transactions' | 'complete' | null;
 
 export const AdminModule: React.FC = () => {
     const { state } = useData();
+    const { currentUser } = useAuth();
+    const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [resetType, setResetType] = useState<ResetType>(null);
     const [confirmText, setConfirmText] = useState('');
@@ -153,6 +158,60 @@ export const AdminModule: React.FC = () => {
                 <p className="text-red-100">Sensitive operations - Use with extreme caution</p>
             </div>
 
+            {/* Quick Links for Super Admin */}
+            {currentUser?.role === UserRole.SUPER_ADMIN && (
+                <div>
+                    <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wider mb-3 px-1">System Administration</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <button
+                            onClick={() => navigate('/admin/factories')}
+                            className="bg-white border-2 border-indigo-200 hover:border-indigo-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
+                        >
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="bg-indigo-100 p-3 rounded-lg">
+                                    <Building2 className="text-indigo-600" size={28} />
+                                </div>
+                                <ArrowRight className="text-indigo-400 group-hover:translate-x-1 transition-transform" size={24} />
+                            </div>
+                            <h3 className="font-bold text-lg text-indigo-900 mb-1">Factory Management</h3>
+                            <p className="text-sm text-indigo-600">Add, edit, and manage factory locations</p>
+                        </button>
+
+                        <button
+                            onClick={() => navigate('/admin/users')}
+                            className="bg-white border-2 border-blue-200 hover:border-blue-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
+                        >
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="bg-blue-100 p-3 rounded-lg">
+                                    <Users className="text-blue-600" size={28} />
+                                </div>
+                                <ArrowRight className="text-blue-400 group-hover:translate-x-1 transition-transform" size={24} />
+                            </div>
+                            <h3 className="font-bold text-lg text-blue-900 mb-1">User Management</h3>
+                            <p className="text-sm text-blue-600">Create users and assign roles & permissions</p>
+                        </button>
+
+                        <button
+                            onClick={() => navigate('/admin/migration')}
+                            className="bg-white border-2 border-emerald-200 hover:border-emerald-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
+                        >
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="bg-emerald-100 p-3 rounded-lg">
+                                    <RefreshCw className="text-emerald-600" size={28} />
+                                </div>
+                                <ArrowRight className="text-emerald-400 group-hover:translate-x-1 transition-transform" size={24} />
+                            </div>
+                            <h3 className="font-bold text-lg text-emerald-900 mb-1">Data Migration</h3>
+                            <p className="text-sm text-emerald-600">Bulk add factoryId to existing data</p>
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Database Management Section */}
+            <div>
+                <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wider mb-3 px-1">Database Management</h3>
+
             {/* Warning Banner */}
             <div className="bg-amber-50 border-l-4 border-amber-500 p-6 rounded-lg">
                 <div className="flex items-start gap-3">
@@ -226,22 +285,22 @@ export const AdminModule: React.FC = () => {
                         <div className="mb-4">
                             <h4 className="font-semibold text-slate-800 mb-2">This will DELETE:</h4>
                             <ul className="text-sm text-slate-600 space-y-1 ml-4">
+                                <li>• All Ledger Entries (Journal, Payments, etc.)</li>
                                 <li>• All Sales & Purchase Invoices</li>
-                                <li>• All Accounting Vouchers</li>
-                                <li>• All Journal Entries</li>
                                 <li>• All Production Records</li>
                                 <li>• All Stock Movement Records</li>
                                 <li>• All Order History</li>
+                                <li>• All Attendance & Payroll Records</li>
                             </ul>
                         </div>
                         <div className="mb-4">
                             <h4 className="font-semibold text-emerald-700 mb-2">This will KEEP:</h4>
                             <ul className="text-sm text-emerald-600 space-y-1 ml-4">
-                                <li>✓ Items & Products</li>
-                                <li>✓ Customers & Suppliers</li>
-                                <li>✓ Chart of Accounts</li>
-                                <li>✓ Categories & Sections</li>
-                                <li>✓ Other Setup Data</li>
+                                <li>✓ Chart of Accounts (Setup)</li>
+                                <li>✓ Items & Products (Setup)</li>
+                                <li>✓ Customers & Suppliers (Setup)</li>
+                                <li>✓ Categories & Divisions (Setup)</li>
+                                <li>✓ Employees & Vehicles (Setup)</li>
                             </ul>
                         </div>
                         <button
@@ -350,9 +409,22 @@ export const AdminModule: React.FC = () => {
                                     type="text"
                                     value={confirmText}
                                     onChange={(e) => setConfirmText(e.target.value)}
-                                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 font-mono"
+                                    className={`w-full px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-red-500 font-mono ${
+                                        confirmText === CONFIRMATION_TEXT 
+                                            ? 'border-green-500 bg-green-50' 
+                                            : 'border-slate-300'
+                                    }`}
                                     placeholder={CONFIRMATION_TEXT}
+                                    autoComplete="off"
                                 />
+                                {confirmText && confirmText !== CONFIRMATION_TEXT && (
+                                    <p className="text-xs text-red-600 mt-1">Text doesn't match. Type exactly: {CONFIRMATION_TEXT}</p>
+                                )}
+                                {confirmText === CONFIRMATION_TEXT && (
+                                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                                        <CheckCircle size={12} /> Text confirmed
+                                    </p>
+                                )}
                             </div>
 
                             <div>
@@ -363,9 +435,22 @@ export const AdminModule: React.FC = () => {
                                     type="password"
                                     value={pinCode}
                                     onChange={(e) => setPinCode(e.target.value)}
-                                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 font-mono"
+                                    className={`w-full px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-red-500 font-mono ${
+                                        pinCode === ADMIN_PIN 
+                                            ? 'border-green-500 bg-green-50' 
+                                            : 'border-slate-300'
+                                    }`}
                                     placeholder="Enter PIN"
+                                    autoComplete="off"
                                 />
+                                {pinCode && pinCode !== ADMIN_PIN && (
+                                    <p className="text-xs text-red-600 mt-1">Invalid PIN</p>
+                                )}
+                                {pinCode === ADMIN_PIN && (
+                                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                                        <CheckCircle size={12} /> PIN verified
+                                    </p>
+                                )}
                             </div>
 
                             {resetResult && (
@@ -447,6 +532,7 @@ export const AdminModule: React.FC = () => {
                     </div>
                 </div>
             </div>
+            </div> {/* Close Database Management Section */}
         </div>
     );
 };

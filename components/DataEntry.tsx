@@ -1449,7 +1449,7 @@ export const DataEntry: React.FC = () => {
                                     </div>
                                     
                                     <div className="grid grid-cols-2 gap-6 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                         <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" value={dsCurrency} onChange={e => setDsCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                         <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" value={dsCurrency} onChange={e => setDsCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                          <div><label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" value={dsExchangeRate} onChange={e => setDsExchangeRate(parseFloat(e.target.value))} /></div>
                                     </div>
 
@@ -1487,7 +1487,7 @@ export const DataEntry: React.FC = () => {
                                                 onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.SUPPLIER })}
                                             />
                                         </div>
-                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-3"><div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select value={purCurrency} onChange={e => setPurCurrency(e.target.value as Currency)} className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono">{Object.keys(EXCHANGE_RATES).map(c => ( <option key={c} value={c}>{c}</option> ))}</select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Rate</label><input type="number" value={purExchangeRate} onChange={e => setPurExchangeRate(parseFloat(e.target.value))} step="0.0001" className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono"/></div></div>
+                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-3"><div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select value={purCurrency} onChange={e => setPurCurrency(e.target.value as Currency)} className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono">{state.currencies.length > 0 ? state.currencies.map(c => ( <option key={c.code} value={c.code}>{c.code}</option> )) : <option value="USD">USD</option>}</select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Rate</label><input type="number" value={purExchangeRate} onChange={e => setPurExchangeRate(parseFloat(e.target.value))} step="0.0001" className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono"/></div></div>
                                     </div>
 
                                     {/* Logistics & Destination */}
@@ -1569,7 +1569,7 @@ export const DataEntry: React.FC = () => {
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
                                                     />
                                                 </div>
-                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
                                                 <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
@@ -1611,7 +1611,7 @@ export const DataEntry: React.FC = () => {
                                             />
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
-                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpCurrency} onChange={e => setBpCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpCurrency} onChange={e => setBpCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c} value={c}>{c}</option>) : <option value="USD">USD</option>}</select></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpExchangeRate} onChange={e => setBpExchangeRate(parseFloat(e.target.value))} /></div>
                                         </div>
                                     </div>
@@ -1698,7 +1698,7 @@ export const DataEntry: React.FC = () => {
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
                                                     />
                                                 </div>
-                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
                                                 <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
@@ -1765,7 +1765,7 @@ export const DataEntry: React.FC = () => {
                                                 </select>
                                             </div>
                                             <div className="grid grid-cols-2 gap-2">
-                                                 <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siCurrency} onChange={e => setSiCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                                 <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siCurrency} onChange={e => setSiCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                  <div><label className="block text-xs font-medium text-slate-500 mb-1">Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siExchangeRate} onChange={e => setSiExchangeRate(parseFloat(e.target.value))} /></div>
                                             </div>
                                         </div>
@@ -1844,7 +1844,7 @@ export const DataEntry: React.FC = () => {
                                                             onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
                                                         />
                                                     </div>
-                                                    <div className="w-1/2 md:w-24"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostCurrency} onChange={e => setSiCostCurrency(e.target.value as Currency)}>{Object.keys(EXCHANGE_RATES).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                                                    <div className="w-1/2 md:w-24"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostCurrency} onChange={e => setSiCostCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                     <div className="w-1/2 md:w-32"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Amount" value={siCostAmount} onChange={e => setSiCostAmount(e.target.value)} /></div>
                                                     <button onClick={handleAddSiCost} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700">Add</button>
                                                 </div>

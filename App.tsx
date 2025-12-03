@@ -2,8 +2,10 @@
 
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { Layout } from './components/Layout';
+import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
 import { Accounting } from './components/Accounting';
 import { DataEntry } from './components/DataEntry';
@@ -23,6 +25,10 @@ import { OrderFulfillmentDashboard } from './components/reports/OrderFulfillment
 import { DataImportExport } from './components/DataImportExport';
 import { AdminModule } from './components/AdminModule';
 import { CSVValidator } from './components/CSVValidator';
+import { FactoryManagement } from './components/FactoryManagement';
+import { UserManagement } from './components/UserManagement';
+import { InitialSetup } from './components/InitialSetup';
+import { FactoryDataMigration } from './components/FactoryDataMigration';
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -80,45 +86,85 @@ const Placeholder = ({ title }: { title: string }) => (
     </div>
 );
 
+// Protected Route Wrapper
+const ProtectedRoutes: React.FC = () => {
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/accounting" element={<Accounting />} />
+        <Route path="/entry" element={<DataEntry />} />
+        <Route path="/production" element={<DataEntry />} />
+        <Route path="/offloading" element={<ContainerOffloading />} />
+        <Route path="/posting" element={<PostingModule />} />
+        
+        <Route path="/logistics" element={<LogisticsModule />} />
+        <Route path="/customs" element={<CustomsModule />} />
+        <Route path="/hr" element={<HRModule />} />
+        <Route path="/chat" element={<ChatModule />} />
+        <Route path="/setup" element={<SetupModule />} />
+        
+        <Route path="/reports" element={<ReportsModuleV2 />} />
+        <Route path="/reports/original-stock" element={<OriginalStockReport />} />
+        <Route path="/reports/item-performance" element={<ItemPerformanceReport />} />
+        <Route path="/reports/order-fulfillment" element={<OrderFulfillmentDashboard />} />
+        
+        <Route path="/admin" element={<AdminModule />} />
+        <Route path="/admin/factories" element={<FactoryManagement />} />
+        <Route path="/admin/users" element={<UserManagement />} />
+        <Route path="/admin/migration" element={<FactoryDataMigration />} />
+        <Route path="/db-setup" element={<DatabaseSetup />} />
+        <Route path="/import-export" element={<DataImportExport />} />
+        <Route path="/csv-validator" element={<CSVValidator />} />
+        
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <ChatAssistant />
+    </Layout>
+  );
+};
+
 const App: React.FC = () => {
   return (
     <ErrorBoundary>
-      <DataProvider>
-        <HashRouter>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/accounting" element={<Accounting />} />
-              <Route path="/entry" element={<DataEntry />} />
-              <Route path="/production" element={<DataEntry />} />
-              <Route path="/offloading" element={<ContainerOffloading />} />
-              <Route path="/posting" element={<PostingModule />} />
-              
-              <Route path="/logistics" element={<LogisticsModule />} />
-              <Route path="/customs" element={<CustomsModule />} />
-              <Route path="/hr" element={<HRModule />} />
-              <Route path="/chat" element={<ChatModule />} />
-              <Route path="/setup" element={<SetupModule />} />
-              
-              <Route path="/reports" element={<ReportsModuleV2 />} />
-              <Route path="/reports/original-stock" element={<OriginalStockReport />} />
-              <Route path="/reports/item-performance" element={<ItemPerformanceReport />} />
-              <Route path="/reports/order-fulfillment" element={<OrderFulfillmentDashboard />} />
-              
-              <Route path="/admin" element={<AdminModule />} />
-              <Route path="/db-setup" element={<DatabaseSetup />} />
-              <Route path="/import-export" element={<DataImportExport />} />
-              <Route path="/csv-validator" element={<CSVValidator />} />
-              
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-            <ChatAssistant />
-          </Layout>
-        </HashRouter>
-      </DataProvider>
+      <AuthProvider>
+        <AppRouter />
+      </AuthProvider>
     </ErrorBoundary>
   );
 };
+
+const AppRouter: React.FC = () => {
+  const { isAuthenticated, isLoading, factories } = useAuth();
+  const [setupComplete, setSetupComplete] = React.useState(false);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-600 to-purple-600">
+        <div className="text-white text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-white mx-auto mb-4"></div>
+          <p className="text-xl font-semibold">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show initial setup if no factories exist
+  if (!setupComplete && factories.length === 0 && !isAuthenticated) {
+    return <InitialSetup onComplete={() => setSetupComplete(true)} />;
+  }
+
+  return (
+    <DataProvider>
+      <HashRouter>
+        {isAuthenticated ? <ProtectedRoutes /> : <Login />}
+      </HashRouter>
+    </DataProvider>
+  );
+};
+
+// Import useAuth after AuthProvider is defined
+import { useAuth } from './context/AuthContext';
 
 export default App;
 

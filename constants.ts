@@ -1,5 +1,15 @@
 
-import { Account, AccountType, AppState, Item, PackingType, Partner, PartnerType, TransactionType, LedgerEntry, Category, Section, OriginalType, OriginalProduct, Division, SubDivision, Logo, Purchase, LogisticsEntry, SalesInvoice, InvoiceAdditionalCost, Warehouse, OngoingOrder, Employee, Task, Vehicle, ChatMessage, OriginalOpening, ProductionEntry, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument } from './types';
+import { Account, AccountType, AppState, Item, PackingType, Partner, PartnerType, TransactionType, LedgerEntry, Category, Section, OriginalType, OriginalProduct, Division, SubDivision, Logo, Purchase, LogisticsEntry, SalesInvoice, InvoiceAdditionalCost, Warehouse, OngoingOrder, Employee, Task, Vehicle, ChatMessage, OriginalOpening, ProductionEntry, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate } from './types';
+
+// Initial Currency Rates
+export const INITIAL_CURRENCIES: CurrencyRate[] = [
+    { id: 'USD', code: 'USD', name: 'US Dollar', symbol: '$', exchangeRate: 1, isBaseCurrency: true, factoryId: '' },
+    { id: 'EUR', code: 'EUR', name: 'Euro', symbol: '€', exchangeRate: 0.91, isBaseCurrency: false, factoryId: '' },
+    { id: 'GBP', code: 'GBP', name: 'British Pound', symbol: '£', exchangeRate: 0.76, isBaseCurrency: false, factoryId: '' },
+    { id: 'AED', code: 'AED', name: 'UAE Dirham', symbol: 'AED', exchangeRate: 3.67, isBaseCurrency: false, factoryId: '' },
+    { id: 'SAR', code: 'SAR', name: 'Saudi Riyal', symbol: 'SAR', exchangeRate: 3.75, isBaseCurrency: false, factoryId: '' },
+    { id: 'AUD', code: 'AUD', name: 'Australian Dollar', symbol: 'A$', exchangeRate: 1.54, isBaseCurrency: false, factoryId: '' }
+];
 
 // Exchange Rates: 1 USD = X FCY
 // To convert FCY to USD: Amount(FCY) / Rate
@@ -23,411 +33,220 @@ export const CURRENCY_SYMBOLS = {
 
 export const CURRENT_USER = { id: 'u1', name: 'Admin User' };
 
-export const RENT_EXPENSE_ID = '509';
-export const ELECTRICITY_EXPENSE_ID = '510';
-export const EXCHANGE_VARIANCE_ID = '511'; // NEW: For multi-currency transfer variance
+export const RENT_EXPENSE_ID = '5220';
+export const ELECTRICITY_EXPENSE_ID = '5230';
+export const EXCHANGE_VARIANCE_ID = '5510'; // Foreign Exchange Loss
 
 
 export const INITIAL_ACCOUNTS: Account[] = [
-    { id: '101', code: '1001', name: 'Cash in Hand (USD)', type: AccountType.ASSET, balance: 15420 },
-    { id: '102', code: '1002', name: 'Citibank Main', type: AccountType.ASSET, balance: 85000 },
-    { id: '103', code: '1200', name: 'Accounts Receivable', type: AccountType.ASSET, balance: 42000 },
-    { id: '104', code: '1300', name: 'Inventory - Raw Material', type: AccountType.ASSET, balance: 120000 },
-    { id: '105', code: '1301', name: 'Inventory - Finished Goods', type: AccountType.ASSET, balance: 65000 },
-    { id: '201', code: '2001', name: 'Accounts Payable', type: AccountType.LIABILITY, balance: 35000 },
-    { id: '202', code: '2002', name: 'Loan from HSBC', type: AccountType.LIABILITY, balance: 50000 },
-    { id: '301', code: '3001', name: 'Capital Investment', type: AccountType.EQUITY, balance: 200000 },
-    { id: '302', code: '3002', name: 'Owner\'s Drawings', type: AccountType.EQUITY, balance: -5000 }, 
-    { id: '401', code: '4001', name: 'Sales Revenue', type: AccountType.REVENUE, balance: 0 },
-    { id: '501', code: '5001', name: 'Cost of Goods Sold', type: AccountType.EXPENSE, balance: 0 },
-    { id: '502', code: '5002', name: 'Freight Expense', type: AccountType.EXPENSE, balance: 0 }, // For direct payment of freight
-    { id: '503', code: '5010', name: 'COGS - Direct Sales', type: AccountType.EXPENSE, balance: 0 },
-    { id: '504', code: '5020', name: 'Salaries & Wages', type: AccountType.EXPENSE, balance: 0 },
-    { id: '505', code: '5030', name: 'Vehicle Expenses', type: AccountType.EXPENSE, balance: 0 },
-    { id: '506', code: '5040', name: 'Office Supplies', type: AccountType.EXPENSE, balance: 0 },
-    { id: '507', code: '5050', name: 'Packing Materials', type: AccountType.EXPENSE, balance: 0 },
-    { id: '508', code: '5060', name: 'Utilities', type: AccountType.EXPENSE, balance: 0 },
-    { id: RENT_EXPENSE_ID, code: '5070', name: 'Rent Expense', type: AccountType.EXPENSE, balance: 0 },
-    { id: ELECTRICITY_EXPENSE_ID, code: '5080', name: 'Electricity Expense', type: AccountType.EXPENSE, balance: 0 },
-    { id: EXCHANGE_VARIANCE_ID, code: '5090', name: 'Exchange Variance (Gain/Loss)', type: AccountType.EXPENSE, balance: 0 }, // NEW
+    // ========================================
+    // 1000-1999: ASSETS
+    // ========================================
+    
+    // 1000-1099: Current Assets - Cash & Bank
+    { id: '1001', code: '1001', name: 'Cash on Hand', type: AccountType.ASSET, balance: 0 },
+    { id: '1002', code: '1002', name: 'Petty Cash', type: AccountType.ASSET, balance: 0 },
+    { id: '1010', code: '1010', name: 'Bank - Current Account', type: AccountType.ASSET, balance: 0 },
+    { id: '1011', code: '1011', name: 'Bank - Savings Account', type: AccountType.ASSET, balance: 0 },
+    
+    // 1100-1199: Current Assets - Receivables
+    { id: '1100', code: '1100', name: 'Accounts Receivable - Trade', type: AccountType.ASSET, balance: 0 },
+    { id: '1101', code: '1101', name: 'Accounts Receivable - Other', type: AccountType.ASSET, balance: 0 },
+    { id: '1110', code: '1110', name: 'Notes Receivable', type: AccountType.ASSET, balance: 0 },
+    { id: '1120', code: '1120', name: 'Advances to Suppliers', type: AccountType.ASSET, balance: 0 },
+    { id: '1130', code: '1130', name: 'Employee Advances', type: AccountType.ASSET, balance: 0 },
+    
+    // 1200-1299: Current Assets - Inventory
+    { id: '1200', code: '1200', name: 'Inventory - Raw Materials', type: AccountType.ASSET, balance: 0 },
+    { id: '1201', code: '1201', name: 'Inventory - Work in Progress', type: AccountType.ASSET, balance: 0 },
+    { id: '1202', code: '1202', name: 'Inventory - Finished Goods', type: AccountType.ASSET, balance: 0 },
+    { id: '1210', code: '1210', name: 'Inventory - Packing Materials', type: AccountType.ASSET, balance: 0 },
+    { id: '1220', code: '1220', name: 'Goods in Transit', type: AccountType.ASSET, balance: 0 },
+    
+    // 1300-1399: Current Assets - Other
+    { id: '1300', code: '1300', name: 'Prepaid Expenses', type: AccountType.ASSET, balance: 0 },
+    { id: '1301', code: '1301', name: 'Prepaid Rent', type: AccountType.ASSET, balance: 0 },
+    { id: '1302', code: '1302', name: 'Prepaid Insurance', type: AccountType.ASSET, balance: 0 },
+    { id: '1310', code: '1310', name: 'Security Deposits', type: AccountType.ASSET, balance: 0 },
+    { id: '1320', code: '1320', name: 'Tax Refundable', type: AccountType.ASSET, balance: 0 },
+    
+    // 1500-1699: Fixed Assets - Property, Plant & Equipment
+    { id: '1500', code: '1500', name: 'Land', type: AccountType.ASSET, balance: 0 },
+    { id: '1510', code: '1510', name: 'Buildings', type: AccountType.ASSET, balance: 0 },
+    { id: '1520', code: '1520', name: 'Machinery & Equipment', type: AccountType.ASSET, balance: 0 },
+    { id: '1530', code: '1530', name: 'Vehicles', type: AccountType.ASSET, balance: 0 },
+    { id: '1540', code: '1540', name: 'Furniture & Fixtures', type: AccountType.ASSET, balance: 0 },
+    { id: '1550', code: '1550', name: 'Office Equipment', type: AccountType.ASSET, balance: 0 },
+    { id: '1560', code: '1560', name: 'Computers & IT Equipment', type: AccountType.ASSET, balance: 0 },
+    
+    // 1700-1799: Accumulated Depreciation (Contra-Asset)
+    { id: '1710', code: '1710', name: 'Accumulated Depreciation - Buildings', type: AccountType.ASSET, balance: 0 },
+    { id: '1720', code: '1720', name: 'Accumulated Depreciation - Machinery', type: AccountType.ASSET, balance: 0 },
+    { id: '1730', code: '1730', name: 'Accumulated Depreciation - Vehicles', type: AccountType.ASSET, balance: 0 },
+    { id: '1740', code: '1740', name: 'Accumulated Depreciation - Furniture', type: AccountType.ASSET, balance: 0 },
+    
+    // ========================================
+    // 2000-2999: LIABILITIES
+    // ========================================
+    
+    // 2000-2099: Current Liabilities - Payables
+    { id: '2000', code: '2000', name: 'Accounts Payable - Trade', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2001', code: '2001', name: 'Accounts Payable - Other', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2010', code: '2010', name: 'Notes Payable - Short Term', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2020', code: '2020', name: 'Advances from Customers', type: AccountType.LIABILITY, balance: 0 },
+    
+    // 2100-2199: Current Liabilities - Accrued Expenses
+    { id: '2100', code: '2100', name: 'Accrued Salaries & Wages', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2101', code: '2101', name: 'Accrued Utilities', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2102', code: '2102', name: 'Accrued Rent', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2110', code: '2110', name: 'Interest Payable', type: AccountType.LIABILITY, balance: 0 },
+    
+    // 2200-2299: Current Liabilities - Taxes
+    { id: '2200', code: '2200', name: 'Income Tax Payable', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2201', code: '2201', name: 'Sales Tax Payable (VAT)', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2202', code: '2202', name: 'Customs Duty Payable', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2210', code: '2210', name: 'Employee Tax Withholding', type: AccountType.LIABILITY, balance: 0 },
+    
+    // 2300-2399: Current Liabilities - Other
+    { id: '2300', code: '2300', name: 'Unearned Revenue', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2310', code: '2310', name: 'Customer Deposits', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2320', code: '2320', name: 'Bank Overdraft', type: AccountType.LIABILITY, balance: 0 },
+    
+    // 2500-2699: Long-term Liabilities
+    { id: '2500', code: '2500', name: 'Long-term Bank Loan', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2510', code: '2510', name: 'Notes Payable - Long Term', type: AccountType.LIABILITY, balance: 0 },
+    { id: '2520', code: '2520', name: 'Mortgage Payable', type: AccountType.LIABILITY, balance: 0 },
+    
+    // ========================================
+    // 3000-3999: EQUITY
+    // ========================================
+    { id: '3000', code: '3000', name: 'Owner\'s Capital', type: AccountType.EQUITY, balance: 0 },
+    { id: '3001', code: '3001', name: 'Additional Capital Investment', type: AccountType.EQUITY, balance: 0 },
+    { id: '3100', code: '3100', name: 'Owner\'s Drawings', type: AccountType.EQUITY, balance: 0 },
+    { id: '3200', code: '3200', name: 'Retained Earnings', type: AccountType.EQUITY, balance: 0 },
+    { id: '3300', code: '3300', name: 'Current Year Profit/Loss', type: AccountType.EQUITY, balance: 0 },
+    
+    // ========================================
+    // 4000-4999: REVENUE
+    // ========================================
+    { id: '4000', code: '4000', name: 'Sales Revenue - Domestic', type: AccountType.REVENUE, balance: 0 },
+    { id: '4001', code: '4001', name: 'Sales Revenue - Export', type: AccountType.REVENUE, balance: 0 },
+    { id: '4010', code: '4010', name: 'Sales Revenue - Services', type: AccountType.REVENUE, balance: 0 },
+    { id: '4100', code: '4100', name: 'Sales Returns & Allowances', type: AccountType.REVENUE, balance: 0 },
+    { id: '4110', code: '4110', name: 'Sales Discounts', type: AccountType.REVENUE, balance: 0 },
+    { id: '4200', code: '4200', name: 'Other Income', type: AccountType.REVENUE, balance: 0 },
+    { id: '4201', code: '4201', name: 'Interest Income', type: AccountType.REVENUE, balance: 0 },
+    { id: '4202', code: '4202', name: 'Rental Income', type: AccountType.REVENUE, balance: 0 },
+    { id: '4210', code: '4210', name: 'Foreign Exchange Gain', type: AccountType.REVENUE, balance: 0 },
+    
+    // ========================================
+    // 5000-5999: EXPENSES
+    // ========================================
+    
+    // 5000-5099: Cost of Goods Sold
+    { id: '5000', code: '5000', name: 'Cost of Goods Sold - Materials', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5001', code: '5001', name: 'Cost of Goods Sold - Direct Sales', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5010', code: '5010', name: 'Raw Material Consumption', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5020', code: '5020', name: 'Manufacturing Labor', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5030', code: '5030', name: 'Manufacturing Overhead', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5040', code: '5040', name: 'Freight Inward', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5050', code: '5050', name: 'Customs & Duties', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5100-5199: Operating Expenses - Selling & Distribution
+    { id: '5100', code: '5100', name: 'Sales Commissions', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5110', code: '5110', name: 'Freight Outward', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5120', code: '5120', name: 'Advertising & Marketing', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5130', code: '5130', name: 'Packing Materials', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5140', code: '5140', name: 'Delivery Expenses', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5200-5299: Operating Expenses - Administrative
+    { id: '5200', code: '5200', name: 'Salaries & Wages - Admin', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5210', code: '5210', name: 'Employee Benefits', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5220', code: '5220', name: 'Office Rent', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5221', code: '5221', name: 'Warehouse Rent', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5230', code: '5230', name: 'Utilities - Electricity', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5231', code: '5231', name: 'Utilities - Water', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5232', code: '5232', name: 'Utilities - Internet & Phone', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5240', code: '5240', name: 'Office Supplies', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5250', code: '5250', name: 'Repairs & Maintenance', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5260', code: '5260', name: 'Insurance Expense', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5270', code: '5270', name: 'Professional Fees', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5280', code: '5280', name: 'Bank Charges & Fees', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5300-5399: Operating Expenses - Vehicle & Transportation
+    { id: '5300', code: '5300', name: 'Vehicle Fuel', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5310', code: '5310', name: 'Vehicle Maintenance', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5320', code: '5320', name: 'Vehicle Insurance', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5330', code: '5330', name: 'Vehicle Registration & Licensing', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5400-5499: Operating Expenses - Depreciation
+    { id: '5400', code: '5400', name: 'Depreciation - Buildings', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5410', code: '5410', name: 'Depreciation - Machinery', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5420', code: '5420', name: 'Depreciation - Vehicles', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5430', code: '5430', name: 'Depreciation - Furniture', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5500-5599: Financial Expenses
+    { id: '5500', code: '5500', name: 'Interest Expense', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5510', code: '5510', name: 'Foreign Exchange Loss', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5520', code: '5520', name: 'Bad Debt Expense', type: AccountType.EXPENSE, balance: 0 },
+    
+    // 5900-5999: Other Expenses
+    { id: '5900', code: '5900', name: 'Miscellaneous Expenses', type: AccountType.EXPENSE, balance: 0 },
+    { id: '5910', code: '5910', name: 'Penalties & Fines', type: AccountType.EXPENSE, balance: 0 },
+    { id: EXCHANGE_VARIANCE_ID, code: '5510', name: 'Foreign Exchange Loss', type: AccountType.EXPENSE, balance: 0 },
 ];
 
-export const INITIAL_DIVISIONS: Division[] = [
-    { id: 'div1', name: 'Main', location: 'HQ' },
-    { id: 'div2', name: 'Kizilay', location: 'Branch' }
-];
+export const INITIAL_DIVISIONS: Division[] = [];
 
-export const INITIAL_SUB_DIVISIONS: SubDivision[] = [
-    { id: 'sd1', divisionId: 'div1', name: 'Local Sales' },
-    { id: 'sd2', divisionId: 'div1', name: 'Export Team' },
-    { id: 'sd3', divisionId: 'div2', name: 'Wholesale' }
-];
+export const INITIAL_SUB_DIVISIONS: SubDivision[] = [];
 
-export const INITIAL_LOGOS: Logo[] = [
-    { id: 'l1', name: 'Usman Global' },
-    { id: 'l2', name: 'Al-Karam Exports' }
-];
+export const INITIAL_LOGOS: Logo[] = [];
 
-export const INITIAL_WAREHOUSES: Warehouse[] = [
-    { id: 'wh1', name: 'Main Warehouse', location: 'HQ Complex' },
-    { id: 'wh2', name: 'Overflow Storage', location: 'Industrial Zone' }
-];
+export const INITIAL_WAREHOUSES: Warehouse[] = [];
 
-export const INITIAL_PARTNERS: Partner[] = [
-    { id: 'p1', name: 'Global Thrift Buyers Ltd', type: PartnerType.CUSTOMER, balance: 12500, defaultCurrency: 'USD', contact: 'John Doe', country: 'Kenya', divisionId: 'div1', subDivisionId: 'sd2' },
-    { id: 'p2', name: 'Euro Collection GmbH', type: PartnerType.SUPPLIER, balance: -20000, defaultCurrency: 'EUR', contact: 'Hans M.', country: 'Germany' },
-    { id: 'p3', name: 'Kizilay Sorting Center', type: PartnerType.VENDOR, balance: -1500, defaultCurrency: 'USD', contact: 'Manager', country: 'Turkey' },
-    { id: 'p4', name: 'Africa Market Traders', type: PartnerType.CUSTOMER, balance: 29500, defaultCurrency: 'GBP', contact: 'Sarah K.', country: 'Ghana', divisionId: 'div1', subDivisionId: 'sd2' },
-    { id: 'p5', name: 'Global Logistics Solutions', type: PartnerType.FREIGHT_FORWARDER, balance: -2500, defaultCurrency: 'USD', contact: 'Logistics Dept', country: 'UAE', scacCode: 'GLS001' },
-    { id: 'p6', name: 'FastTrack Clearing Services', type: PartnerType.CLEARING_AGENT, balance: -800, defaultCurrency: 'AED', contact: 'Ahmed Ali', country: 'UAE', licenseNumber: 'CLR-9988' },
-    { id: 'p7', name: 'Ocean Bridge Forwarders', type: PartnerType.FREIGHT_FORWARDER, balance: -1200, defaultCurrency: 'EUR', contact: 'Maria S.', country: 'Germany', scacCode: 'OBF222' },
-    { id: 'p8', name: 'Port City Agents', type: PartnerType.CLEARING_AGENT, balance: 0, defaultCurrency: 'USD', contact: 'Operations', country: 'Kenya', licenseNumber: 'KRA-554' },
-    { id: 'p9', name: 'City Stationery', type: PartnerType.VENDOR, balance: 0, defaultCurrency: 'USD', contact: 'Sales', country: 'Local' },
-    { id: 'p10', name: 'Plastic Factory', type: PartnerType.VENDOR, balance: 0, defaultCurrency: 'USD', contact: 'Sales', country: 'Local' },
-    { id: 'p11', name: 'Al-Ain Water', type: PartnerType.VENDOR, balance: 0, defaultCurrency: 'USD', contact: 'Driver', country: 'Local' },
-    { id: 'p12', name: 'Owner\'s Capital', type: PartnerType.SUPPLIER, balance: 0, defaultCurrency: 'USD', contact: 'Owner', country: 'Local' } // Fallback for Capital injections
-];
+export const INITIAL_PARTNERS: Partner[] = [];
 
-export const INITIAL_CATEGORIES: Category[] = [
-    { id: 'cat1', name: 'Men\'s Wear' },
-    { id: 'cat2', name: 'Ladies\' Wear' },
-    { id: 'cat3', name: 'Children\'s Wear' },
-    { id: 'cat4', name: 'Household' },
-    { id: 'cat5', name: 'Shoes & Bags' },
-    { id: 'cat-raw', name: 'Raw Material' },
-];
+export const INITIAL_CATEGORIES: Category[] = [];
 
-export const INITIAL_SECTIONS: Section[] = [
-    { id: 'sec1', name: 'Main Sorting Floor' },
-    { id: 'sec2', name: 'Baling Line A' },
-    { id: 'sec3', name: 'Premium Room' },
-    { id: 'sec4', name: 'Shoe Grading' },
-];
+export const INITIAL_SECTIONS: Section[] = [];
 
-export const INITIAL_ORIGINAL_TYPES: OriginalType[] = [
-    { id: 'ot1', name: 'KSA Mix', packingType: PackingType.BALE, packingSize: 80 },
-    { id: 'ot2', name: 'European Original', packingType: PackingType.KG, packingSize: 1 },
-    { id: 'ot3', name: 'Korean Toys', packingType: PackingType.BOX, packingSize: 20 },
-    { id: 'ot4', name: 'Australian Shoes', packingType: PackingType.BAG, packingSize: 25 },
-];
+export const INITIAL_ORIGINAL_TYPES: OriginalType[] = [];
 
-export const INITIAL_ORIGINAL_PRODUCTS: OriginalProduct[] = [
-    { id: 'op1', originalTypeId: 'ot1', name: 'Mixed Rags' },
-    { id: 'op2', originalTypeId: 'ot1', name: 'Cream Quality' },
-    { id: 'op3', originalTypeId: 'ot4', name: 'Men Shoes' },
-    { id: 'op4', originalTypeId: 'ot4', name: 'Ladies Shoes' },
-];
+export const INITIAL_ORIGINAL_PRODUCTS: OriginalProduct[] = [];
 
-export const INITIAL_ITEMS: Item[] = [
-    { id: 'i1', code: 'RM-MIX-KSA', name: 'Original KSA Mix', category: 'cat-raw', packingType: PackingType.KG, avgCost: 0.85, stockQty: 15000, weightPerUnit: 1, nextSerial: 1, salePrice: 0 },
-    { id: 'DS-001', code: 'DS-001', name: 'Direct Sale (Raw Material)', category: 'cat-raw', packingType: PackingType.KG, avgCost: 0, stockQty: 0, weightPerUnit: 1, nextSerial: 1, salePrice: 0 },
-    { id: 'i2', code: 'FG-MEN-JEAN-A', name: 'Mens Jeans Grade A', category: 'cat1', section: 'sec1', packingType: PackingType.BALE, avgCost: 120, stockQty: 250, weightPerUnit: 45, nextSerial: 251, salePrice: 150 },
-    { id: 'i3', code: 'FG-LADIES-TOP-B', name: 'Ladies Tops Grade B', category: 'cat2', section: 'sec1', packingType: PackingType.SACK, avgCost: 45, stockQty: 600, weightPerUnit: 25, salePrice: 65, nextSerial: 601 },
-    { id: 'i4', code: 'FG-SHOES-CREAM', name: 'Cream Shoes', category: 'cat5', section: 'sec4', packingType: PackingType.SACK, avgCost: 80, stockQty: 120, weightPerUnit: 25, salePrice: 110, nextSerial: 121 },
-    { id: 'i5', code: 'FG-LADIES-SILK', name: 'Ladies Silk Blouse', category: 'cat2', section: 'sec3', packingType: PackingType.BALE, avgCost: 180, stockQty: 50, weightPerUnit: 40, nextSerial: 51, salePrice: 220 },
-    { id: 'i6', code: 'FG-MEN-TSHIRT', name: 'Men\'s Cotton T-Shirt', category: 'cat1', section: 'sec2', packingType: PackingType.BALE, avgCost: 95, stockQty: 300, weightPerUnit: 45, nextSerial: 301, salePrice: 130 },
-    { id: 'i7', code: 'FG-KIDS-DENIM', name: 'Kids Denim Mix', category: 'cat3', section: 'sec1', packingType: PackingType.SACK, avgCost: 55, stockQty: 150, weightPerUnit: 30, salePrice: 75, nextSerial: 151 },
-    { id: 'i8', code: 'FG-HH-BEDSHEET', name: 'Bedsheets Grade A', category: 'cat4', section: 'sec2', packingType: PackingType.BALE, avgCost: 110, stockQty: 80, weightPerUnit: 50, nextSerial: 81, salePrice: 140 },
-];
+export const INITIAL_ITEMS: Item[] = [];
 
-export const INITIAL_LEDGER: LedgerEntry[] = [
-    { id: 'l1', date: '2023-10-01', transactionId: 'OB-301', transactionType: TransactionType.OPENING_BALANCE, accountId: '301', accountName: 'Capital Investment', currency: 'USD', exchangeRate: 1, fcyAmount: 200000, debit: 0, credit: 200000, narration: 'Opening Capital' },
-    { id: 'l2', date: '2023-10-01', transactionId: 'OB-301', transactionType: TransactionType.OPENING_BALANCE, accountId: '102', accountName: 'Citibank Main', currency: 'USD', exchangeRate: 1, fcyAmount: 200000, debit: 200000, credit: 0, narration: 'Opening Capital' },
-    { id: 'l3', date: '2023-10-05', transactionId: 'PI-11000', transactionType: TransactionType.PURCHASE_INVOICE, accountId: '104', accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: 50000, debit: 50000, credit: 0, narration: 'Opening Raw Material' },
-    { id: 'l4', date: '2023-10-05', transactionId: 'PI-11000', transactionType: TransactionType.PURCHASE_INVOICE, accountId: '201', accountName: 'Accounts Payable', currency: 'USD', exchangeRate: 1, fcyAmount: 50000, debit: 0, credit: 50000, narration: 'Opening Raw Material' },
-];
+export const INITIAL_LEDGER: LedgerEntry[] = [];
+// Removed hardcoded opening entries - these will be created fresh during setup
 
 const TODAY = new Date().toISOString().split('T')[0];
 const YESTERDAY = new Date(new Date().setDate(new Date().getDate() - 1)).toISOString().split('T')[0];
 
-export const INITIAL_PURCHASES: Purchase[] = [
-    {
-        id: 'pur-arr-1',
-        batchNumber: '11001',
-        status: 'Arrived',
-        date: YESTERDAY,
-        supplierId: 'p2',
-        originalTypeId: 'ot1', // KSA Mix ID
-        originalType: 'KSA Mix',
-        originalProductId: 'op1',
-        containerNumber: 'MSCU-ARRIVED-01',
-        divisionId: 'div1',
-        subDivisionId: 'sd2',
-        qtyPurchased: 150, // 150 Bales
-        weightPurchased: 12000, // 150 * 80kg
-        currency: 'EUR',
-        exchangeRate: 0.91,
-        costPerKgFCY: 0.45,
-        totalCostFCY: 5400, // 12000 * 0.45
-        additionalCosts: [],
-        totalLandedCost: 5934.06, // 5400/0.91 = 5934.06 (USD)
-        landedCostPerKg: 0.494
-    },
-    {
-        id: 'pur-tr-1',
-        batchNumber: '11002',
-        status: 'In Transit',
-        date: TODAY,
-        supplierId: 'p2',
-        originalTypeId: 'ot2', // European Original
-        originalType: 'European Original',
-        containerNumber: 'MSCU-TRANSIT-02',
-        divisionId: 'div1',
-        subDivisionId: 'sd2',
-        qtyPurchased: 10000, // 10000 Kg
-        weightPurchased: 10000,
-        currency: 'EUR',
-        exchangeRate: 0.91,
-        costPerKgFCY: 0.85,
-        totalCostFCY: 8500, // 10000 * 0.85
-        additionalCosts: [],
-        totalLandedCost: 9340.65, // 8500/0.91 = 9340.65 (USD)
-        landedCostPerKg: 0.934
-    }
-];
+export const INITIAL_PURCHASES: Purchase[] = [];
 
-export const INITIAL_LOGISTICS_ENTRIES: LogisticsEntry[] = [
-    {
-        id: 'log-arr-1',
-        purchaseId: 'pur-arr-1',
-        purchaseType: 'ORIGINAL',
-        containerNumber: 'MSCU-ARRIVED-01',
-        status: 'Arrived',
-        arrivalDate: YESTERDAY,
-        warehouseId: 'wh1',
-        invoicedWeight: 12000,
-        receivedWeight: 11950,
-        shortageKg: 50
-    }
-];
+export const INITIAL_LOGISTICS_ENTRIES: LogisticsEntry[] = [];
 
-export const INITIAL_SALES_INVOICES: SalesInvoice[] = [
-    {
-        id: 'inv-post-1',
-        invoiceNo: 'SINV-1001',
-        date: '2023-11-15',
-        status: 'Posted',
-        customerId: 'p1',
-        logoId: 'l1',
-        containerNumber: 'CONT-EXP-001',
-        divisionId: 'div1',
-        subDivisionId: 'sd2',
-        currency: 'USD',
-        exchangeRate: 1,
-        discount: 0,
-        surcharge: 0,
-        items: [
-            { id: 'sii-1', itemId: 'i2', itemName: 'Mens Jeans Grade A', qty: 50, rate: 155, total: 7750, totalKg: 2250, currency: 'USD', exchangeRate: 1 },
-            { id: 'sii-2', itemId: 'i3', itemName: 'Ladies Tops Grade B', qty: 100, rate: 65, total: 6500, totalKg: 2500, currency: 'USD', exchangeRate: 1 }
-        ],
-        additionalCosts: [],
-        grossTotal: 14250,
-        netTotal: 14250
-    },
-    {
-        id: 'inv-unp-1',
-        invoiceNo: 'SINV-1002',
-        date: TODAY,
-        status: 'Unposted',
-        customerId: 'p4',
-        logoId: 'l1',
-        containerNumber: 'CONT-PENDING-002',
-        divisionId: 'div1',
-        subDivisionId: 'sd2',
-        currency: 'GBP',
-        exchangeRate: 0.76,
-        discount: 100,
-        surcharge: 0,
-        items: [
-            { id: 'sii-3', itemId: 'i6', itemName: 'Men\'s Cotton T-Shirt', qty: 200, rate: 100, total: 20000, totalKg: 9000, currency: 'GBP', exchangeRate: 0.76 }
-        ],
-        additionalCosts: [
-            { id: 'cost-1', costType: 'Freight', providerId: 'p5', amount: 1500, currency: 'USD', exchangeRate: 0.76 }
-        ],
-        grossTotal: 20000,
-        netTotal: 21873.68
-    }
-];
+export const INITIAL_SALES_INVOICES: SalesInvoice[] = [];
 
-export const INITIAL_ONGOING_ORDERS: OngoingOrder[] = [
-    {
-        id: 'oo-1',
-        orderNo: 'OO-1001',
-        date: TODAY,
-        customerId: 'p1',
-        status: 'Active',
-        items: [
-            { itemId: 'i2', quantity: 200, shippedQuantity: 0 },
-            { itemId: 'i3', quantity: 500, shippedQuantity: 0 }
-        ]
-    }
-];
+export const INITIAL_ONGOING_ORDERS: OngoingOrder[] = [];
 
-export const INITIAL_EMPLOYEES: Employee[] = [
-    { id: 'e1', name: 'John Smith', designation: 'Warehouse Manager', status: 'Active', onDuty: 'Yes', companyVisa: 'Yes', passportNumber: 'US123456', basicSalary: 2500, advancesBalance: 0, visaRenewalDate: '2025-10-01' },
-    { id: 'e2', name: 'Maria Garcia', designation: 'Accountant', status: 'Active', onDuty: 'Yes', companyVisa: 'Yes', passportNumber: 'ES987654', basicSalary: 3000, advancesBalance: 500, visaRenewalDate: '2024-05-15' },
-];
+export const INITIAL_EMPLOYEES: Employee[] = [];
 
-export const INITIAL_TASKS: Task[] = [
-    { id: 't1', description: 'Renew Trade License', createdDate: '2024-01-10', isDone: false, status: 'Pending' },
-    { id: 't2', description: 'Order Safety Gear', createdDate: '2024-01-12', isDone: true, status: 'Completed', comments: 'Ordered from Supplier X' },
-];
+export const INITIAL_TASKS: Task[] = [];
 
-export const INITIAL_VEHICLES: Vehicle[] = [
-    { id: 'v1', plateNumber: 'DUBAI A 12345', model: 'Toyota Hiace', registrationExpiry: '2024-12-01', insuranceExpiry: '2024-12-01', status: 'Active', assignedToEmployeeId: 'e1' },
-];
+export const INITIAL_VEHICLES: Vehicle[] = [];
 
-export const INITIAL_CHAT_MESSAGES: ChatMessage[] = [
-    {
-        id: 'msg1',
-        chatId: 'general',
-        senderId: 'e1',
-        senderName: 'John Smith',
-        text: 'Welcome to the new system everyone! Please check your profiles.',
-        timestamp: new Date(Date.now() - 86400000).toISOString(),
-        readBy: ['e1', 'u1']
-    },
-    {
-        id: 'msg2',
-        chatId: 'general',
-        senderId: 'e2',
-        senderName: 'Maria Garcia',
-        text: 'I have updated the latest accounts. Please review.',
-        timestamp: new Date(Date.now() - 3600000).toISOString(),
-        readBy: ['e2'] 
-    }
-];
+export const INITIAL_CHAT_MESSAGES: ChatMessage[] = [];
 
-// --- MOCK PRODUCTION DATA FOR REPORTS ---
-export const INITIAL_ORIGINAL_OPENINGS: OriginalOpening[] = [
-    {
-        id: 'oo-mock-1',
-        date: TODAY,
-        supplierId: 'p2',
-        originalType: 'ot1', // KSA Mix
-        batchNumber: '11001',
-        qtyOpened: 50,
-        weightOpened: 4000, // 50 * 80kg
-        costPerKg: 0.494,
-        totalValue: 1976
-    }
-];
+export const INITIAL_ORIGINAL_OPENINGS: OriginalOpening[] = [];
 
-export const INITIAL_PRODUCTIONS: ProductionEntry[] = [
-    {
-        id: 'prod-mock-1',
-        date: TODAY,
-        itemId: 'i2', // Men's Jeans Grade A
-        itemName: 'Mens Jeans Grade A',
-        packingType: PackingType.BALE,
-        qtyProduced: 25,
-        weightProduced: 1125, // 25 * 45kg
-        serialStart: 251,
-        serialEnd: 275
-    },
-    {
-        id: 'prod-mock-2',
-        date: TODAY,
-        itemId: 'i3', // Ladies Tops
-        itemName: 'Ladies Tops Grade B',
-        packingType: PackingType.SACK,
-        qtyProduced: 60,
-        weightProduced: 1500, // 60 * 25kg
-        serialStart: 601,
-        serialEnd: 660
-    },
-    {
-        id: 'prod-mock-3',
-        date: TODAY,
-        itemId: 'i6', // Men T-Shirt
-        itemName: 'Men\'s Cotton T-Shirt',
-        packingType: PackingType.BALE,
-        qtyProduced: 15,
-        weightProduced: 675, // 15 * 45kg
-        serialStart: 301,
-        serialEnd: 315
-    }
-];
+export const INITIAL_PRODUCTIONS: ProductionEntry[] = [];
 
-// --- FINANCIAL PLANNER DATA ---
-export const INITIAL_PLANNERS: PlannerEntry[] = [
-    {
-        id: 'rp-p1',
-        period: '2024-W25', // Example: Current Week
-        entityId: 'p1', // Global Thrift Buyers
-        entityType: PlannerEntityType.CUSTOMER,
-        plannedAmount: 5000,
-        lastActualAmount: 4800,
-        lastPlanAmount: 5200
-    },
-    {
-        id: 'rp-p2',
-        period: '2024-W25',
-        entityId: 'p2', // Euro Collection
-        entityType: PlannerEntityType.SUPPLIER,
-        plannedAmount: 10000,
-        lastActualAmount: 9500,
-        lastPlanAmount: 11000
-    },
-     {
-        id: 'exp-p1',
-        period: '2024-M06', // Example: Current Month
-        entityId: RENT_EXPENSE_ID, 
-        entityType: PlannerEntityType.EXPENSE,
-        plannedAmount: 3000,
-        lastActualAmount: 2950,
-        lastPlanAmount: 3000
-    },
-    {
-        id: 'exp-p2',
-        period: '2024-M06',
-        entityId: ELECTRICITY_EXPENSE_ID,
-        entityType: PlannerEntityType.EXPENSE,
-        plannedAmount: 800,
-        lastActualAmount: 850,
-        lastPlanAmount: 750
-    }
-];
+export const INITIAL_PLANNERS: PlannerEntry[] = [];
 
-// --- MOCK DATA FOR CUSTOMS MODULE ---
-export const INITIAL_GUARANTEE_CHEQUES: GuaranteeCheque[] = [
-    {
-        id: 'gc1',
-        entryDate: TODAY,
-        boeNo: 'BOE-1001',
-        destination: 'Jebel Ali Free Zone',
-        shipper: 'Euro Collection GmbH',
-        stock: 'Used Clothing Mix',
-        weight: 12000,
-        amount: 5400,
-        containerNo: 'MSCU-ARRIVED-01',
-        chequeDate: TODAY,
-        chequeNo: 'CHQ-998877',
-        chequeAmount: 10000,
-        status: 'Submitted'
-    }
-];
+export const INITIAL_GUARANTEE_CHEQUES: GuaranteeCheque[] = [];
 
-export const INITIAL_CUSTOMS_DOCUMENTS: CustomsDocument[] = [
-    {
-        id: 'doc1',
-        fileName: 'Bill of Lading - MSCU123.pdf',
-        fileType: 'application/pdf',
-        fileUrl: '#', // Mock URL
-        description: 'BL for Container MSCU-ARRIVED-01',
-        uploadDate: YESTERDAY,
-        uploadedBy: 'Admin User'
-    },
-    {
-        id: 'doc2',
-        fileName: 'Packing List - 11001.jpg',
-        fileType: 'image/jpeg',
-        fileUrl: '#',
-        description: 'Packing List for Batch 11001',
-        uploadDate: TODAY,
-        uploadedBy: 'Admin User'
-    }
-];
+export const INITIAL_CUSTOMS_DOCUMENTS: CustomsDocument[] = [];
 
 export const CHART_COLORS = {
     primary: '#3b82f6', 
