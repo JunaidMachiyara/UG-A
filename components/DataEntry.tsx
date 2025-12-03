@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useLocation, Link } from 'react-router-dom';
-import { OriginalOpening, ProductionEntry, PackingType, Purchase, Currency, TransactionType, PurchaseAdditionalCost, PartnerType, BundlePurchaseItem, BundlePurchase, SalesInvoice, SalesInvoiceItem, InvoiceAdditionalCost, OngoingOrder, OngoingOrderItem } from '../types';
+import { OriginalOpening, ProductionEntry, PackingType, Purchase, Currency, TransactionType, PurchaseAdditionalCost, PartnerType, BundlePurchaseItem, BundlePurchase, SalesInvoice, SalesInvoiceItem, InvoiceAdditionalCost, OngoingOrder, OngoingOrderItem, PurchaseOriginalItem } from '../types';
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { useSetupConfigs, QuickAddModal, CrudConfig } from './Setup';
@@ -127,17 +127,20 @@ export const DataEntry: React.FC = () => {
     const [purSupplier, setPurSupplier] = useState('');
     const [purCurrency, setPurCurrency] = useState<Currency>('USD');
     const [purExchangeRate, setPurExchangeRate] = useState<number>(1);
+    
+    // NEW: Multi-Original Type Cart
     const [purOriginalTypeId, setPurOriginalTypeId] = useState('');
     const [purOriginalProductId, setPurOriginalProductId] = useState('');
     const [purWeight, setPurWeight] = useState('');
     const [purPrice, setPurPrice] = useState(''); // Gross Price per Kg
+    const [purItemDiscount, setPurItemDiscount] = useState(''); // Discount for this item
+    const [purItemSurcharge, setPurItemSurcharge] = useState(''); // Surcharge for this item
+    const [purCart, setPurCart] = useState<PurchaseOriginalItem[]>([]); // Cart of original types
     
-    // Logistics & Discount
+    // Logistics
     const [purContainer, setPurContainer] = useState('');
     const [purDivision, setPurDivision] = useState('');
     const [purSubDivision, setPurSubDivision] = useState('');
-    const [purDiscount, setPurDiscount] = useState(''); // Rate per Unit/Kg
-    const [purSurcharge, setPurSurcharge] = useState(''); // Rate per Unit/Kg
 
     // --- Bundle Purchase State ---
     const [bpDate, setBpDate] = useState(new Date().toISOString().split('T')[0]);
@@ -297,6 +300,64 @@ export const DataEntry: React.FC = () => {
         return state.originalProducts.filter(p => p.originalTypeId === purOriginalTypeId);
     }, [purOriginalTypeId, state.originalProducts]);
     
+    // --- Purchase Cart Functions ---
+    const handleAddToPurCart = () => {
+        if (!purOriginalTypeId || !purWeight || !purPrice) {
+            alert('Please fill in Original Type, Weight, and Price');
+            return;
+        }
+        
+        const weight = parseFloat(purWeight);
+        const grossPricePerKgFCY = parseFloat(purPrice);
+        const discountPerKg = purItemDiscount ? parseFloat(purItemDiscount) : 0;
+        const surchargePerKg = purItemSurcharge ? parseFloat(purItemSurcharge) : 0;
+        
+        if (weight <= 0 || grossPricePerKgFCY <= 0) {
+            alert('Weight and Price must be greater than 0');
+            return;
+        }
+        
+        const typeDef = state.originalTypes.find(t => t.id === purOriginalTypeId);
+        const packingSize = typeDef ? typeDef.packingSize : 1;
+        const calculatedQty = weight / packingSize;
+        
+        const netPricePerKgFCY = grossPricePerKgFCY - discountPerKg + surchargePerKg;
+        const totalCostFCY = weight * netPricePerKgFCY;
+        const totalCostUSD = totalCostFCY / purExchangeRate;
+        
+        const typeName = state.originalTypes.find(t => t.id === purOriginalTypeId)?.name || 'Unknown';
+        const productName = state.originalProducts.find(p => p.id === purOriginalProductId)?.name;
+        const finalName = productName ? `${typeName} - ${productName}` : typeName;
+        
+        const newItem: PurchaseOriginalItem = {
+            id: Math.random().toString(36).substr(2, 9),
+            originalTypeId: purOriginalTypeId,
+            originalType: finalName,
+            originalProductId: purOriginalProductId,
+            weightPurchased: weight,
+            qtyPurchased: calculatedQty,
+            costPerKgFCY: grossPricePerKgFCY,
+            discountPerKgFCY: discountPerKg,
+            surchargePerKgFCY: surchargePerKg,
+            totalCostFCY: totalCostFCY,
+            totalCostUSD: totalCostUSD
+        };
+        
+        setPurCart([...purCart, newItem]);
+        
+        // Clear item fields
+        setPurOriginalTypeId('');
+        setPurOriginalProductId('');
+        setPurWeight('');
+        setPurPrice('');
+        setPurItemDiscount('');
+        setPurItemSurcharge('');
+    };
+    
+    const handleRemoveFromPurCart = (id: string) => {
+        setPurCart(purCart.filter(item => item.id !== id));
+    };
+    
     const filteredProviders = useMemo(() => {
         let relevantTypes: PartnerType[] = [];
         if (acType === 'Freight') relevantTypes = [PartnerType.FREIGHT_FORWARDER];
@@ -442,8 +503,8 @@ export const DataEntry: React.FC = () => {
     // --- Original Purchase Logic ---
     const handlePreSubmitPurchase = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!purSupplier || !purOriginalTypeId || !purWeight || !purPrice) {
-            alert('Please fill all required fields');
+        if (!purSupplier || purCart.length === 0) {
+            alert('Please select Supplier and add at least one Original Type to cart');
             return;
         }
         
@@ -467,22 +528,21 @@ export const DataEntry: React.FC = () => {
     };
 
     const handleFinalPurchaseSave = () => {
-        const weight = parseFloat(purWeight);
-        const grossPricePerKgFCY = parseFloat(purPrice);
-        const discountPerKg = purDiscount ? parseFloat(purDiscount) : 0;
-        const surchargePerKg = purSurcharge ? parseFloat(purSurcharge) : 0;
+        if (purCart.length === 0) {
+            alert('Cart is empty!');
+            return;
+        }
         
-        // Net Price Calculation
-        const netPricePerKgFCY = grossPricePerKgFCY - discountPerKg + surchargePerKg;
-        
-        const totalMaterialCostFCY = weight * netPricePerKgFCY;
-        const totalMaterialCostUSD = totalMaterialCostFCY / purExchangeRate;
+        // Aggregate cart totals
+        const totalWeight = purCart.reduce((sum, item) => sum + item.weightPurchased, 0);
+        const totalQty = purCart.reduce((sum, item) => sum + item.qtyPurchased, 0);
+        const totalMaterialCostFCY = purCart.reduce((sum, item) => sum + item.totalCostFCY, 0);
+        const totalMaterialCostUSD = purCart.reduce((sum, item) => sum + item.totalCostUSD, 0);
         const totalAdditionalCostUSD = additionalCosts.reduce((sum, c) => sum + c.amountUSD, 0);
         const totalLandedCostUSD = totalMaterialCostUSD + totalAdditionalCostUSD;
         
-        const typeName = state.originalTypes.find(t => t.id === purOriginalTypeId)?.name || 'Unknown';
-        const productName = state.originalProducts.find(p => p.id === purOriginalProductId)?.name;
-        const finalName = productName ? `${typeName} - ${productName}` : typeName;
+        // For backward compatibility, use first item for legacy single-item fields
+        const firstItem = purCart[0];
 
         const newPurchase: Purchase = {
             id: Math.random().toString(36).substr(2, 9),
@@ -490,43 +550,49 @@ export const DataEntry: React.FC = () => {
             status: 'In Transit',
             date: purDate,
             supplierId: purSupplier,
-            originalTypeId: purOriginalTypeId, // Store ID for strict linking
-            originalType: finalName,
-            originalProductId: purOriginalProductId,
+            
+            // NEW: Multi-Original Type Cart
+            items: purCart,
+            
+            // Legacy fields (backward compatibility) - populated from first item
+            originalTypeId: firstItem.originalTypeId,
+            originalType: firstItem.originalType,
+            originalProductId: firstItem.originalProductId,
             
             // Logistics
             containerNumber: purContainer,
             divisionId: purDivision,
             subDivisionId: purSubDivision,
 
-            qtyPurchased: 0, // Calculated in Reducer based on Packing Size now
-            weightPurchased: weight,
+            qtyPurchased: totalQty,
+            weightPurchased: totalWeight,
             currency: purCurrency,
             exchangeRate: purExchangeRate,
             
-            // Costs breakdown
-            costPerKgFCY: grossPricePerKgFCY,
-            discountPerKgFCY: discountPerKg,
-            surchargePerKgFCY: surchargePerKg,
+            // Costs breakdown (from first item for legacy fields)
+            costPerKgFCY: firstItem.costPerKgFCY,
+            discountPerKgFCY: firstItem.discountPerKgFCY || 0,
+            surchargePerKgFCY: firstItem.surchargePerKgFCY || 0,
 
-            totalCostFCY: totalMaterialCostFCY, // Net Cost
+            totalCostFCY: totalMaterialCostFCY,
             additionalCosts: additionalCosts,
             totalLandedCost: totalLandedCostUSD,
-            landedCostPerKg: totalLandedCostUSD / weight
+            landedCostPerKg: totalLandedCostUSD / totalWeight
         };
 
         addPurchase(newPurchase);
         
         // Reset Form
+        setPurCart([]);
         setPurOriginalTypeId('');
         setPurOriginalProductId('');
         setPurWeight('');
         setPurPrice('');
+        setPurItemDiscount('');
+        setPurItemSurcharge('');
         setPurContainer('');
         setPurDivision('');
         setPurSubDivision('');
-        setPurDiscount('');
-        setPurSurcharge('');
         setAdditionalCosts([]);
         setShowPurSummary(false);
         setPurBatch((prev) => (parseInt(prev) + 1).toString()); 
@@ -1049,13 +1115,6 @@ export const DataEntry: React.FC = () => {
         return state.partners.filter(p => ids.includes(p.id));
     }, [state.purchases, state.partners]);
 
-    // Gross and Net Calculation for Purchase Summary
-    const purGrossTotal = (parseFloat(purWeight || '0') * parseFloat(purPrice || '0'));
-    const purDiscountTotal = parseFloat(purDiscount || '0') * parseFloat(purWeight || '0');
-    const purSurchargeTotal = parseFloat(purSurcharge || '0') * parseFloat(purWeight || '0');
-    const purNetTotal = purGrossTotal - purDiscountTotal + purSurchargeTotal;
-    const purNetTotalUSD = purNetTotal / purExchangeRate;
-
     // SI Totals
     const siGrossTotal = siCart.reduce((s, i) => s + i.total, 0);
     const siCostsTotal = siCosts.reduce((s, c) => s + (c.amount * (c.exchangeRate / siExchangeRate)), 0); 
@@ -1527,7 +1586,6 @@ export const DataEntry: React.FC = () => {
                                                 selectedId={purOriginalTypeId}
                                                 onSelect={(id) => { setPurOriginalTypeId(id); setPurOriginalProductId(''); }}
                                                 placeholder="Select Original Type..."
-                                                required
                                                 onQuickAdd={() => openQuickAdd(setupConfigs.originalTypeConfig)}
                                             />
                                         </div>
@@ -1544,15 +1602,63 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-6">
-                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Total Weight (Kg)</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={purWeight} onChange={e => setPurWeight(e.target.value)} required/></div>
-                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Price per Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300 font-bold" value={purPrice} onChange={e => setPurPrice(e.target.value)} required/></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Weight (Kg)</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500" value={purWeight} onChange={e => setPurWeight(e.target.value)}/></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Price per Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 font-bold" value={purPrice} onChange={e => setPurPrice(e.target.value)}/></div>
                                     </div>
 
-                                    {/* Discount & Surcharge */}
-                                    <div className="grid grid-cols-2 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Discount Rate (Per Unit/Kg) - {purCurrency}</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purDiscount} onChange={e => setPurDiscount(e.target.value)}/></div>
-                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Surcharge Rate (Per Unit/Kg) - {purCurrency}</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purSurcharge} onChange={e => setPurSurcharge(e.target.value)}/></div>
+                                    {/* Discount & Surcharge for this item */}
+                                    <div className="grid grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Discount/Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purItemDiscount} onChange={e => setPurItemDiscount(e.target.value)}/></div>
+                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Surcharge/Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purItemSurcharge} onChange={e => setPurItemSurcharge(e.target.value)}/></div>
+                                        <div className="flex items-end"><button type="button" onClick={handleAddToPurCart} disabled={!purOriginalTypeId || !purWeight || !purPrice} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-slate-300 flex items-center justify-center gap-1"><Plus size={16}/> Add to Cart</button></div>
                                     </div>
+
+                                    {/* Cart Display */}
+                                    {purCart.length > 0 && (
+                                        <div className="bg-white border border-slate-300 rounded-xl overflow-hidden">
+                                            <div className="bg-slate-700 text-white p-3 font-bold text-sm">Purchase Cart ({purCart.length} type{purCart.length > 1 ? 's' : ''})</div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-slate-100 text-slate-600">
+                                                        <tr>
+                                                            <th className="p-2 text-left">Original Type</th>
+                                                            <th className="p-2 text-right">Weight (Kg)</th>
+                                                            <th className="p-2 text-right">Price/Kg</th>
+                                                            <th className="p-2 text-right">Discount</th>
+                                                            <th className="p-2 text-right">Surcharge</th>
+                                                            <th className="p-2 text-right">Total ({purCurrency})</th>
+                                                            <th className="p-2 text-right">Total (USD)</th>
+                                                            <th className="p-2"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {purCart.map(item => (
+                                                            <tr key={item.id} className="border-t border-slate-200 hover:bg-slate-50">
+                                                                <td className="p-2 font-medium text-slate-700">{item.originalType}</td>
+                                                                <td className="p-2 text-right font-mono">{item.weightPurchased.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{item.costPerKgFCY.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${item.discountPerKgFCY.toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${item.surchargePerKgFCY.toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono font-bold">{item.totalCostFCY.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${item.totalCostUSD.toFixed(2)}</td>
+                                                                <td className="p-2 text-right"><button type="button" onClick={() => handleRemoveFromPurCart(item.id)} className="text-red-500 hover:text-red-700"><X size={16}/></button></td>
+                                                            </tr>
+                                                        ))}
+                                                        <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
+                                                            <td className="p-2">TOTALS</td>
+                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+i.weightPurchased,0).toFixed(2)}</td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</td>
+                                                            <td className="p-2"></td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div className="border-t border-slate-200 pt-6">
                                         <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Anchor size={18} className="text-blue-500" /> Landed Cost / Additional Charges</h4>
@@ -1577,11 +1683,11 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
-                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Material Cost (Base USD):</span><span className="font-mono font-bold">${purNetTotalUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Material Cost (Base USD):</span><span className="font-mono font-bold">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                         <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                        <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purNetTotalUSD + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                     </div>
-                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2"><FileText size={18} /> Review & Submit</button>
+                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2" disabled={purCart.length === 0}><FileText size={18} /> Review & Submit</button>
                                 </form>
                             </div>
                         )}
@@ -2008,20 +2114,13 @@ export const DataEntry: React.FC = () => {
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Supplier</h4><div className="text-lg font-bold text-slate-800">{state.partners.find(p=>p.id===purSupplier)?.name}</div><div className="text-sm text-slate-500">{state.partners.find(p=>p.id===purSupplier)?.country}</div></div>
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Logistics</h4><div className="text-sm text-slate-800 font-medium">Container: {purContainer || 'N/A'}</div><div className="text-sm text-slate-500">Div: {state.divisions.find(d=>d.id===purDivision)?.name || '-'} / {state.subDivisions.find(s=>s.id===purSubDivision)?.name || '-'}</div></div>
                             </div>
-                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100"><tr><td className="px-4 py-3 font-medium">{state.originalTypes.find(t => t.id === purOriginalTypeId)?.name}{purOriginalProductId && ` - ${state.originalProducts.find(p => p.id === purOriginalProductId)?.name}`}</td><td className="px-4 py-3 text-right">{parseFloat(purWeight).toFixed(2)} Kg</td><td className="px-4 py-3 text-right">{(parseFloat(purPrice) - (purDiscount?parseFloat(purDiscount):0) + (purSurcharge?parseFloat(purSurcharge):0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{(parseFloat(purWeight) * (parseFloat(purPrice) - (purDiscount?parseFloat(purDiscount):0) + (purSurcharge?parseFloat(purSurcharge):0))).toFixed(2)}</td></tr></tbody></table>
+                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{item.weightPurchased.toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{item.totalCostFCY.toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={3}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td></tr></tbody></table>
                             
                              <div className="border-t border-slate-200 pt-6"><h4 className="font-bold text-slate-700 mb-4">Landed Cost Calculation (Base USD)</h4><div className="space-y-2 text-sm max-w-sm ml-auto">
-                                <div className="flex justify-between"><span className="text-slate-500">Gross Material:</span><span className="font-mono text-slate-800">${(purGrossTotal / purExchangeRate).toFixed(2)}</span></div>
-                                {(purDiscount || purSurcharge) && (
-                                    <>
-                                        <div className="flex justify-between"><span className="text-emerald-600">Discount:</span><span className="font-mono text-emerald-600">-${(purDiscountTotal / purExchangeRate).toFixed(2)}</span></div>
-                                        <div className="flex justify-between"><span className="text-red-500">Surcharge:</span><span className="font-mono text-red-500">+${(purSurchargeTotal / purExchangeRate).toFixed(2)}</span></div>
-                                        <div className="flex justify-between border-t border-slate-100 pt-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purNetTotalUSD.toFixed(2)}</span></div>
-                                    </>
-                                )}
+                                <div className="flex justify-between border-b border-slate-100 pb-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</span></div>
                                 {additionalCosts.map(ac => ( <div key={ac.id} className="flex justify-between"><span className="text-slate-500">{ac.costType} ({state.partners.find(p=>p.id===ac.providerId)?.name}):</span><span className="font-mono text-slate-800">${ac.amountUSD.toFixed(2)}</span></div> ))} 
-                                <div className="flex justify-between border-t border-slate-300 pt-2 font-bold text-lg"><span className="text-blue-800">Total Landed Cost:</span><span className="font-mono text-blue-800">${( purNetTotalUSD + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purNetTotalUSD + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / parseFloat(purWeight || '1')).toFixed(3)}</span></div></div>
+                                <div className="flex justify-between border-t border-slate-300 pt-2 font-bold text-lg"><span className="text-blue-800">Total Landed Cost:</span><span className="font-mono text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / purCart.reduce((s,i)=>s+i.weightPurchased,0)).toFixed(3)}</span></div></div>
                              </div>
                         </div>
                         <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center"><button onClick={() => setShowPurSummary(false)} className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium">Cancel</button><div className="flex gap-3"><button onClick={handlePrint} disabled={purPrinted} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Printer size={18} /> {purPrinted ? 'Ready to Save' : 'Print Invoice'}</button><button onClick={handleFinalPurchaseSave} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm flex items-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed"><Download size={18} /> Save & Exit</button></div></div>

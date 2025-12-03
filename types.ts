@@ -369,6 +369,21 @@ export interface BundlePurchase {
     totalAmountUSD: number;
 }
 
+// Multi-Original Type Support for Purchase
+export interface PurchaseOriginalItem {
+    id: string;
+    originalTypeId: string; // ID of OriginalType
+    originalType: string; // Display Name
+    originalProductId?: string; // ID of OriginalProduct
+    weightPurchased: number; // Kg for this specific original type
+    qtyPurchased: number; // Units (calculated based on packing size)
+    costPerKgFCY: number; // Price per Kg in Foreign Currency
+    discountPerKgFCY?: number;
+    surchargePerKgFCY?: number;
+    totalCostFCY: number; // Net cost for this original type in FCY
+    totalCostUSD: number; // Converted to USD
+}
+
 export interface Purchase {
     id: string;
     batchNumber: string; // NEW: Editable, Auto-Populated
@@ -377,28 +392,33 @@ export interface Purchase {
     date: string;
     supplierId: string;
     factoryId: string; // Factory assignment
-    originalTypeId: string; // ID of OriginalType (Strict Linking)
-    originalType: string; // Display Name
-    originalProductId?: string; // ID of OriginalProduct
+    
+    // Legacy fields (kept for backward compatibility, but use items[] for multi-type)
+    originalTypeId: string; // ID of first item (for backward compatibility)
+    originalType: string; // Display Name of first item
+    originalProductId?: string; // ID of OriginalProduct of first item
+    
+    // NEW: Multi-Original Type Support
+    items: PurchaseOriginalItem[]; // Array of original types in this container
     
     // Logistics & Destination
     containerNumber?: string;
     divisionId?: string;
     subDivisionId?: string;
     
-    qtyPurchased: number; // Units
-    weightPurchased: number; // Total Kg
+    qtyPurchased: number; // Total Units across all items
+    weightPurchased: number; // Total Kg across all items
     
     // Material Cost
     currency: Currency;
     exchangeRate: number;
     
-    // Pricing Breakdown (Per Kg in FCY)
-    costPerKgFCY: number; // Gross Price
+    // Legacy pricing (kept for backward compatibility - sum of all items)
+    costPerKgFCY: number; // Average price
     discountPerKgFCY?: number;
     surchargePerKgFCY?: number;
     
-    totalCostFCY: number; // Net Total Material Cost
+    totalCostFCY: number; // Net Total Material Cost (sum of all items)
     
     // Landed Cost Components
     additionalCosts: PurchaseAdditionalCost[];

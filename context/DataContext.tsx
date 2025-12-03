@@ -25,6 +25,9 @@ type Action =
     | { type: 'LOAD_ORIGINAL_PRODUCTS'; payload: OriginalProduct[] }
     | { type: 'LOAD_EMPLOYEES'; payload: Employee[] }
     | { type: 'LOAD_CURRENCIES'; payload: CurrencyRate[] }
+    | { type: 'LOAD_PURCHASES'; payload: Purchase[] }
+    | { type: 'LOAD_BUNDLE_PURCHASES'; payload: BundlePurchase[] }
+    | { type: 'LOAD_LEDGER'; payload: LedgerEntry[] }
     | { type: 'ADD_PARTNER'; payload: Partner }
     | { type: 'ADD_ITEM'; payload: Item }
     | { type: 'ADD_ACCOUNT'; payload: Account }
@@ -168,6 +171,18 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'LOAD_CURRENCIES': {
             console.log('✅ LOADED CURRENCIES FROM FIREBASE:', action.payload.length);
             return { ...state, currencies: action.payload };
+        }
+        case 'LOAD_PURCHASES': {
+            console.log('✅ LOADED PURCHASES FROM FIREBASE:', action.payload.length);
+            return { ...state, purchases: action.payload };
+        }
+        case 'LOAD_BUNDLE_PURCHASES': {
+            console.log('✅ LOADED BUNDLE PURCHASES FROM FIREBASE:', action.payload.length);
+            return { ...state, bundlePurchases: action.payload };
+        }
+        case 'LOAD_LEDGER': {
+            console.log('✅ LOADED LEDGER ENTRIES FROM FIREBASE:', action.payload.length);
+            return { ...state, ledger: action.payload };
         }
         case 'POST_TRANSACTION': {
             const newEntries = action.payload.entries.map(e => ({
@@ -654,6 +669,54 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (error) => console.error('❌ Error loading currencies:', error)
         );
 
+        // Listen to Purchases collection - FILTERED by factoryId
+        const purchasesQuery = query(collection(db, 'purchases'), where('factoryId', '==', currentFactory.id));
+        const unsubscribePurchases = onSnapshot(
+            purchasesQuery,
+            (snapshot) => {
+                const purchases: Purchase[] = [];
+                snapshot.forEach((doc) => {
+                    purchases.push({ id: doc.id, ...doc.data() } as Purchase);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_PURCHASES', payload: purchases });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading purchases:', error)
+        );
+
+        // Listen to BundlePurchases collection - FILTERED by factoryId
+        const bundlePurchasesQuery = query(collection(db, 'bundlePurchases'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeBundlePurchases = onSnapshot(
+            bundlePurchasesQuery,
+            (snapshot) => {
+                const bundlePurchases: BundlePurchase[] = [];
+                snapshot.forEach((doc) => {
+                    bundlePurchases.push({ id: doc.id, ...doc.data() } as BundlePurchase);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_BUNDLE_PURCHASES', payload: bundlePurchases });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading bundle purchases:', error)
+        );
+
+        // Listen to Ledger collection - FILTERED by factoryId
+        const ledgerQuery = query(collection(db, 'ledger'), where('factoryId', '==', currentFactory.id));
+        const unsubscribeLedger = onSnapshot(
+            ledgerQuery,
+            (snapshot) => {
+                const ledgerEntries: LedgerEntry[] = [];
+                snapshot.forEach((doc) => {
+                    ledgerEntries.push({ id: doc.id, ...doc.data() } as LedgerEntry);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_LEDGER', payload: ledgerEntries });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading ledger:', error)
+        );
+
         // Mark as loaded after initial connection
         setTimeout(() => {
             setIsFirestoreLoaded(true);
@@ -675,6 +738,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             unsubscribeOriginalProducts();
             unsubscribeEmployees();
             unsubscribeCurrencies();
+            unsubscribePurchases();
+            unsubscribeBundlePurchases();
+            unsubscribeLedger();
         };
     }, [currentFactory]); // Re-run when factory changes
 
@@ -703,19 +769,89 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             ...entry,
             factoryId: currentFactory?.id || ''
         }));
+        
+        // Save each ledger entry to Firebase
+        if (isFirestoreLoaded) {
+            entriesWithFactory.forEach(entry => {
+                const entryData = {
+                    ...entry,
+                    createdAt: serverTimestamp()
+                };
+                
+                // Remove undefined values
+                Object.keys(entryData).forEach(key => {
+                    if ((entryData as any)[key] === undefined) {
+                        (entryData as any)[key] = null;
+                    }
+                });
+                
+                addDoc(collection(db, 'ledger'), entryData)
+                    .then((docRef) => {
+                        console.log('✅ Ledger entry saved to Firebase:', docRef.id);
+                    })
+                    .catch((error) => {
+                        console.error('❌ Error saving ledger entry to Firebase:', error);
+                    });
+            });
+        }
+        
         dispatch({ type: 'POST_TRANSACTION', payload: { entries: entriesWithFactory } });
     };
     const deleteTransaction = (transactionId: string, reason?: string, user?: string) => dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
     const addPurchase = (purchase: Purchase) => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, purchase not saved to database');
+            return;
+        }
+
         const purchaseWithFactory = {
             ...purchase,
             factoryId: currentFactory?.id || ''
         };
-        const typeDef = state.originalTypes.find(t => t.id === purchaseWithFactory.originalTypeId);
-        const packingSize = typeDef ? typeDef.packingSize : 1; 
-        const calculatedQty = purchaseWithFactory.weightPurchased / packingSize;
-        const purchaseWithQty = { ...purchaseWithFactory, qtyPurchased: calculatedQty };
-        dispatch({ type: 'ADD_PURCHASE', payload: purchaseWithQty });
+        
+        // If items array exists (new multi-type purchase), use it to calculate qty
+        // Otherwise, fall back to legacy single-type approach
+        let purchaseWithQty: Purchase;
+        
+        if (purchaseWithFactory.items && purchaseWithFactory.items.length > 0) {
+            // NEW: Multi-type purchase - qtyPurchased already calculated in items
+            const totalQty = purchaseWithFactory.items.reduce((sum, item) => sum + item.qtyPurchased, 0);
+            purchaseWithQty = { ...purchaseWithFactory, qtyPurchased: totalQty };
+        } else {
+            // LEGACY: Single-type purchase - calculate qty from packing size
+            const typeDef = state.originalTypes.find(t => t.id === purchaseWithFactory.originalTypeId);
+            const packingSize = typeDef ? typeDef.packingSize : 1; 
+            const calculatedQty = purchaseWithFactory.weightPurchased / packingSize;
+            purchaseWithQty = { ...purchaseWithFactory, qtyPurchased: calculatedQty };
+        }
+        
+        // Save to Firebase
+        const { id, ...purchaseDataToSave } = purchaseWithQty;
+        const purchaseData = {
+            ...purchaseDataToSave,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        Object.keys(purchaseData).forEach(key => {
+            if ((purchaseData as any)[key] === undefined) {
+                (purchaseData as any)[key] = null;
+            }
+        });
+
+        addDoc(collection(db, 'purchases'), purchaseData)
+            .then((docRef) => {
+                console.log('✅ Purchase saved to Firebase:', docRef.id);
+                // Firebase listener will handle adding to local state
+            })
+            .catch((error) => {
+                console.error('❌ Error saving purchase to Firebase:', error);
+                alert('Failed to save purchase: ' + error.message);
+            });
+
+        // Create journal entries
         const inventoryId = '104'; 
         const apId = '201'; 
         const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
@@ -731,11 +867,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         postTransaction(entries);
     };
     const addBundlePurchase = (bundle: BundlePurchase) => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, bundle purchase not saved to database');
+            return;
+        }
+
         const bundleWithFactory = {
             ...bundle,
             factoryId: currentFactory?.id || ''
         };
-        dispatch({ type: 'ADD_BUNDLE_PURCHASE', payload: bundleWithFactory });
+        
+        // Save to Firebase
+        const { id, ...bundleDataToSave } = bundleWithFactory;
+        const bundleData = {
+            ...bundleDataToSave,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        Object.keys(bundleData).forEach(key => {
+            if ((bundleData as any)[key] === undefined) {
+                (bundleData as any)[key] = null;
+            }
+        });
+
+        addDoc(collection(db, 'bundlePurchases'), bundleData)
+            .then((docRef) => {
+                console.log('✅ Bundle purchase saved to Firebase:', docRef.id);
+                // Firebase listener will handle adding to local state
+            })
+            .catch((error) => {
+                console.error('❌ Error saving bundle purchase to Firebase:', error);
+                alert('Failed to save bundle purchase: ' + error.message);
+            });
+
+        // Create journal entries
         const apId = '201'; const inventoryAssetId = '105'; const transactionId = `BUN-${bundle.batchNumber}`; const entries: Omit<LedgerEntry, 'id'>[] = [];
         const materialCostUSD = bundle.items.reduce((sum, item) => sum + item.totalUSD, 0); const materialCostFCY = bundle.items.reduce((sum, item) => sum + item.totalFCY, 0);
         entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: materialCostUSD, debit: materialCostUSD, credit: 0, narration: `Bundle Purchase Material: ${bundle.batchNumber}` });
