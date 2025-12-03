@@ -151,9 +151,9 @@ const BalanceSheet: React.FC = () => {
     const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const netIncome = revenue - expenses;
 
-    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
-    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
+    const totalAssets = assets.reduce((sum, a) => sum + (a?.balance || 0), 0);
+    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
+    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0) + netIncome;
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -162,10 +162,10 @@ const BalanceSheet: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
                     <div className="space-y-2">
-                        {assets.map(a => (
+                        {assets.filter(a => a && a.balance !== undefined).map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono font-medium">{a.balance.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono font-medium">{(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                     </div>
@@ -182,10 +182,10 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Liabilities</h4>
                             <div className="space-y-2">
-                                {liabilities.map(a => (
+                                {liabilities.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
                             </div>
@@ -198,10 +198,10 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Equity</h4>
                             <div className="space-y-2">
-                                {equity.map(a => (
+                                {equity.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
                                 <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">

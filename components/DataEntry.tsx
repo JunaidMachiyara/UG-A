@@ -583,6 +583,7 @@ export const DataEntry: React.FC = () => {
         addPurchase(newPurchase);
         
         // Reset Form
+        setPurSupplier(''); // Reset supplier field
         setPurCart([]);
         setPurOriginalTypeId('');
         setPurOriginalProductId('');
@@ -1687,7 +1688,7 @@ export const DataEntry: React.FC = () => {
                                         <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                         <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                     </div>
-                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2" disabled={purCart.length === 0}><FileText size={18} /> Review & Submit</button>
+                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed" disabled={!purSupplier || purCart.length === 0}><FileText size={18} /> Review & Submit</button>
                                 </form>
                             </div>
                         )}
