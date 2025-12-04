@@ -35,7 +35,7 @@ type ReportId =
     | 'cash-bank-ledger' | 'cash-book' | 'bank-book'
     | 'sales-invoices' | 'purchase-invoices'
     | 'detailed-sales' | 'detailed-purchases'
-    | 'orig-combination' | 'daily-prod' | 'rebaling' | 'section-prod' | 'feasibility'
+    | 'orig-combination' | 'daily-prod' | 'rebaling' | 'section-prod' | 'feasibility' | 'yield-analysis'
     | 'balance-sheet' | 'profit-loss' | 'receipt-payment' | 'expense-planner' | 'audit-log';
 
 interface ReportNode {
@@ -117,6 +117,7 @@ const REPORT_STRUCTURE: ReportNode[] = [
         icon: Factory,
         items: [
             { id: 'orig-combination', label: 'Original Combination (Yield)' },
+            { id: 'yield-analysis', label: 'Production Yield Analysis' },
             { id: 'daily-prod', label: 'Daily Production' },
             { id: 'rebaling', label: 'Re-baling Report' },
             { id: 'section-prod', label: 'Section-wise Production' },
@@ -146,14 +147,24 @@ const BalanceSheet: React.FC = () => {
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
     
+    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
+    const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
+    const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+    
+    // Add supplier/vendor balances (Accounts Payable) - grouped as "Creditors"
+    const suppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
+    const totalSuppliersAP = suppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+    
+    console.log('Balance Sheet - Suppliers with negative balance:', suppliers.length, suppliers);
+    
     // Net Income Calculation for Equity Section
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const netIncome = revenue - expenses;
 
-    const totalAssets = assets.reduce((sum, a) => sum + (a?.balance || 0), 0);
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
-    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0) + netIncome;
+    const totalAssets = assets.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR;
+    const totalLiabilities = liabilities.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0) + totalSuppliersAP;
+    const totalEquity = equity.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0) + netIncome;
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -165,13 +176,19 @@ const BalanceSheet: React.FC = () => {
                         {assets.filter(a => a && a.balance !== undefined).map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono font-medium">{(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
+                        {totalCustomersAR > 0 && (
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-600 font-medium">Debtors (Accounts Receivable)</span>
+                                <span className="font-mono font-medium">{totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            </div>
+                        )}
                     </div>
                     <div className="border-t border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800">
                         <span>Total Assets</span>
-                        <span>{totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalAssets || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
@@ -185,13 +202,19 @@ const BalanceSheet: React.FC = () => {
                                 {liabilities.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
+                                {totalSuppliersAP > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
+                                        <span className="font-mono font-medium">{totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Liabilities</span>
-                                <span>{totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span>{(totalLiabilities || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         </div>
 
@@ -201,23 +224,23 @@ const BalanceSheet: React.FC = () => {
                                 {equity.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
                                 <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">
                                     <span className="text-emerald-700 font-medium">Net Income (Current)</span>
-                                    <span className="font-mono font-bold text-emerald-700">{netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    <span className="font-mono font-bold text-emerald-700">{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                 </div>
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Equity</span>
-                                <span>{totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span>{(totalEquity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         </div>
                     </div>
                     <div className="border-t-2 border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800 text-lg">
                         <span>Total Liabilities & Equity</span>
-                        <span>{(totalLiabilities + totalEquity).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{((totalLiabilities || 0) + (totalEquity || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
             </div>
@@ -245,13 +268,13 @@ const ProfitLoss: React.FC = () => {
                         {revenue.map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                     </div>
                     <div className="mt-2 pt-2 border-t border-emerald-100 flex justify-between font-bold text-slate-800">
                         <span>Total Revenue</span>
-                        <span>{totalRev.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalRev || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
@@ -261,19 +284,19 @@ const ProfitLoss: React.FC = () => {
                         {expenses.map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                     </div>
                     <div className="mt-2 pt-2 border-t border-red-100 flex justify-between font-bold text-slate-800">
                         <span>Total Expenses</span>
-                        <span>{totalExp.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalExp || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
-                <div className={`p-4 rounded-xl flex justify-between items-center text-xl font-bold border ${netIncome >= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                <div className={`p-4 rounded-xl flex justify-between items-center text-xl font-bold border ${(netIncome || 0) >= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                     <span>Net Income</span>
-                    <span>{netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span>{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                 </div>
             </div>
         </div>
@@ -287,7 +310,7 @@ const StockWorth: React.FC = () => {
     const categoryWorth = useMemo(() => {
         const stats: Record<string, number> = {};
         state.items.forEach(item => {
-            const value = item.stockQty * item.weightPerUnit * item.avgCost; // Simplified valuation
+            const value = (item?.stockQty || 0) * (item?.weightPerUnit || 0) * (item?.avgCost || 0);
             stats[item.category] = (stats[item.category] || 0) + value;
         });
         return Object.entries(stats).map(([name, value]) => ({ name, value }));
@@ -300,7 +323,7 @@ const StockWorth: React.FC = () => {
             <div className="flex gap-6">
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1">
                     <h3 className="text-slate-500 text-sm font-medium uppercase mb-2">Total Inventory Value</h3>
-                    <div className="text-3xl font-bold text-slate-800">${totalWorth.toLocaleString()}</div>
+                    <div className="text-3xl font-bold text-slate-800">${(totalWorth || 0).toLocaleString()}</div>
                 </div>
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1">
                     <h3 className="text-slate-500 text-sm font-medium uppercase mb-2">Total SKUs</h3>
@@ -336,14 +359,14 @@ const StockWorth: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {state.items.map(item => {
-                            const val = item.stockQty * item.weightPerUnit * item.avgCost; // Logic: Cost is usually per Kg in back-end logic, check this
+                            const val = (item?.stockQty || 0) * (item?.weightPerUnit || 0) * (item?.avgCost || 0);
                             return (
                                 <tr key={item.id} className="hover:bg-slate-50">
                                     <td className="px-6 py-3 font-mono text-xs">{item.code}</td>
                                     <td className="px-6 py-3 font-medium">{item.name}</td>
                                     <td className="px-6 py-3 text-right">{item.stockQty} {item.packingType}</td>
-                                    <td className="px-6 py-3 text-right">${item.avgCost.toFixed(2)}</td>
-                                    <td className="px-6 py-3 text-right font-bold">${val.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                    <td className="px-6 py-3 text-right">${(item?.avgCost || 0).toFixed(2)}</td>
+                                    <td className="px-6 py-3 text-right font-bold">${(val || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                                 </tr>
                             )
                         })}
@@ -445,6 +468,225 @@ const AuditLogReport: React.FC = () => {
     );
 };
 
+const OriginalStockReport: React.FC = () => {
+    const { state } = useData();
+    const [selectedSupplier, setSelectedSupplier] = useState<string>('ALL');
+
+    // Calculate stock by grouping purchases and subtracting openings
+    const stockData = useMemo(() => {
+        const grouped: Record<string, Record<string, Record<string, { qtyPurchased: number, weightPurchased: number, qtyOpened: number, weightOpened: number, totalCost: number }>>> = {};
+
+        // Filter purchases by supplier
+        const filteredPurchases = selectedSupplier === 'ALL' 
+            ? state.purchases 
+            : state.purchases.filter(p => p.supplierId === selectedSupplier);
+
+        console.log('🔍 DEBUG: All Purchases:', state.purchases.map(p => ({
+            id: p.id,
+            supplier: state.partners.find(s => s.id === p.supplierId)?.name,
+            originalTypeId: p.originalTypeId,
+            originalProductId: p.originalProductId,
+            hasItems: !!p.items,
+            itemsCount: p.items?.length || 0,
+            items: p.items?.map(i => ({
+                typeId: i.originalTypeId,
+                typeName: state.originalTypes.find(t => t.id === i.originalTypeId)?.name,
+                productId: i.originalProductId,
+                productIdLength: i.originalProductId?.length || 0,
+                productName: i.originalProductId ? state.originalProducts?.find(op => op.id === i.originalProductId)?.name : 'NO PRODUCT'
+            }))
+        })));
+
+        console.log('🔍 Available Original Products:', state.originalProducts?.map(p => ({ id: p.id, name: p.name })));
+
+        // Add purchases (multi-type support) - NOW GROUPED BY SUPPLIER FIRST
+        filteredPurchases.forEach(purchase => {
+            const supplierId = purchase.supplierId;
+            if (!grouped[supplierId]) grouped[supplierId] = {};
+
+            if (purchase.items && purchase.items.length > 0) {
+                // New multi-type purchase
+                purchase.items.forEach(item => {
+                    if (!grouped[supplierId][item.originalTypeId]) grouped[supplierId][item.originalTypeId] = {};
+                    const productKey = (item.originalProductId && item.originalProductId.trim() !== '') ? item.originalProductId : 'NO_PRODUCT';
+                    console.log('🔍 Processing item - TypeId:', item.originalTypeId, 'ProductId:', item.originalProductId, 'ProductKey:', productKey);
+                    if (!grouped[supplierId][item.originalTypeId][productKey]) {
+                        grouped[supplierId][item.originalTypeId][productKey] = { qtyPurchased: 0, weightPurchased: 0, qtyOpened: 0, weightOpened: 0, totalCost: 0 };
+                    }
+                    grouped[supplierId][item.originalTypeId][productKey].qtyPurchased += item.qtyPurchased;
+                    grouped[supplierId][item.originalTypeId][productKey].weightPurchased += item.weightPurchased;
+                    grouped[supplierId][item.originalTypeId][productKey].totalCost += item.totalCostUSD;
+                });
+            } else {
+                // Legacy single-type purchase
+                const typeId = purchase.originalTypeId || 'UNKNOWN';
+                const productKey = purchase.originalProductId || 'NO_PRODUCT';
+                if (!grouped[supplierId][typeId]) grouped[supplierId][typeId] = {};
+                if (!grouped[supplierId][typeId][productKey]) {
+                    grouped[supplierId][typeId][productKey] = { qtyPurchased: 0, weightPurchased: 0, qtyOpened: 0, weightOpened: 0, totalCost: 0 };
+                }
+                grouped[supplierId][typeId][productKey].qtyPurchased += purchase.qtyPurchased || 0;
+                grouped[supplierId][typeId][productKey].weightPurchased += purchase.weightPurchased || 0;
+                grouped[supplierId][typeId][productKey].totalCost += purchase.totalLandedCost || 0;
+            }
+        });
+
+        // Filter openings by supplier
+        const filteredOpenings = selectedSupplier === 'ALL' 
+            ? state.originalOpenings 
+            : state.originalOpenings.filter(o => o.supplierId === selectedSupplier);
+
+        // Subtract openings - ONLY for suppliers already in grouped data
+        filteredOpenings.forEach(opening => {
+            const supplierId = opening.supplierId;
+            if (!supplierId) return; // Skip if no supplier
+            
+            // CRITICAL FIX: Only process openings for suppliers that exist in grouped (from purchases)
+            // This prevents adding suppliers that weren't in the filtered purchase list
+            if (!grouped[supplierId]) return;
+
+            const typeId = opening.originalType || 'UNKNOWN';
+            const productKey = 'NO_PRODUCT'; // Openings don't track product level
+            if (!grouped[supplierId][typeId]) grouped[supplierId][typeId] = {};
+            if (!grouped[supplierId][typeId][productKey]) {
+                grouped[supplierId][typeId][productKey] = { qtyPurchased: 0, weightPurchased: 0, qtyOpened: 0, weightOpened: 0, totalCost: 0 };
+            }
+            grouped[supplierId][typeId][productKey].qtyOpened += opening.qtyOpened;
+            grouped[supplierId][typeId][productKey].weightOpened += opening.weightOpened;
+        });
+
+        return grouped;
+    }, [state.purchases, state.originalOpenings, selectedSupplier]);
+
+    const totalStockWeight = Object.values(stockData).reduce((sum, types) => 
+        sum + Object.values(types).reduce((s1, products) => 
+            s1 + Object.values(products).reduce((s2, p) => s2 + (p.weightPurchased - p.weightOpened), 0), 0), 0
+    );
+
+    const totalStockValue = Object.values(stockData).reduce((sum, types) => 
+        sum + Object.values(types).reduce((s1, products) => 
+            s1 + Object.values(products).reduce((s2, p) => s2 + p.totalCost, 0), 0), 0
+    );
+
+    return (
+        <div className="space-y-6 animate-in fade-in">
+            {/* Filter Bar */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center gap-4">
+                    <label className="text-sm font-medium text-slate-600">Filter by Supplier:</label>
+                    <select 
+                        className="px-4 py-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800 min-w-[200px]"
+                        value={selectedSupplier}
+                        onChange={(e) => setSelectedSupplier(e.target.value)}
+                    >
+                        <option value="ALL">All Suppliers</option>
+                        {state.partners.filter(p => p.type === 'SUPPLIER').map(supplier => (
+                            <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                        ))}
+                    </select>
+                    {selectedSupplier !== 'ALL' && (
+                        <button 
+                            onClick={() => setSelectedSupplier('ALL')}
+                            className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                            Clear Filter
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <h3 className="text-slate-500 text-sm font-medium uppercase mb-2">Total Suppliers</h3>
+                    <div className="text-3xl font-bold text-blue-600">{Object.keys(stockData).length}</div>
+                    <p className="text-xs text-slate-400 mt-1">With stock in hand</p>
+                </div>
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <h3 className="text-slate-500 text-sm font-medium uppercase mb-2">Total Stock (Weight)</h3>
+                    <div className="text-3xl font-bold text-slate-800">{totalStockWeight.toLocaleString()} Kg</div>
+                </div>
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <h3 className="text-slate-500 text-sm font-medium uppercase mb-2">Total Stock Value</h3>
+                    <div className="text-3xl font-bold text-emerald-600">${totalStockValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                </div>
+            </div>
+
+            {/* Stock Table Grouped by Original Type */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 bg-slate-50 border-b border-slate-200">
+                    <h3 className="font-bold text-slate-800">Original Stock by Supplier, Type & Product</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                        {selectedSupplier === 'ALL' 
+                            ? 'Showing stock from all suppliers (grouped separately)' 
+                            : `Filtered for: ${state.partners.find(p => p.id === selectedSupplier)?.name || 'Unknown'}`
+                        }
+                    </p>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-100 text-slate-600 font-bold text-xs uppercase border-b border-slate-200">
+                            <tr>
+                                <th className="px-6 py-3">Supplier</th>
+                                <th className="px-6 py-3">Original Type</th>
+                                <th className="px-6 py-3">Product (Optional)</th>
+                                <th className="px-6 py-3 text-right">Purchased (Qty)</th>
+                                <th className="px-6 py-3 text-right">Purchased (Kg)</th>
+                                <th className="px-6 py-3 text-right">Opened (Qty)</th>
+                                <th className="px-6 py-3 text-right">Opened (Kg)</th>
+                                <th className="px-6 py-3 text-right bg-emerald-50">In Stock (Qty)</th>
+                                <th className="px-6 py-3 text-right bg-emerald-50">In Stock (Kg)</th>
+                                <th className="px-6 py-3 text-right">Value (USD)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {Object.entries(stockData).flatMap(([supplierId, types]) => {
+                                const supplier = state.partners.find(p => p.id === supplierId);
+                                const supplierName = supplier?.name || supplierId;
+                                
+                                return Object.entries(types).flatMap(([typeId, products]) => {
+                                    const originalType = state.originalTypes.find(t => t.id === typeId);
+                                    const typeName = originalType?.name || typeId;
+                                    
+                                    // Get all product rows for this type
+                                    const productRows = Object.entries(products).map(([productKey, data], idx) => {
+                                        const originalProduct = productKey !== 'NO_PRODUCT' 
+                                            ? state.originalProducts?.find(p => p.id === productKey)
+                                            : null;
+                                        const productName = originalProduct?.name || '-';
+                                        
+                                        const stockQty = data.qtyPurchased - data.qtyOpened;
+                                        const stockWeight = data.weightPurchased - data.weightOpened;
+
+                                        if (stockQty <= 0 && stockWeight <= 0) return null; // Hide empty stock
+
+                                        return (
+                                            <tr key={`${supplierId}-${typeId}-${productKey}`} className="hover:bg-slate-50">
+                                                <td className="px-6 py-3 font-medium text-blue-700">{supplierName}</td>
+                                                <td className="px-6 py-3 font-bold text-slate-800">{typeName}</td>
+                                                <td className="px-6 py-3 text-slate-600 italic">{productName}</td>
+                                                <td className="px-6 py-3 text-right font-mono">{data.qtyPurchased}</td>
+                                                <td className="px-6 py-3 text-right font-mono">{data.weightPurchased.toLocaleString()}</td>
+                                                <td className="px-6 py-3 text-right font-mono text-red-600">{data.qtyOpened}</td>
+                                                <td className="px-6 py-3 text-right font-mono text-red-600">{data.weightOpened.toLocaleString()}</td>
+                                                <td className="px-6 py-3 text-right font-mono font-bold bg-emerald-50 text-emerald-700">{stockQty}</td>
+                                                <td className="px-6 py-3 text-right font-mono font-bold bg-emerald-50 text-emerald-700">{stockWeight.toLocaleString()}</td>
+                                                <td className="px-6 py-3 text-right font-mono text-slate-700">${data.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            </tr>
+                                        );
+                                    }).filter(Boolean); // Remove null entries
+                                    
+                                    return productRows;
+                                });
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const PlaceholderReport: React.FC<{ title: string }> = ({ title }) => (
     <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 animate-in fade-in">
         <FileText size={48} className="mb-4 opacity-20" />
@@ -452,6 +694,245 @@ const PlaceholderReport: React.FC<{ title: string }> = ({ title }) => (
         <p className="text-sm mt-2">This report is under construction.</p>
     </div>
 );
+
+// Production Yield Analysis Report
+const YieldAnalysisReport: React.FC = () => {
+    const { state } = useData();
+    const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | '7days' | '30days' | 'custom'>('7days');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+
+    const yieldData = useMemo(() => {
+        const now = new Date();
+        const today = now.toISOString().split('T')[0];
+        const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000).toISOString().split('T')[0];
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
+
+        let filterStart = '';
+        let filterEnd = today;
+        
+        switch (dateFilter) {
+            case 'today': 
+                filterStart = today; 
+                filterEnd = today;
+                break;
+            case 'yesterday': 
+                filterStart = yesterday; 
+                filterEnd = yesterday;
+                break;
+            case '7days': 
+                filterStart = sevenDaysAgo; 
+                break;
+            case '30days': 
+                filterStart = thirtyDaysAgo; 
+                break;
+            case 'custom':
+                filterStart = startDate || sevenDaysAgo;
+                filterEnd = endDate || today;
+                break;
+        }
+
+        // Filter data by date range
+        const openings = (state.originalOpenings || []).filter(b => b.date >= filterStart && b.date <= filterEnd);
+        const productions = (state.productions || []).filter(p => 
+            p.date >= filterStart && 
+            p.date <= filterEnd && 
+            p.qtyProduced > 0 && 
+            !p.isRebaling // Exclude re-baling from production reports
+        );
+
+        // Calculate totals
+        const totalRawMaterialKg = openings.reduce((sum, o) => sum + (o.weightOpened || 0), 0);
+        const totalFinishedGoodsKg = productions.reduce((sum, p) => sum + (p.weightProduced || 0), 0);
+        const yieldPercentage = totalRawMaterialKg > 0 ? (totalFinishedGoodsKg / totalRawMaterialKg) * 100 : 0;
+        const wastageKg = totalRawMaterialKg - totalFinishedGoodsKg;
+        const wastagePercentage = totalRawMaterialKg > 0 ? (wastageKg / totalRawMaterialKg) * 100 : 0;
+
+        // Group by category
+        const categoryBreakdown = productions.reduce((acc, p) => {
+            const item = state.items.find(i => i.id === p.itemId);
+            const category = item?.category || 'Unknown';
+            const avgCost = item?.avgCost || 0;
+            const worth = p.qtyProduced * avgCost;
+            
+            const existing = acc.find(x => x.category === category);
+            if (existing) {
+                existing.qty += p.qtyProduced;
+                existing.weight += (p.weightProduced || 0);
+                existing.worth += worth;
+            } else {
+                acc.push({ category, qty: p.qtyProduced, weight: p.weightProduced || 0, worth });
+            }
+            return acc;
+        }, [] as { category: string; qty: number; weight: number; worth: number }[]);
+
+        // Original combinations
+        const originalCombinations = openings.reduce((acc, o) => {
+            const item = state.items.find(i => i.id === o.itemId);
+            const originalType = o.originalType || item?.name || 'Unknown';
+            const existing = acc.find(x => x.originalType === originalType);
+            if (existing) {
+                existing.weight += (o.weightOpened || 0);
+                existing.count += 1;
+            } else {
+                acc.push({ originalType, weight: o.weightOpened || 0, count: 1 });
+            }
+            return acc;
+        }, [] as { originalType: string; weight: number; count: number }[]);
+
+        // Net profit/loss: (Total Production Worth) - (Raw Material Cost + Working Cost)
+        const totalWorth = categoryBreakdown.reduce((sum, c) => sum + c.worth, 0);
+        const rawMaterialCost = totalRawMaterialKg * 1; // $1 per kg for raw material
+        const workingCost = totalRawMaterialKg * 0.25; // $0.25 per kg working cost
+        const netProfitLoss = totalWorth - (rawMaterialCost + workingCost);
+
+        return {
+            totalRawMaterialKg,
+            totalFinishedGoodsKg,
+            yieldPercentage,
+            wastageKg,
+            wastagePercentage,
+            categoryBreakdown: categoryBreakdown.sort((a, b) => b.weight - a.weight),
+            originalCombinations: originalCombinations.sort((a, b) => b.weight - a.weight),
+            netProfitLoss,
+            totalWorth
+        };
+    }, [state.originalOpenings, state.productions, state.items, dateFilter, startDate, endDate]);
+
+    return (
+        <div className="space-y-6 animate-in fade-in">
+            {/* Filter Bar */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                    <h3 className="text-lg font-bold text-slate-800">Date Filter</h3>
+                    <div className="flex gap-2">
+                        {(['today', 'yesterday', '7days', '30days', 'custom'] as const).map((filter) => (
+                            <button
+                                key={filter}
+                                onClick={() => setDateFilter(filter)}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                    dateFilter === filter
+                                        ? 'bg-blue-600 text-white shadow-md'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                            >
+                                {filter === 'today' ? 'Today' : filter === 'yesterday' ? 'Yesterday' : filter === '7days' ? 'Last 7 Days' : filter === '30days' ? 'Last 30 Days' : 'Custom'}
+                            </button>
+                        ))}
+                    </div>
+                    {dateFilter === 'custom' && (
+                        <div className="flex gap-2 items-center">
+                            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 border border-slate-300 rounded-lg" />
+                            <span className="text-slate-500">to</span>
+                            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 border border-slate-300 rounded-lg" />
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <div className="bg-gradient-to-br from-amber-50 to-amber-100 p-4 rounded-xl border border-amber-200 shadow-sm">
+                    <div className="text-xs font-bold text-amber-700 uppercase mb-1">Raw Material</div>
+                    <div className="text-2xl font-bold text-amber-900">{yieldData.totalRawMaterialKg.toLocaleString()}</div>
+                    <div className="text-xs text-amber-600">Kg Opened</div>
+                </div>
+                <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-xl border border-emerald-200 shadow-sm">
+                    <div className="text-xs font-bold text-emerald-700 uppercase mb-1">Finished Goods</div>
+                    <div className="text-2xl font-bold text-emerald-900">{yieldData.totalFinishedGoodsKg.toLocaleString()}</div>
+                    <div className="text-xs text-emerald-600">Kg Produced</div>
+                </div>
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl border border-blue-200 shadow-sm">
+                    <div className="text-xs font-bold text-blue-700 uppercase mb-1">Yield %</div>
+                    <div className="text-2xl font-bold text-blue-900">{yieldData.yieldPercentage.toFixed(1)}%</div>
+                    <div className="text-xs text-blue-600">Efficiency</div>
+                </div>
+                <div className="bg-gradient-to-br from-red-50 to-red-100 p-4 rounded-xl border border-red-200 shadow-sm">
+                    <div className="text-xs font-bold text-red-700 uppercase mb-1">Wastage</div>
+                    <div className="text-2xl font-bold text-red-900">{yieldData.wastagePercentage.toFixed(1)}%</div>
+                    <div className="text-xs text-red-600">{yieldData.wastageKg.toFixed(0)} Kg</div>
+                </div>
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-xl border border-purple-200 shadow-sm">
+                    <div className="text-xs font-bold text-purple-700 uppercase mb-1">Net P/L</div>
+                    <div className={`text-2xl font-bold ${yieldData.netProfitLoss >= 0 ? 'text-emerald-900' : 'text-red-900'}`}>
+                        ${yieldData.netProfitLoss.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                    </div>
+                    <div className="text-xs text-purple-600">Profit/Loss</div>
+                </div>
+            </div>
+
+            {/* Category Breakdown Table */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-800 mb-4">Production by Category</h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead className="bg-slate-50 border-b-2 border-slate-200">
+                            <tr>
+                                <th className="px-4 py-3 text-left font-bold text-slate-700">Category</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">Quantity</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">Weight (Kg)</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">Worth ($)</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">% of Total</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {yieldData.categoryBreakdown.map((cat, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50">
+                                    <td className="px-4 py-3 font-medium text-slate-800">{cat.category}</td>
+                                    <td className="px-4 py-3 text-right text-slate-600">{cat.qty.toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right font-mono text-slate-800">{cat.weight.toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right font-mono text-emerald-700 font-bold">${cat.worth.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                                    <td className="px-4 py-3 text-right text-blue-600 font-bold">{((cat.weight / yieldData.totalFinishedGoodsKg) * 100).toFixed(1)}%</td>
+                                </tr>
+                            ))}
+                            <tr className="bg-slate-100 font-bold">
+                                <td className="px-4 py-3">TOTAL</td>
+                                <td className="px-4 py-3 text-right">{yieldData.categoryBreakdown.reduce((sum, c) => sum + c.qty, 0).toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right">{yieldData.totalFinishedGoodsKg.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-emerald-700">${yieldData.totalWorth.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                                <td className="px-4 py-3 text-right text-blue-600">100.0%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Original Recipe Mix Table */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-800 mb-4">Original Recipe Mix (Input Combinations)</h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead className="bg-slate-50 border-b-2 border-slate-200">
+                            <tr>
+                                <th className="px-4 py-3 text-left font-bold text-slate-700">Original Type</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">Weight Opened (Kg)</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">Times Used</th>
+                                <th className="px-4 py-3 text-right font-bold text-slate-700">% of Total</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {yieldData.originalCombinations.map((orig, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50">
+                                    <td className="px-4 py-3 font-medium text-slate-800">{orig.originalType}</td>
+                                    <td className="px-4 py-3 text-right font-mono text-slate-800">{orig.weight.toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right text-blue-600 font-bold">{orig.count}x</td>
+                                    <td className="px-4 py-3 text-right text-amber-600 font-bold">{((orig.weight / yieldData.totalRawMaterialKg) * 100).toFixed(1)}%</td>
+                                </tr>
+                            ))}
+                            <tr className="bg-slate-100 font-bold">
+                                <td className="px-4 py-3">TOTAL</td>
+                                <td className="px-4 py-3 text-right">{yieldData.totalRawMaterialKg.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right">{yieldData.originalCombinations.reduce((sum, o) => sum + o.count, 0)}</td>
+                                <td className="px-4 py-3 text-right text-amber-600">100.0%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // --- Main Reports Module ---
 
@@ -468,7 +949,9 @@ export const ReportsModule: React.FC = () => {
             case 'balance-sheet': return <BalanceSheet />;
             case 'profit-loss': return <ProfitLoss />;
             case 'stock-worth': return <StockWorth />;
+            case 'orig-stock': return <OriginalStockReport />;
             case 'audit-log': return <AuditLogReport />;
+            case 'yield-analysis': return <YieldAnalysisReport />;
             default: return <PlaceholderReport title={REPORT_STRUCTURE.flatMap(c => c.items).find(i => i.id === activeReport)?.label || 'Report'} />;
         }
     };

@@ -194,6 +194,126 @@ const YieldWidget = () => {
 
 export const Dashboard: React.FC = () => {
     const { state } = useData();
+    const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('7days');
+    const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.25);
+
+    // Production Yield Analysis Data
+    const productionYieldData = useMemo(() => {
+        const now = new Date();
+        const today = now.toISOString().split('T')[0];
+        const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000).toISOString().split('T')[0];
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
+
+        let startDate = '';
+        let endDate = today;
+        
+        switch (yieldTimeFilter) {
+            case 'today': 
+                startDate = today; 
+                endDate = today;
+                break;
+            case 'yesterday': 
+                startDate = yesterday; 
+                endDate = yesterday;
+                break;
+            case '7days': 
+                startDate = sevenDaysAgo; 
+                break;
+            case '30days': 
+                startDate = thirtyDaysAgo; 
+                break;
+        }
+
+        // Filter bale openings and production by date range (with safe checks)
+        const openings = (state.originalOpenings || []).filter(b => b.date >= startDate && b.date <= endDate);
+        // IMPORTANT: Exclude re-baling from production reports
+        const productions = (state.productions || []).filter(p => 
+            p.date >= startDate && 
+            p.date <= endDate && 
+            p.qtyProduced > 0 && 
+            !p.isRebaling // Exclude re-baling transactions
+        );
+
+        // Calculate total raw material consumed (from openings)
+        const totalRawMaterialKg = openings.reduce((sum, o) => {
+            return sum + (o.weightOpened || 0);
+        }, 0);
+
+        // Calculate total finished goods produced
+        const totalFinishedGoodsKg = productions.reduce((sum, p) => sum + (p.weightProduced || 0), 0);
+
+        // Calculate yield percentage
+        const yieldPercentage = totalRawMaterialKg > 0 ? (totalFinishedGoodsKg / totalRawMaterialKg) * 100 : 0;
+
+        // Group by category for detailed breakdown
+        const categoryBreakdown = productions.reduce((acc, p) => {
+            const item = state.items.find(i => i.id === p.itemId);
+            const category = item?.category || 'Unknown';
+            const avgCost = item?.avgCost || 0;
+            const worth = p.qtyProduced * avgCost;
+            
+            const existing = acc.find(x => x.category === category);
+            if (existing) {
+                existing.qty += p.qtyProduced;
+                existing.weight += (p.weightProduced || 0);
+                existing.worth += worth;
+            } else {
+                acc.push({
+                    category,
+                    qty: p.qtyProduced,
+                    weight: p.weightProduced || 0,
+                    worth
+                });
+            }
+            return acc;
+        }, [] as { category: string; qty: number; weight: number; worth: number }[]);
+
+        // Sort by weight descending and take top 10
+        const topCategories = categoryBreakdown.sort((a, b) => b.weight - a.weight).slice(0, 10);
+        
+        // Track original combinations used
+        const originalCombinations = openings.reduce((acc, o) => {
+            const item = state.items.find(i => i.id === o.itemId);
+            const originalType = o.originalType || item?.name || 'Unknown';
+            const existing = acc.find(x => x.originalType === originalType);
+            if (existing) {
+                existing.weight += (o.weightOpened || 0);
+                existing.count += 1;
+            } else {
+                acc.push({
+                    originalType,
+                    weight: o.weightOpened || 0,
+                    count: 1
+                });
+            }
+            return acc;
+        }, [] as { originalType: string; weight: number; count: number }[]);
+        
+        const topOriginals = originalCombinations.sort((a, b) => b.weight - a.weight).slice(0, 10);
+
+        // Calculate Net Profit/Loss: (Production Value) - (Raw Material Cost + Working Cost)
+        const rawMaterialCost = totalRawMaterialKg * 1; // $1 per kg for raw material
+        const workingCost = totalRawMaterialKg * workingCostPerKg; // Adjustable working cost per kg
+        const totalProductionValue = productions.reduce((sum, p) => {
+            const item = state.items.find(i => i.id === p.itemId);
+            const productionValue = p.qtyProduced * (item?.avgCost || 0);
+            return sum + productionValue;
+        }, 0);
+        const netProfitLoss = totalProductionValue - (rawMaterialCost + workingCost);
+
+        return {
+            totalRawMaterialKg,
+            totalFinishedGoodsKg,
+            yieldPercentage,
+            wastageKg: totalRawMaterialKg - totalFinishedGoodsKg,
+            wastagePercentage: totalRawMaterialKg > 0 ? ((totalRawMaterialKg - totalFinishedGoodsKg) / totalRawMaterialKg) * 100 : 0,
+            netProfitLoss,
+            topCategories,
+            topOriginals,
+            totalCategories: categoryBreakdown.length
+        };
+    }, [state.originalOpenings, state.productions, state.items, yieldTimeFilter, workingCostPerKg]);
 
     // Enhanced Financial Metrics
     const metrics = useMemo(() => {
@@ -409,6 +529,247 @@ export const Dashboard: React.FC = () => {
                     change={metrics.currentRatio >= 1.5 ? 'Excellent' : 'Fair'}
                     delay={700}
                 />
+            </div>
+
+            {/* Production Yield Analysis - FEATURED AT TOP */}
+            <div className="bg-gradient-to-br from-white via-amber-50/40 to-orange-50/30 p-8 rounded-3xl border-2 border-amber-200/50 shadow-2xl hover:shadow-3xl transition-all duration-500 animate-in slide-in-from-top-8 fade-in">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-gradient-to-br from-amber-400 to-orange-600 rounded-2xl shadow-lg animate-pulse">
+                            <Factory className="text-white" size={32} />
+                        </div>
+                        <div>
+                            <h3 className="text-2xl font-bold bg-gradient-to-r from-slate-900 via-amber-600 to-orange-600 bg-clip-text text-transparent">
+                                Production Yield Analysis
+                            </h3>
+                            <p className="text-sm text-slate-500 mt-1">Daily production efficiency monitoring</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-4 items-center">
+                        {/* Working Cost Adjustment */}
+                        <div className="bg-white/80 backdrop-blur-sm px-4 py-3 rounded-xl shadow-md border border-purple-200">
+                            <label className="text-xs font-bold text-purple-700 uppercase mb-1 block">Working Cost</label>
+                            <div className="flex items-center gap-3">
+                                <input 
+                                    type="range" 
+                                    min="0.1" 
+                                    max="0.5" 
+                                    step="0.05" 
+                                    value={workingCostPerKg} 
+                                    onChange={(e) => setWorkingCostPerKg(parseFloat(e.target.value))}
+                                    className="w-32 h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer"
+                                    style={{
+                                        accentColor: '#9333ea'
+                                    }}
+                                />
+                                <span className="text-lg font-bold text-purple-900 min-w-[60px]">${workingCostPerKg.toFixed(2)}/kg</span>
+                            </div>
+                        </div>
+                        
+                        {/* Time Filter Buttons */}
+                        <div className="flex gap-2 bg-white/80 backdrop-blur-sm p-1.5 rounded-xl shadow-md border border-amber-100">
+                            {(['today', 'yesterday', '7days', '30days'] as const).map((filter) => (
+                                <button
+                                    key={filter}
+                                    onClick={() => setYieldTimeFilter(filter)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-300 ${
+                                        yieldTimeFilter === filter
+                                            ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md scale-105'
+                                            : 'text-slate-600 hover:bg-amber-50 hover:text-amber-700'
+                                    }`}
+                                >
+                                    {filter === 'today' ? 'Today' : filter === 'yesterday' ? 'Yesterday' : filter === '7days' ? 'Last 7 Days' : 'Last 30 Days'}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-6">
+                    {/* Key Metrics Cards */}
+                    <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-amber-100 hover:scale-105 transition-transform">
+                        <div className="text-xs font-bold text-amber-600 uppercase mb-2">Raw Material Used</div>
+                        <div className="text-3xl font-bold text-slate-900 mb-1">{productionYieldData.totalRawMaterialKg.toLocaleString()}</div>
+                        <div className="text-xs text-slate-500">Kilograms Opened</div>
+                    </div>
+
+                    <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-emerald-100 hover:scale-105 transition-transform">
+                        <div className="text-xs font-bold text-emerald-600 uppercase mb-2">Finished Goods</div>
+                        <div className="text-3xl font-bold text-slate-900 mb-1">{productionYieldData.totalFinishedGoodsKg.toLocaleString()}</div>
+                        <div className="text-xs text-slate-500">Kilograms Produced</div>
+                    </div>
+
+                    <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-blue-100 hover:scale-105 transition-transform">
+                        <div className="text-xs font-bold text-blue-600 uppercase mb-2">Yield Efficiency</div>
+                        <div className="text-3xl font-bold text-blue-600 mb-1">{productionYieldData.yieldPercentage.toFixed(1)}%</div>
+                        <div className="text-xs text-slate-500">Production Yield</div>
+                    </div>
+
+                    <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-red-100 hover:scale-105 transition-transform">
+                        <div className="text-xs font-bold text-red-600 uppercase mb-2">Wastage</div>
+                        <div className="text-3xl font-bold text-red-600 mb-1">{productionYieldData.wastagePercentage.toFixed(1)}%</div>
+                        <div className="text-xs text-slate-500">{productionYieldData.wastageKg.toFixed(0)} Kg Loss</div>
+                    </div>
+
+                    <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-purple-100 hover:scale-105 transition-transform">
+                        <div className="text-xs font-bold text-purple-600 uppercase mb-2">Net Profit/Loss</div>
+                        <div className={`text-3xl font-bold mb-1 ${productionYieldData.netProfitLoss >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            ${productionYieldData.netProfitLoss.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        </div>
+                        <div className="text-xs text-slate-500">Production Value</div>
+                    </div>
+                </div>
+
+                {/* Production Analysis - Full Width Chart + Compact Original Mix */}
+                <div className="bg-white/90 backdrop-blur-sm p-6 rounded-2xl shadow-lg border border-amber-100">
+                    <h4 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                        <TrendingUp size={20} className="text-amber-600" />
+                        Top {productionYieldData.topCategories.length} Categories - Production Analysis
+                    </h4>
+                    
+                    {/* Overlapping Bar Chart - Weight and Worth */}
+                    <div className="h-[450px] mb-6">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart 
+                                data={productionYieldData.topCategories} 
+                                margin={{ top: 20, right: 30, left: 60, bottom: 100 }}
+                                barCategoryGap="20%"
+                                barGap={1}
+                            >
+                                <defs>
+                                    <linearGradient id="weightGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#f59e0b" stopOpacity={1}/>
+                                        <stop offset="100%" stopColor="#d97706" stopOpacity={0.9}/>
+                                    </linearGradient>
+                                    <linearGradient id="worthGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.7}/>
+                                        <stop offset="100%" stopColor="#059669" stopOpacity={0.55}/>
+                                    </linearGradient>
+                                    {/* Add subtle shadow effect */}
+                                    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                                        <feDropShadow dx="0" dy="4" stdDeviation="3" floodOpacity="0.3"/>
+                                    </filter>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" strokeOpacity={0.5} />
+                                <XAxis 
+                                    dataKey="category" 
+                                    stroke="#64748b" 
+                                    tick={{ fill: '#64748b', fontSize: 12, fontWeight: 600 }} 
+                                    angle={-45} 
+                                    textAnchor="end" 
+                                    height={120}
+                                />
+                                <YAxis 
+                                    stroke="#64748b" 
+                                    tick={{ fill: '#64748b', fontSize: 11 }} 
+                                    label={{ 
+                                        value: 'Weight (Kg) / Worth ($)', 
+                                        angle: -90, 
+                                        position: 'insideLeft', 
+                                        style: { fill: '#64748b', fontWeight: 'bold', fontSize: 12 } 
+                                    }}
+                                />
+                                <Tooltip 
+                                    content={({ active, payload }) => {
+                                        if (active && payload && payload.length) {
+                                            return (
+                                                <div className="bg-white/98 backdrop-blur-xl border-2 border-amber-300 rounded-2xl p-5 shadow-2xl animate-in zoom-in-95 duration-150">
+                                                    <p className="font-bold text-lg text-slate-900 mb-3 pb-2 border-b-2 border-amber-200">{payload[0].payload.category}</p>
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center justify-between gap-8">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="w-4 h-4 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-md" />
+                                                                <span className="text-sm font-semibold text-slate-600">Weight:</span>
+                                                            </div>
+                                                            <span className="text-base font-bold text-amber-700">{payload[0].payload.weight.toLocaleString()} Kg</span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between gap-8">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="w-4 h-4 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-md" />
+                                                                <span className="text-sm font-semibold text-slate-600">Worth:</span>
+                                                            </div>
+                                                            <span className="text-base font-bold text-emerald-700">${payload[0].payload.worth.toLocaleString(undefined, {maximumFractionDigits: 0})}</span>
+                                                        </div>
+                                                        <div className="pt-2 mt-2 border-t border-slate-200">
+                                                            <div className="flex items-center justify-between gap-8">
+                                                                <span className="text-xs text-slate-500">Quantity:</span>
+                                                                <span className="text-sm font-semibold text-slate-700">{payload[0].payload.qty.toLocaleString()} units</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+                                        return null;
+                                    }}
+                                />
+                                <Legend 
+                                    wrapperStyle={{ paddingTop: '20px' }}
+                                    iconType="circle"
+                                />
+                                {/* Weight Bar - Solid Background */}
+                                <Bar 
+                                    dataKey="weight" 
+                                    fill="url(#weightGradient)" 
+                                    radius={[10, 10, 0, 0]}
+                                    animationDuration={1500}
+                                    name="Weight (Kg)"
+                                    barSize={40}
+                                    filter="url(#shadow)"
+                                >
+                                    <LabelList 
+                                        dataKey="weight" 
+                                        position="top" 
+                                        formatter={(value: number) => `${value.toLocaleString()} Kg`} 
+                                        style={{ fontSize: 12, fill: '#78350f', fontWeight: 'bold' }} 
+                                        offset={12}
+                                    />
+                                </Bar>
+                                {/* Worth Bar - Translucent Overlay */}
+                                <Bar 
+                                    dataKey="worth" 
+                                    fill="url(#worthGradient)" 
+                                    radius={[10, 10, 0, 0]}
+                                    animationDuration={1500}
+                                    animationBegin={300}
+                                    name="Worth ($)"
+                                    barSize={40}
+                                >
+                                    <LabelList 
+                                        dataKey="worth" 
+                                        position="top" 
+                                        formatter={(value: number) => `$${(value/1000).toFixed(1)}K`} 
+                                        style={{ fontSize: 12, fill: '#064e3b', fontWeight: 'bold' }} 
+                                        offset={2}
+                                    />
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                    
+                    {/* Compact Original Mix Table */}
+                    <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 p-4 rounded-xl border border-blue-200">
+                        <h5 className="text-sm font-bold text-blue-800 mb-3 flex items-center gap-2">
+                            <Package size={16} className="text-blue-600" />
+                            Original Recipe Mix (Input Materials)
+                        </h5>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                            {productionYieldData.topOriginals.map((orig, idx) => (
+                                <div key={idx} className="bg-white/80 backdrop-blur-sm p-3 rounded-lg border border-blue-200 hover:shadow-md transition-shadow">
+                                    <div className="text-xs font-semibold text-slate-600 truncate" title={orig.originalType}>
+                                        {orig.originalType}
+                                    </div>
+                                    <div className="flex items-baseline gap-1 mt-1">
+                                        <span className="text-lg font-bold text-blue-900">{orig.weight.toLocaleString()}</span>
+                                        <span className="text-xs text-blue-600">Kg</span>
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-0.5">Used {orig.count}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {/* Main Charts Grid */}

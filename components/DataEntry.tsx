@@ -41,15 +41,51 @@ import {
 
 type ModuleType = 'production' | 'purchase' | 'sales';
 
+// Supervisor PIN for secure actions
+const SUPERVISOR_PIN = '7860';
+
 export const DataEntry: React.FC = () => {
-    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, postBaleOpening, addPurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
+    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
     const location = useLocation();
     const setupConfigs = useSetupConfigs();
+    
+    // Item formatter for dropdowns: "Code - Name - Category - Package Size"
+    const formatItemOption = (item: any) => {
+        return `${item.code} - ${item.name} - ${item.category} - ${item.packingType}`;
+    };
+    
+    const formatItemSelected = (item: any) => {
+        return `${item.code} - ${item.name}`;
+    };
+    
+    // Helper function to get the next available serial number for an item
+    const getNextSerialNumber = (itemId: string): number => {
+        // Check tempSerialTracker first (for current session)
+        if (tempSerialTracker[itemId]) {
+            return tempSerialTracker[itemId];
+        }
+        
+        // Find the highest serial number used in ALL productions for this item
+        const itemProductions = state.productions.filter(p => p.itemId === itemId && p.serialEnd);
+        if (itemProductions.length > 0) {
+            const maxSerial = Math.max(...itemProductions.map(p => p.serialEnd || 0));
+            return maxSerial + 1;
+        }
+        
+        // Fall back to item's nextSerial or 1
+        const item = state.items.find(i => i.id === itemId);
+        return item?.nextSerial || 1;
+    };
     
     // --- Quick Add State ---
     const [quickAddConfig, setQuickAddConfig] = useState<CrudConfig | null>(null);
     const [quickAddDefaults, setQuickAddDefaults] = useState<any>(null);
     const [showQuickAddModal, setShowQuickAddModal] = useState(false);
+
+    // --- Auth Modal State ---
+    const [authModalOpen, setAuthModalOpen] = useState(false);
+    const [authPin, setAuthPin] = useState('');
+    const [pendingPurchaseAction, setPendingPurchaseAction] = useState<{ type: 'DELETE' | 'EDIT', purchaseId: string } | null>(null);
 
     // Helper to open Quick Add Modal
     const openQuickAdd = (config: CrudConfig, defaults?: any) => {
@@ -97,6 +133,7 @@ export const DataEntry: React.FC = () => {
     const [ooType, setOoType] = useState(''); // Stores originalTypeId
     const [ooBatch, setOoBatch] = useState('');
     const [ooQty, setOoQty] = useState('');
+    const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
 
     // --- Bales Opening State ---
     const [boDate, setBoDate] = useState(new Date().toISOString().split('T')[0]);
@@ -122,6 +159,8 @@ export const DataEntry: React.FC = () => {
     const [rbProduceList, setRbProduceList] = useState<any[]>([]);
 
     // --- Original Purchase State ---
+    const [purMode, setPurMode] = useState<'create' | 'manage'>('create');
+    const [purEditingId, setPurEditingId] = useState<string | null>(null);
     const [purDate, setPurDate] = useState(new Date().toISOString().split('T')[0]);
     const [purBatch, setPurBatch] = useState('11001'); // Auto-populated
     const [purSupplier, setPurSupplier] = useState('');
@@ -461,14 +500,35 @@ export const DataEntry: React.FC = () => {
             costPerKg: availableStockInfo.avgCost,
             totalValue: finalWeight * availableStockInfo.avgCost
         };
-        addOriginalOpening(newOpening);
+        
+        // Add to staging cart instead of immediate save
+        setStagedOriginalOpenings([...stagedOriginalOpenings, newOpening]);
         
         // Reset Form
         setOoQty('');
         setOoBatch('');
         setOoType('');
         
-        alert("Opening Recorded & Journal Posted");
+        // No alert - user can add more
+    };
+    
+    // Complete/Submit all staged openings
+    const handleCompleteOriginalOpenings = () => {
+        if (stagedOriginalOpenings.length === 0) {
+            alert('No openings to submit');
+            return;
+        }
+        
+        stagedOriginalOpenings.forEach(opening => {
+            addOriginalOpening(opening);
+        });
+        
+        setStagedOriginalOpenings([]);
+        alert(`${stagedOriginalOpenings.length} opening(s) recorded successfully!`);
+    };
+    
+    const handleRemoveStagedOpening = (id: string) => {
+        setStagedOriginalOpenings(stagedOriginalOpenings.filter(o => o.id !== id));
     };
     
     // --- History Table Data ---
@@ -477,8 +537,21 @@ export const DataEntry: React.FC = () => {
     }, [state.originalOpenings, ooDate]);
 
     const handleDeleteOpening = (id: string) => {
-        if(window.confirm('Are you sure? This will reverse the Journal Entry associated with this opening.')) {
+        if(window.confirm('Delete this opening? This will reverse the accounting entries (restore raw materials and remove WIP/COGS).')) {
             deleteOriginalOpening(id);
+            alert('Opening deleted successfully!');
+        }
+    }
+
+    const handleDeleteProduction = async (id: string) => {
+        const pin = prompt('Enter Supervisor PIN to delete production entry:');
+        if (pin !== SUPERVISOR_PIN) {
+            alert('❌ Invalid PIN! Deletion cancelled.');
+            return;
+        }
+        if(window.confirm('Delete this production? This will reverse all accounting entries (restore Work in Progress, remove Finished Goods and Production Gain).')) {
+            await deleteProduction(id);
+            alert('✅ Production deleted successfully! Ledger entries reversed.');
         }
     }
 
@@ -510,7 +583,8 @@ export const DataEntry: React.FC = () => {
         
         // Validation for Container Number
         if (purContainer) {
-            const isDuplicateOriginal = state.purchases.some(p => p.containerNumber === purContainer);
+            // When editing, exclude the current purchase from duplicate check
+            const isDuplicateOriginal = state.purchases.some(p => p.containerNumber === purContainer && p.id !== purEditingId);
             const isDuplicateBundle = state.bundlePurchases.some(p => p.containerNumber === purContainer);
             if (isDuplicateOriginal || isDuplicateBundle) {
                 alert('Duplicate Container Number found! Please verify.');
@@ -528,6 +602,16 @@ export const DataEntry: React.FC = () => {
     };
 
     const handleFinalPurchaseSave = () => {
+        console.log('🔵 handleFinalPurchaseSave called, purEditingId:', purEditingId);
+        
+        if (purEditingId) {
+            // Update existing purchase
+            console.log('🔵 Calling handleUpdatePurchase for edit mode');
+            handleUpdatePurchase();
+            return;
+        }
+
+        // Create new purchase
         if (purCart.length === 0) {
             alert('Cart is empty!');
             return;
@@ -597,6 +681,156 @@ export const DataEntry: React.FC = () => {
         setAdditionalCosts([]);
         setShowPurSummary(false);
         setPurBatch((prev) => (parseInt(prev) + 1).toString()); 
+    };
+
+    // --- Secure Action Handlers ---
+    const initiatePurchaseAction = (type: 'DELETE' | 'EDIT', purchaseId: string) => {
+        setPendingPurchaseAction({ type, purchaseId });
+        setAuthPin('');
+        setAuthModalOpen(true);
+    };
+
+    const confirmPurchaseAuthAction = () => {
+        if (authPin.trim() !== SUPERVISOR_PIN) {
+            alert('Invalid PIN. Please try again.');
+            setAuthPin('');
+            return;
+        }
+        
+        if (pendingPurchaseAction) {
+            if (pendingPurchaseAction.type === 'DELETE') {
+                handleDeletePurchaseConfirmed(pendingPurchaseAction.purchaseId);
+            } else if (pendingPurchaseAction.type === 'EDIT') {
+                handleEditPurchaseConfirmed(pendingPurchaseAction.purchaseId);
+            }
+        }
+        
+        setAuthModalOpen(false);
+        setAuthPin('');
+        setPendingPurchaseAction(null);
+    };
+
+    // --- Purchase Management Functions ---
+    const handleEditPurchaseConfirmed = (purchaseId: string) => {
+        const purchase = state.purchases.find(p => p.id === purchaseId);
+        if (!purchase) return;
+        setPurEditingId(purchase.id);
+        setPurDate(purchase.date);
+        setPurBatch(purchase.batchNumber);
+        setPurSupplier(purchase.supplierId);
+        setPurCurrency(purchase.currency);
+        setPurExchangeRate(purchase.exchangeRate);
+        setPurContainer(purchase.containerNumber || '');
+        setPurDivision(purchase.divisionId || '');
+        setPurSubDivision(purchase.subDivisionId || '');
+        setPurCart(purchase.items || []);
+        setAdditionalCosts(purchase.additionalCosts || []);
+        setPurMode('create'); // Switch to form view
+    };
+
+    const handleUpdatePurchase = () => {
+        if (!purEditingId || purCart.length === 0) {
+            alert('No purchase to update or cart is empty!');
+            return;
+        }
+
+        // Get the existing purchase to preserve fields like status
+        const existingPurchase = state.purchases.find(p => p.id === purEditingId);
+        
+        if (!existingPurchase) {
+            alert('Purchase not found!');
+            return;
+        }
+
+        // Aggregate cart totals
+        const totalWeight = purCart.reduce((sum, item) => sum + item.weightPurchased, 0);
+        const totalQty = purCart.reduce((sum, item) => sum + item.qtyPurchased, 0);
+        const totalMaterialCostFCY = purCart.reduce((sum, item) => sum + item.totalCostFCY, 0);
+        const totalMaterialCostUSD = purCart.reduce((sum, item) => sum + item.totalCostUSD, 0);
+        const totalAdditionalCostUSD = additionalCosts.reduce((sum, c) => sum + c.amountUSD, 0);
+        const totalLandedCostUSD = totalMaterialCostUSD + totalAdditionalCostUSD;
+        const firstItem = purCart[0];
+
+        const updatedPurchase: Purchase = {
+            id: purEditingId,
+            batchNumber: purBatch,
+            status: existingPurchase.status, // Preserve existing status
+            date: purDate,
+            supplierId: purSupplier,
+            factoryId: existingPurchase.factoryId, // Preserve factory
+            items: purCart,
+            originalTypeId: firstItem.originalTypeId,
+            originalType: firstItem.originalType,
+            originalProductId: firstItem.originalProductId,
+            containerNumber: purContainer,
+            divisionId: purDivision,
+            subDivisionId: purSubDivision,
+            qtyPurchased: totalQty,
+            weightPurchased: totalWeight,
+            currency: purCurrency,
+            exchangeRate: purExchangeRate,
+            costPerKgFCY: firstItem.costPerKgFCY,
+            discountPerKgFCY: firstItem.discountPerKgFCY || 0,
+            surchargePerKgFCY: firstItem.surchargePerKgFCY || 0,
+            totalCostFCY: totalMaterialCostFCY,
+            additionalCosts: additionalCosts,
+            totalLandedCost: totalLandedCostUSD,
+            landedCostPerKg: totalLandedCostUSD / totalWeight
+        };
+
+        // Update in state
+        updatePurchase(updatedPurchase);
+        
+        // Update in Firebase
+        const { id, ...purchaseDataToUpdate } = updatedPurchase;
+        import('firebase/firestore').then(({ doc, updateDoc, getFirestore }) => {
+            const db = getFirestore();
+            updateDoc(doc(db, 'purchases', purEditingId), purchaseDataToUpdate)
+                .then(() => console.log(`✅ Purchase ${purEditingId} updated in Firebase`))
+                .catch((error) => console.error('❌ Error updating purchase in Firebase:', error));
+        });
+
+        // Reset form
+        setPurEditingId(null);
+        setPurSupplier('');
+        setPurCart([]);
+        setPurOriginalTypeId('');
+        setPurOriginalProductId('');
+        setPurWeight('');
+        setPurPrice('');
+        setPurItemDiscount('');
+        setPurItemSurcharge('');
+        setPurContainer('');
+        setPurDivision('');
+        setPurSubDivision('');
+        setAdditionalCosts([]);
+        setShowPurSummary(false);
+        setPurMode('manage');
+        alert('Purchase updated successfully!');
+    };
+
+    const handleDeletePurchaseConfirmed = (purchaseId: string) => {
+        // Delete from state and Firebase
+        // The deleteEntity function in DataContext handles cascade deletion of ledger entries
+        deleteEntity('purchases', purchaseId);
+        alert('Purchase deleted successfully! Accounting entries have been removed.');
+    };
+
+    const handleCancelEdit = () => {
+        setPurEditingId(null);
+        setPurSupplier('');
+        setPurCart([]);
+        setPurOriginalTypeId('');
+        setPurOriginalProductId('');
+        setPurWeight('');
+        setPurPrice('');
+        setPurItemDiscount('');
+        setPurItemSurcharge('');
+        setPurContainer('');
+        setPurDivision('');
+        setPurSubDivision('');
+        setAdditionalCosts([]);
+        setPurMode('manage');
     };
 
     // --- Bundle Purchase Logic ---
@@ -983,7 +1217,7 @@ export const DataEntry: React.FC = () => {
 
         // Apply Serial Logic for Bale, Sack, Box, Bag
         if (item.packingType !== PackingType.KG) {
-            const startNum = tempSerialTracker[item.id] ?? (item.nextSerial || 1);
+            const startNum = getNextSerialNumber(item.id);
             serialStart = startNum;
             serialEnd = startNum + qty - 1;
             setTempSerialTracker(prev => ({ ...prev, [item.id]: (serialEnd || 0) + 1 }));
@@ -1006,7 +1240,13 @@ export const DataEntry: React.FC = () => {
     };
 
     const handleFinalizeProduction = () => {
-        if (stagedProds.length === 0) return;
+        console.log('🔵 handleFinalizeProduction called');
+        console.log('🔵 stagedProds:', stagedProds);
+        if (stagedProds.length === 0) {
+            console.log('❌ No staged productions');
+            return;
+        }
+        console.log('✅ Calling addProduction with:', stagedProds);
         addProduction(stagedProds);
         setStagedProds([]);
         setTempSerialTracker({});
@@ -1020,7 +1260,7 @@ export const DataEntry: React.FC = () => {
         const item = state.items.find(i => i.id === rbConsumeId);
         if (!item) return;
         const qty = parseFloat(rbConsumeQty);
-        if (qty > item.stockQty) { alert(`Insufficient Stock! Available: ${item.stockQty}`); return; }
+        // Stock check removed - allow adding items regardless of stock quantity
         setRbConsumeList([...rbConsumeList, {
             id: Math.random().toString(36).substr(2, 9),
             itemId: item.id,
@@ -1042,7 +1282,7 @@ export const DataEntry: React.FC = () => {
         let serialEnd: number | undefined;
 
         if (item.packingType !== PackingType.KG) {
-             const startNum = tempSerialTracker[item.id] ?? (item.nextSerial || 1);
+             const startNum = getNextSerialNumber(item.id);
              serialStart = startNum;
              serialEnd = startNum + qty - 1;
              setTempSerialTracker(prev => ({ ...prev, [item.id]: (serialEnd || 0) + 1 }));
@@ -1073,7 +1313,8 @@ export const DataEntry: React.FC = () => {
                 itemName: c.itemName,
                 packingType: c.packingType,
                 qtyProduced: -Math.abs(c.qty), 
-                weightProduced: c.weight
+                weightProduced: c.weight,
+                isRebaling: true // Mark as re-baling
             });
         });
         rbProduceList.forEach(p => {
@@ -1086,7 +1327,8 @@ export const DataEntry: React.FC = () => {
                 qtyProduced: Math.abs(p.qty),
                 weightProduced: p.weight,
                 serialStart: p.serialStart,
-                serialEnd: p.serialEnd
+                serialEnd: p.serialEnd,
+                isRebaling: true // Mark as re-baling
             });
         });
         addProduction(entries);
@@ -1198,6 +1440,9 @@ export const DataEntry: React.FC = () => {
                                                             onSelect={setOoNewItemId}
                                                             placeholder="Select Item..."
                                                             onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                            formatOption={formatItemOption}
+                                                            formatSelected={formatItemSelected}
+                                                            searchFields={['code', 'name', 'category']}
                                                         />
                                                     </div>
                                                     <div className="w-32"><input type="number" className="w-full p-2.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-blue-500" placeholder="Qty" value={ooNewItemQty} onChange={e => setOoNewItemQty(e.target.value)} /></div>
@@ -1334,7 +1579,7 @@ export const DataEntry: React.FC = () => {
                                                 </div>
                                                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex justify-between items-center">
                                                     <div>
-                                                        <p className="text-xs font-semibold text-slate-500 uppercase">Available Stock</p>
+                                                        <p className="text-xs font-semibold text-slate-500 uppercase">Available Stock (Not Yet Opened)</p>
                                                         <div className="flex items-baseline gap-2 mt-1">
                                                             {availableStockInfo.qty === 0 && availableStockInfo.weight > 0 ? (
                                                                 <span className="text-2xl font-bold text-slate-800">N/A <span className="text-sm font-normal text-slate-500">(Kg Only)</span></span>
@@ -1346,6 +1591,7 @@ export const DataEntry: React.FC = () => {
                                                             )}
                                                         </div>
                                                         <p className="text-xs text-slate-400 mt-1">≈ {availableStockInfo.weight.toLocaleString()} Kg</p>
+                                                        <p className="text-xs text-blue-600 mt-1 font-medium">ℹ️ This is physical stock not yet opened/processed</p>
                                                     </div>
                                                     <div className="text-right"><p className="text-xs font-semibold text-slate-500 uppercase">Est. Cost/Kg</p><span className="text-lg font-mono font-medium text-emerald-600">${availableStockInfo.avgCost.toFixed(3)}</span></div>
                                                 </div>
@@ -1365,8 +1611,40 @@ export const DataEntry: React.FC = () => {
                                                         />
                                                     </div>
                                                 </div>
-                                                <button type="submit" disabled={!ooQty || !ooType} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-2">Submit The Entry</button>
+                                                <button type="submit" disabled={!ooQty || !ooType} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-2">+ Add to List</button>
                                             </form>
+                                            
+                                            {/* Staging Cart */}
+                                            {stagedOriginalOpenings.length > 0 && (
+                                                <div className="mt-6 bg-amber-50 border-2 border-amber-200 rounded-xl p-4">
+                                                    <h4 className="font-bold text-amber-900 mb-3 flex items-center gap-2">
+                                                        <Package size={16} /> Staging Cart ({stagedOriginalOpenings.length} items)
+                                                    </h4>
+                                                    <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                                                        {stagedOriginalOpenings.map(o => {
+                                                            const supName = state.partners.find(p => p.id === o.supplierId)?.name || 'Unknown';
+                                                            const typeName = state.originalTypes.find(t => t.id === o.originalType)?.name || o.originalType;
+                                                            return (
+                                                                <div key={o.id} className="bg-white p-2 rounded border border-amber-200 flex justify-between items-center">
+                                                                    <div className="text-sm">
+                                                                        <div className="font-medium text-slate-700">{supName} - {typeName}</div>
+                                                                        <div className="text-xs text-slate-500">{o.qtyOpened} Units ({o.weightOpened.toFixed(1)} kg)</div>
+                                                                    </div>
+                                                                    <button onClick={() => handleRemoveStagedOpening(o.id)} className="text-red-500 hover:text-red-700 p-1">
+                                                                        <Trash2 size={14} />
+                                                                    </button>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <button 
+                                                        onClick={handleCompleteOriginalOpenings}
+                                                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors shadow-lg"
+                                                    >
+                                                        ✓ Complete & Save All ({stagedOriginalOpenings.length})
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
 
                                         {/* History Table Column */}
@@ -1430,6 +1708,9 @@ export const DataEntry: React.FC = () => {
                                                         onSelect={setBoItemId}
                                                         placeholder="Select Item..."
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                        formatOption={formatItemOption}
+                                                        formatSelected={formatItemSelected}
+                                                        searchFields={['code', 'name', 'category']}
                                                     />
                                                 </div>
                                                 <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between"><span className="text-sm text-slate-500">Stock: {boAvailableStock}</span><span className="text-sm font-bold text-slate-700">{boSelectedItem ? boSelectedItem.packingType : ''}</span></div>
@@ -1526,11 +1807,117 @@ export const DataEntry: React.FC = () => {
 
                         {/* --- ORIGINAL PURCHASE FORM --- */}
                         {activeSubModule === 'original-purchase' && (
-                            <div className="animate-in fade-in duration-300 max-w-4xl mx-auto">
-                                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                    <Box className="text-blue-600" /> New Raw Material Purchase
-                                </h3>
+                            <div className="animate-in fade-in duration-300 max-w-6xl mx-auto">
+                                {/* Mode Toggle */}
+                                <div className="mb-6 flex items-center justify-between">
+                                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                        <Box className="text-blue-600" /> {purEditingId ? 'Edit Purchase' : (purMode === 'create' ? 'New Raw Material Purchase' : 'Manage Purchases')}
+                                    </h3>
+                                    {!purEditingId && (
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setPurMode('create')}
+                                                className={`px-4 py-2 rounded-lg font-medium transition-all ${purMode === 'create' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                            >
+                                                Create New
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setPurMode('manage')}
+                                                className={`px-4 py-2 rounded-lg font-medium transition-all ${purMode === 'manage' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                            >
+                                                Manage Existing
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Manage Mode - List View */}
+                                {purMode === 'manage' && !purEditingId && (
+                                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                        <div className="p-4 bg-slate-50 border-b border-slate-200">
+                                            <h4 className="font-bold text-slate-800">Purchase List</h4>
+                                            <p className="text-xs text-slate-500 mt-1">{state.purchases.length} purchase(s) recorded</p>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 text-slate-600 font-bold text-xs uppercase border-b border-slate-200">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left">Batch #</th>
+                                                        <th className="px-4 py-3 text-left">Date</th>
+                                                        <th className="px-4 py-3 text-left">Supplier</th>
+                                                        <th className="px-4 py-3 text-left">Original Types</th>
+                                                        <th className="px-4 py-3 text-right">Weight (Kg)</th>
+                                                        <th className="px-4 py-3 text-right">Value (USD)</th>
+                                                        <th className="px-4 py-3 text-center">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {state.purchases.length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                                                                No purchases found. Click "Create New" to add your first purchase.
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        state.purchases.map(purchase => {
+                                                            const supplier = state.partners.find(p => p.id === purchase.supplierId);
+                                                            const originalTypes = purchase.items?.length > 0
+                                                                ? purchase.items.map(item => state.originalTypes.find(t => t.id === item.originalTypeId)?.name || 'Unknown').join(', ')
+                                                                : (state.originalTypes.find(t => t.id === purchase.originalTypeId)?.name || 'Unknown');
+                                                            
+                                                            return (
+                                                                <tr key={purchase.id} className="hover:bg-slate-50">
+                                                                    <td className="px-4 py-3 font-mono font-bold text-blue-600">{purchase.batchNumber}</td>
+                                                                    <td className="px-4 py-3">{new Date(purchase.date).toLocaleDateString()}</td>
+                                                                    <td className="px-4 py-3 font-medium">{supplier?.name || 'Unknown'}</td>
+                                                                    <td className="px-4 py-3 text-xs text-slate-600 max-w-xs truncate" title={originalTypes}>{originalTypes}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono">{purchase.weightPurchased.toLocaleString()}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono text-emerald-600">${purchase.totalLandedCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                                    <td className="px-4 py-3">
+                                                                        <div className="flex items-center justify-center gap-2">
+                                                                            <button
+                                                                                onClick={() => initiatePurchaseAction('EDIT', purchase.id)}
+                                                                                className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-xs transition-all"
+                                                                            >
+                                                                                Edit
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => initiatePurchaseAction('DELETE', purchase.id)}
+                                                                                className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-medium text-xs transition-all"
+                                                                            >
+                                                                                Delete
+                                                                            </button>
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Create/Edit Mode - Form View */}
+                                {(purMode === 'create' || purEditingId) && (
                                 <form onSubmit={handlePreSubmitPurchase} className="space-y-6">
+                                    {purEditingId && (
+                                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                            <p className="text-sm font-medium text-amber-800">
+                                                Editing Purchase: <span className="font-bold">{purBatch}</span>
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={handleCancelEdit}
+                                                className="mt-2 text-xs text-amber-600 hover:text-amber-800 font-medium"
+                                            >
+                                                Cancel Edit
+                                            </button>
+                                        </div>
+                                    )}
                                     <div className="grid grid-cols-2 gap-6">
                                         <div className="col-span-2 md:col-span-1"><label className="block text-sm font-medium text-slate-600 mb-1">Batch Number</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300 font-mono font-bold" value={purBatch} onChange={e => setPurBatch(e.target.value)} required /><p className="text-xs text-slate-400 mt-1">Auto-generated (Editable)</p></div>
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={purDate} onChange={e => setPurDate(e.target.value)} required /></div>
@@ -1690,6 +2077,7 @@ export const DataEntry: React.FC = () => {
                                     </div>
                                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed" disabled={!purSupplier || purCart.length === 0}><FileText size={18} /> Review & Submit</button>
                                 </form>
+                                )}
                             </div>
                         )}
 
@@ -1718,7 +2106,7 @@ export const DataEntry: React.FC = () => {
                                             />
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
-                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpCurrency} onChange={e => setBpCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c} value={c}>{c}</option>) : <option value="USD">USD</option>}</select></div>
+                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpCurrency} onChange={e => setBpCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={bpExchangeRate} onChange={e => setBpExchangeRate(parseFloat(e.target.value))} /></div>
                                         </div>
                                     </div>
@@ -1762,6 +2150,9 @@ export const DataEntry: React.FC = () => {
                                                 onSelect={setBpItemId}
                                                 placeholder="Select Item..."
                                                 onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                formatOption={formatItemOption}
+                                                formatSelected={formatItemSelected}
+                                                searchFields={['code', 'name', 'category']}
                                             />
                                         </div>
                                         <div className="col-span-2"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Qty" value={bpItemQty} onChange={e => setBpItemQty(e.target.value)} /></div>
@@ -1921,6 +2312,9 @@ export const DataEntry: React.FC = () => {
                                                         onSelect={setSiItemId} 
                                                         placeholder="Select Item..." 
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                        formatOption={formatItemOption}
+                                                        formatSelected={formatItemSelected}
+                                                        searchFields={['code', 'name', 'category']}
                                                     />
                                                  </div>
                                                  <div className="w-1/2 md:w-24"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Qty" value={siItemQty} onChange={e => setSiItemQty(e.target.value)} /></div>
@@ -2006,6 +2400,9 @@ export const DataEntry: React.FC = () => {
                                                 onSelect={setProdItemId}
                                                 placeholder="Choose Finished Good..."
                                                 onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                formatOption={formatItemOption}
+                                                formatSelected={formatItemSelected}
+                                                searchFields={['code', 'name', 'category']}
                                             />
                                             <div className="flex justify-between mt-1 text-xs">
                                                 {selectedItem && ( <span className="text-slate-500">Packing: {selectedItem.packingType} {selectedItem.packingType !== 'Kg' && ` (Next Serial: #${tempSerialTracker[selectedItem.id] || selectedItem.nextSerial || 1})`}</span> )}
@@ -2016,10 +2413,26 @@ export const DataEntry: React.FC = () => {
                                     </div>
                                     <div className="md:col-span-5 bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col h-full">
                                         <div className="flex justify-between items-center mb-4"><h4 className="font-semibold text-slate-700">Staged Entries</h4><span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold">{stagedProds.length}</span></div>
-                                        <div className="flex-1 overflow-y-auto min-h-[200px] mb-4">{stagedProds.length === 0 ? ( <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm"><Layers size={32} className="mb-2 opacity-30" /><p>No items added yet</p></div> ) : ( <div className="space-y-2">{stagedProds.map((entry, idx) => ( <div key={entry.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-center group"><div><div className="font-medium text-slate-800 text-sm">{entry.itemName}</div><div className="text-xs text-slate-500 flex gap-2"><span>{entry.qtyProduced} {entry.packingType}s</span>{entry.serialStart && ( <span className="text-emerald-600 font-mono bg-emerald-50 px-1 rounded">#{entry.serialStart} - #{entry.serialEnd}</span> )}</div></div><button onClick={() => setStagedProds(stagedProds.filter(p => p.id !== entry.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16} /></button></div> ))}</div> )}</div>
+                                        <div className="flex-1 overflow-y-auto min-h-[200px] mb-4">{stagedProds.length === 0 ? ( <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm"><Layers size={32} className="mb-2 opacity-30" /><p>No items added yet</p></div> ) : ( <div className="space-y-2">{stagedProds.map((entry, idx) => {
+                                            const item = state.items.find(i => i.id === entry.itemId);
+                                            return (
+                                                <div key={entry.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-center group">
+                                                    <div>
+                                                        <div className="font-medium text-slate-800 text-sm">{item?.code || entry.itemId} - {entry.itemName}</div>
+                                                        <div className="text-xs text-slate-500 flex gap-2">
+                                                            <span>{item?.category || ''}</span>
+                                                            <span>•</span>
+                                                            <span>{entry.qtyProduced} {entry.packingType}s ({item?.weightPerUnit || 0}Kg each)</span>
+                                                            {entry.serialStart && ( <span className="text-emerald-600 font-mono bg-emerald-50 px-1 rounded">#{entry.serialStart} - #{entry.serialEnd}</span> )}
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => setStagedProds(stagedProds.filter(p => p.id !== entry.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16} /></button>
+                                                </div>
+                                            );
+                                        })}</div> )}</div>
                                         <div className="border-t border-slate-200 pt-4 mt-auto"><div className="flex justify-between text-sm mb-4 font-medium text-slate-700"><span>Total Units:</span><span>{stagedProds.reduce((sum, p) => sum + p.qtyProduced, 0)}</span></div><button onClick={() => setShowProdSummary(true)} disabled={stagedProds.length === 0} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2"><Save size={18} /> Finalize & Save</button></div>
                                     </div>
-                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200"><h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><History size={16} className="text-slate-400" /> Saved Entries ({prodDate})</h4><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Weight</th><th className="px-4 py-2">Serials</th></tr></thead><tbody className="divide-y divide-slate-100">{state.productions.filter(p => p.date === prodDate).map(p => ( <tr key={p.id} className="hover:bg-slate-50"><td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td><td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td><td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td><td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td></tr> ))} {state.productions.filter(p => p.date === prodDate).length === 0 && ( <tr><td colSpan={4} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td></tr> )}</tbody></table></div></div>
+                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200"><h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><History size={16} className="text-slate-400" /> Saved Entries ({prodDate})</h4><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Weight</th><th className="px-4 py-2">Serials</th><th className="px-4 py-2 text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{state.productions.filter(p => p.date === prodDate).map(p => ( <tr key={p.id} className="hover:bg-slate-50"><td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td><td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td><td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td><td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td><td className="px-4 py-2 text-right"><button onClick={() => handleDeleteProduction(p.id)} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete"><Trash2 size={14} /></button></td></tr> ))} {state.productions.filter(p => p.date === prodDate).length === 0 && ( <tr><td colSpan={5} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td></tr> )}</tbody></table></div></div>
                             </div>
                         )}
 
@@ -2035,11 +2448,14 @@ export const DataEntry: React.FC = () => {
                                                 <div>
                                                     <label className="block text-xs font-semibold text-slate-500 mb-1">Select Item</label>
                                                     <EntitySelector
-                                                        entities={state.items.filter(i => i.stockQty > 0)}
+                                                        entities={state.items}
                                                         selectedId={rbConsumeId}
                                                         onSelect={setRbConsumeId}
                                                         placeholder="Select Item..."
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                        formatOption={formatItemOption}
+                                                        formatSelected={formatItemSelected}
+                                                        searchFields={['code', 'name', 'category']}
                                                     />
                                                 </div>
                                                 <div className="flex gap-2"><div className="flex-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Qty</label><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800 focus:outline-none focus:border-blue-500" placeholder="0" value={rbConsumeQty} onChange={e => setRbConsumeQty(e.target.value)} /></div><button onClick={handleAddConsume} disabled={!rbConsumeId || !rbConsumeQty} className="mt-5 px-4 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700">Add</button></div>
@@ -2059,6 +2475,9 @@ export const DataEntry: React.FC = () => {
                                                         onSelect={setRbProduceId}
                                                         placeholder="Select Item..."
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                        formatOption={formatItemOption}
+                                                        formatSelected={formatItemSelected}
+                                                        searchFields={['code', 'name', 'category']}
                                                     />
                                                 </div>
                                                 <div className="flex gap-2"><div className="flex-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Qty</label><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800 focus:outline-none focus:border-blue-500" placeholder="0" value={rbProduceQty} onChange={e => setRbProduceQty(e.target.value)} /></div><button onClick={handleAddProduce} disabled={!rbProduceId || !rbProduceQty} className="mt-5 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Add</button></div>
@@ -2124,7 +2543,58 @@ export const DataEntry: React.FC = () => {
                                 <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / purCart.reduce((s,i)=>s+i.weightPurchased,0)).toFixed(3)}</span></div></div>
                              </div>
                         </div>
-                        <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center"><button onClick={() => setShowPurSummary(false)} className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium">Cancel</button><div className="flex gap-3"><button onClick={handlePrint} disabled={purPrinted} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Printer size={18} /> {purPrinted ? 'Ready to Save' : 'Print Invoice'}</button><button onClick={handleFinalPurchaseSave} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm flex items-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed"><Download size={18} /> Save & Exit</button></div></div>
+                        <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center"><button onClick={() => setShowPurSummary(false)} className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium">Cancel</button><div className="flex gap-3"><button onClick={handlePrint} disabled={purPrinted} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Printer size={18} /> {purPrinted ? 'Ready to Save' : 'Print Invoice'}</button><button type="button" onClick={handleFinalPurchaseSave} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm flex items-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed"><Download size={18} /> Save & Exit</button></div></div>
+                    </div>
+                </div>
+            )}
+
+            {/* Auth Modal for Purchase Edit/Delete */}
+            {authModalOpen && (
+                <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full animate-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-200">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <AlertCircle className="text-amber-500" /> 
+                                Supervisor Authorization Required
+                            </h3>
+                            <p className="text-sm text-slate-500 mt-2">
+                                {pendingPurchaseAction?.type === 'DELETE' ? 'Deleting' : 'Editing'} a purchase requires supervisor PIN.
+                            </p>
+                        </div>
+                        <div className="p-6">
+                            <label className="block text-sm font-medium text-slate-600 mb-2">Enter PIN</label>
+                            <input
+                                type="password"
+                                value={authPin}
+                                onChange={(e) => setAuthPin(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && confirmPurchaseAuthAction()}
+                                className="w-full px-4 py-3 border border-slate-300 rounded-lg text-center text-2xl font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="••••"
+                                maxLength={4}
+                                autoFocus
+                                autoComplete="off"
+                                data-form-type="other"
+                                data-lpignore="true"
+                            />
+                        </div>
+                        <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                            <button
+                                onClick={() => {
+                                    setAuthModalOpen(false);
+                                    setAuthPin('');
+                                    setPendingPurchaseAction(null);
+                                }}
+                                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmPurchaseAuthAction}
+                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold"
+                            >
+                                Confirm
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

@@ -93,7 +93,25 @@ export const GenericForm: React.FC<{
                 return;
             }
         }
-        config.onSave({ ...formData, id: Math.random().toString(36).substr(2, 9) }); // Simple ID gen
+        
+        // Check for duplicate code/ID when adding new or editing (if code changed)
+        if (config.entityKey === 'items') {
+            const newCode = formData.code;
+            const existingItem = data.find(item => 
+                item.code === newCode && item.id !== formData.id
+            );
+            if (existingItem) {
+                alert(`❌ Item Code "${newCode}" already exists! Please use a unique code.`);
+                return;
+            }
+        }
+        
+        // If editing (has id in formData), call onUpdate, otherwise call onSave
+        if (formData.id && config.onUpdate) {
+            config.onUpdate(formData.id, formData);
+        } else {
+            config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
+        }
         onSuccess();
     };
 
@@ -181,7 +199,7 @@ export const QuickAddModal: React.FC<{
         <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
             <div className="bg-white rounded-xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
                 <div className="p-6 border-b border-slate-100 sticky top-0 bg-white z-10 flex justify-between items-center">
-                    <h3 className="text-lg font-bold text-slate-800">Add New {config.title}</h3>
+                    <h3 className="text-lg font-bold text-slate-800">{initialOverrides ? 'Edit' : 'Add New'} {config.title}</h3>
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
                 </div>
                 <div className="p-6">
@@ -203,6 +221,7 @@ export const QuickAddModal: React.FC<{
 const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, data }) => {
     const [isOpen, setIsOpen] = useState(false); // Collapsible card
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingEntity, setEditingEntity] = useState<any>(null);
     const [searchTerm, setSearchTerm] = useState('');
 
     const filteredData = data.filter(item => 
@@ -266,12 +285,25 @@ const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, da
                                                 </td>
                                             ))}
                                             <td className="px-4 py-3 text-right">
-                                                <button 
-                                                    onClick={() => config.onDelete(row.id)}
-                                                    className="text-slate-400 hover:text-red-500 transition-colors"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button 
+                                                        onClick={() => {
+                                                            setEditingEntity(row);
+                                                            setIsModalOpen(true);
+                                                        }}
+                                                        className="text-slate-400 hover:text-blue-500 transition-colors"
+                                                        title="Edit"
+                                                    >
+                                                        <Edit2 size={16} />
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => config.onDelete(row.id)}
+                                                        className="text-slate-400 hover:text-red-500 transition-colors"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))
@@ -286,8 +318,12 @@ const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, da
             <QuickAddModal 
                 config={config}
                 isOpen={isModalOpen}
-                onClose={() => setIsModalOpen(false)}
+                onClose={() => {
+                    setIsModalOpen(false);
+                    setEditingEntity(null);
+                }}
                 data={data}
+                initialOverrides={editingEntity}
             />
         </div>
     );
@@ -372,6 +408,8 @@ const HRModule: React.FC = () => {
 };
 
 const DataImporter: React.FC = () => {
+    const { cleanupOrphanedLedger } = useData();
+    
     return (
         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 mb-6 text-white shadow-lg">
             <div className="flex items-center gap-4">
@@ -379,12 +417,24 @@ const DataImporter: React.FC = () => {
                     <FileSpreadsheet size={24} className="text-white" />
                 </div>
                 <div>
-                    <h3 className="font-bold text-lg">Bulk Data Import</h3>
-                    <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import Items, Partners, or Opening Stocks.</p>
+                    <h3 className="font-bold text-lg">Bulk Data Import & Utilities</h3>
+                    <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import data or cleanup orphaned records.</p>
                 </div>
-                <button className="ml-auto bg-white text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors">
-                    <Upload size={16} /> Upload CSV
-                </button>
+                <div className="ml-auto flex gap-2">
+                    <button 
+                        onClick={() => {
+                            if (confirm('This will delete all ledger entries for purchases/invoices that no longer exist. Continue?')) {
+                                cleanupOrphanedLedger();
+                            }
+                        }}
+                        className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
+                    >
+                        <Trash2 size={16} /> Cleanup Ledger
+                    </button>
+                    <button className="bg-white text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors">
+                        <Upload size={16} /> Upload CSV
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -395,7 +445,8 @@ export const useSetupConfigs = () => {
     const { 
         state, 
         addPartner, 
-        addItem, 
+        addItem,
+        updateItem,
         addAccount, 
         deleteEntity, 
         addDivision,
@@ -567,11 +618,12 @@ export const useSetupConfigs = () => {
             },
             { name: 'packingType', label: 'Packing Type', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'weightPerUnit', label: 'Package Size (Kg)', type: 'number', required: true },
-            { name: 'avgCost', label: 'Avg Production Price', type: 'number', required: true },
+            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage', step: 'any' },
             { name: 'salePrice', label: 'Avg Sale Price', type: 'number' },
             { name: 'stockQty', label: 'Opening Stock Qty', type: 'number', placeholder: 'For Opening Balance Only' }
         ],
         onSave: (data) => addItem(data, data.stockQty),
+        onUpdate: (id, data) => updateItem(id, data),
         onDelete: (id) => deleteEntity('items', id)
     };
 
@@ -664,7 +716,9 @@ export const useSetupConfigs = () => {
 const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
     const { addCurrency, updateCurrency, deleteEntity } = useData();
     const [showForm, setShowForm] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(false);
     const [editingCurrency, setEditingCurrency] = useState<any>(null);
+    const [searchTerm, setSearchTerm] = useState('');
     const [formData, setFormData] = useState({
         code: '',
         name: '',
@@ -707,14 +761,42 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
     return (
         <div className="bg-white rounded-xl shadow-md p-6 border border-slate-200">
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold text-slate-800">Currency Management</h3>
-                <button onClick={() => setShowForm(!showForm)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+            <div 
+                className="flex justify-between items-center mb-4 cursor-pointer select-none"
+                onClick={() => setIsExpanded(!isExpanded)}
+            >
+                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    Currency Management
+                    {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                </h3>
+                <button 
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setShowForm(!showForm);
+                    }} 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
                     {showForm ? 'Cancel' : '+ Add Currency'}
                 </button>
             </div>
 
-            {showForm && (
+            {isExpanded && (
+                <div>
+                    {/* Search Box */}
+                    {data.length > 0 && (
+                        <div className="relative mb-4">
+                            <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
+                            <input 
+                                type="text" 
+                                placeholder="Search currencies..." 
+                                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                    )}
+
+                    {showForm && (
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -795,7 +877,13 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
                             </tr>
                         </thead>
                         <tbody>
-                            {data.map((currency, idx) => (
+                            {data
+                                .filter(currency => 
+                                    currency.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                    currency.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                    currency.symbol.toLowerCase().includes(searchTerm.toLowerCase())
+                                )
+                                .map((currency, idx) => (
                                 <tr key={currency.id} className={`border-b border-slate-100 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
                                     <td className="p-3 font-mono text-sm font-bold text-slate-800">{currency.code}</td>
                                     <td className="p-3 text-sm text-slate-700">{currency.name}</td>
@@ -816,6 +904,8 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
                     </table>
                 </div>
             )}
+                </div>
+            )}
         </div>
     );
 };
@@ -825,7 +915,8 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
     const { addAccount, deleteEntity } = useData();
     const [isImporting, setIsImporting] = useState(false);
     const [showForm, setShowForm] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(true);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const handleBulkImport = async () => {
         if (!confirm(`Import ${INITIAL_ACCOUNTS.length} professional accounts into this factory?\n\nThis will add:\n• Assets (1000-1999)\n• Liabilities (2000-2999)\n• Equity (3000-3999)\n• Revenue (4000-4999)\n• Expenses (5000-5999)`)) {
@@ -879,12 +970,16 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
             { name: 'type', label: 'Type', type: 'select', options: Object.values(AccountType), required: true },
             { 
                 name: 'code', 
-                label: 'GL Code (Auto)', 
+                label: 'GL Code', 
                 type: 'text', 
                 required: true, 
-                readOnly: true,
-                placeholder: 'Select Type first',
+                placeholder: 'Enter code (e.g., 3400) or leave blank for auto',
                 compute: (formData, allData) => {
+                    // If user manually entered a code, keep it
+                    if (formData.code && formData.code.trim() !== '') {
+                        return formData.code;
+                    }
+                    // Otherwise auto-generate based on type
                     if (!formData.type) return '';
                     let prefix = '1';
                     switch(formData.type) {
@@ -952,6 +1047,20 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
 
             {isExpanded && (
                 <>
+                    {/* Search Box */}
+                    {data.length > 0 && (
+                        <div className="relative mb-4">
+                            <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
+                            <input 
+                                type="text" 
+                                placeholder="Search accounts by code, name, or type..." 
+                                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                    )}
+
                     {data.length === 0 && !isImporting && (
                         <div className="text-center py-8 text-slate-500">
                     <CreditCard size={48} className="mx-auto mb-4 opacity-30" />
@@ -984,7 +1093,13 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
-                            {data.map((account) => (
+                            {data
+                                .filter(account => 
+                                    account.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                    account.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                    account.type.toLowerCase().includes(searchTerm.toLowerCase())
+                                )
+                                .map((account) => (
                                 <tr key={account.id} className="hover:bg-slate-50">
                                     <td className="px-4 py-2 font-mono text-xs">{account.code}</td>
                                     <td className="px-4 py-2 text-sm">{account.name}</td>
@@ -1003,7 +1118,11 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                         </tbody>
                     </table>
                     <div className="mt-4 text-sm text-slate-600">
-                        Total: {data.length} accounts
+                        Total: {data.filter(account => 
+                            account.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            account.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            account.type.toLowerCase().includes(searchTerm.toLowerCase())
+                        ).length} of {data.length} accounts
                     </div>
                 </div>
             )}

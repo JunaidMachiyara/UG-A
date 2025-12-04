@@ -5,6 +5,7 @@ import { Download, Printer, Package, TrendingDown, TrendingUp } from 'lucide-rea
 interface StockSummary {
     originalTypeId: string;
     originalTypeName: string;
+    supplierId?: string; // Track which supplier this stock is from
     totalPurchased: number;
     totalOpened: number;
     inHand: number;
@@ -20,13 +21,23 @@ export const OriginalStockReport: React.FC = () => {
     const stockData = useMemo(() => {
         const summary = new Map<string, StockSummary>();
 
-        // Aggregate purchases
-        state.purchases.forEach(purchase => {
-            const key = purchase.originalTypeId;
+        // Filter purchases by supplier FIRST
+        const filteredPurchases = selectedSupplier === 'all' 
+            ? state.purchases 
+            : state.purchases.filter(p => p.supplierId === selectedSupplier);
+
+        // Aggregate filtered purchases
+        filteredPurchases.forEach(purchase => {
+            // Create unique key combining Supplier, Type ID and Product ID
+            const key = purchase.originalProductId 
+                ? `${purchase.supplierId}-${purchase.originalTypeId}-${purchase.originalProductId}`
+                : `${purchase.supplierId}-${purchase.originalTypeId}`;
+                
             if (!summary.has(key)) {
                 summary.set(key, {
                     originalTypeId: purchase.originalTypeId,
                     originalTypeName: purchase.originalType,
+                    supplierId: purchase.supplierId,
                     totalPurchased: 0,
                     totalOpened: 0,
                     inHand: 0,
@@ -46,7 +57,8 @@ export const OriginalStockReport: React.FC = () => {
         // Subtract openings (consumption)
         state.originalOpenings.forEach(opening => {
             const typeMatch = Array.from(summary.values()).find(s => 
-                s.originalTypeName === opening.originalType
+                s.originalTypeName === opening.originalType &&
+                (selectedSupplier === 'all' || s.supplierId === opening.supplierId)
             );
             if (typeMatch) {
                 typeMatch.totalOpened += opening.weightOpened;
@@ -60,8 +72,7 @@ export const OriginalStockReport: React.FC = () => {
         });
 
         return Array.from(summary.values())
-            .filter(item => selectedSupplier === 'all' || 
-                state.purchases.some(p => p.originalTypeId === item.originalTypeId && p.supplierId === selectedSupplier))
+            .filter(item => item.inHand > 0 || item.totalPurchased > 0) // Show items with any activity
             .sort((a, b) => b.inHand - a.inHand);
     }, [state.purchases, state.originalOpenings, selectedSupplier]);
 

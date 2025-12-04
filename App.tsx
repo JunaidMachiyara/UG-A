@@ -155,11 +155,15 @@ const AppRouter: React.FC = () => {
   }
 
   return (
-    <DataProvider>
-      <HashRouter>
-        {isAuthenticated ? <ProtectedRoutes /> : <Login />}
-      </HashRouter>
-    </DataProvider>
+    <HashRouter>
+      {isAuthenticated ? (
+        <DataProvider>
+          <ProtectedRoutes />
+        </DataProvider>
+      ) : (
+        <Login />
+      )}
+    </HashRouter>
   );
 };
 

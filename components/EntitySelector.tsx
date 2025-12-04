@@ -5,6 +5,7 @@ import { ChevronDown, X, Plus } from 'lucide-react';
 export interface Entity {
     id: string;
     name: string;
+    [key: string]: any; // Allow additional properties
 }
 
 interface EntitySelectorProps {
@@ -17,6 +18,9 @@ interface EntitySelectorProps {
     required?: boolean;
     onQuickAdd?: () => void; // NEW: Callback to trigger quick add modal
     quickAddLabel?: string; // NEW: Custom label for the add button
+    formatOption?: (entity: Entity) => string; // NEW: Custom formatter for dropdown options
+    formatSelected?: (entity: Entity) => string; // NEW: Custom formatter for selected value
+    searchFields?: string[]; // NEW: Fields to search in (default: ['name'])
 }
 
 export const EntitySelector: React.FC<EntitySelectorProps> = ({
@@ -28,7 +32,10 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
     className = "",
     required = false,
     onQuickAdd,
-    quickAddLabel = "Add New"
+    quickAddLabel = "Add New",
+    formatOption,
+    formatSelected,
+    searchFields = ['name']
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -37,35 +44,40 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
 
-    const filteredEntities = entities.filter(e =>
-        e.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredEntities = entities.filter(e => {
+        if (!searchTerm) return true; // Show all entities when search is empty
+        const searchLower = searchTerm.toLowerCase();
+        return searchFields.some(field => {
+            const value = e[field];
+            return value && String(value).toLowerCase().includes(searchLower);
+        });
+    });
 
     useEffect(() => {
         const selected = entities.find(e => e.id === selectedId);
         if (selected) {
-            setSearchTerm(selected.name);
+            setSearchTerm(formatSelected ? formatSelected(selected) : selected.name);
         } else if (selectedId === '') {
             setSearchTerm('');
         }
-    }, [selectedId, entities]);
+    }, [selectedId, entities, formatSelected]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
                 setIsOpen(false);
                 const selected = entities.find(e => e.id === selectedId);
-                if (selected) setSearchTerm(selected.name);
+                if (selected) setSearchTerm(formatSelected ? formatSelected(selected) : selected.name);
                 else if (!selectedId) setSearchTerm('');
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [selectedId, entities]);
+    }, [selectedId, entities, formatSelected]);
 
     const handleSelect = (entity: Entity) => {
         onSelect(entity.id);
-        setSearchTerm(entity.name);
+        setSearchTerm(formatSelected ? formatSelected(entity) : entity.name);
         setIsOpen(false);
     };
 
@@ -133,7 +145,15 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                         setIsOpen(true);
                         setHighlightedIndex(0);
                     }}
-                    onFocus={() => !disabled && setIsOpen(true)}
+                    onFocus={() => {
+                        if (!disabled) {
+                            setIsOpen(true);
+                            // Clear search term on focus if nothing is selected to show all options
+                            if (!selectedId) {
+                                setSearchTerm('');
+                            }
+                        }
+                    }}
                     onClick={() => !disabled && setIsOpen(true)}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
@@ -168,7 +188,7 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                                     onClick={() => handleSelect(entity)}
                                     onMouseEnter={() => setHighlightedIndex(index)}
                                 >
-                                    {entity.name}
+                                    {formatOption ? formatOption(entity) : entity.name}
                                 </div>
                             ))
                         ) : (

@@ -133,8 +133,8 @@ const BiDashboard: React.FC = () => {
     const { state } = useData();
 
     // Metrics
-    const totalRevenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
-    const totalExpenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
+    const totalRevenue = state.accounts.filter(a => a && a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
+    const totalExpenses = state.accounts.filter(a => a && a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
     const netProfit = totalRevenue - totalExpenses;
     const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
 
@@ -157,7 +157,7 @@ const BiDashboard: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-4 opacity-10"><DollarSign size={64} className="text-emerald-500" /></div>
                     <p className="text-slate-500 text-sm font-medium uppercase">Net Profit</p>
-                    <h3 className="text-3xl font-bold text-slate-800 mt-1">${netProfit.toLocaleString()}</h3>
+                    <h3 className="text-3xl font-bold text-slate-800 mt-1">${(netProfit || 0).toLocaleString()}</h3>
                     <div className={`flex items-center gap-1 mt-2 text-sm font-medium ${profitMargin >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                         {profitMargin >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
                         {profitMargin.toFixed(1)}% Margin
@@ -165,12 +165,12 @@ const BiDashboard: React.FC = () => {
                 </div>
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <p className="text-slate-500 text-sm font-medium uppercase">Total Revenue</p>
-                    <h3 className="text-3xl font-bold text-blue-600 mt-1">${totalRevenue.toLocaleString()}</h3>
+                    <h3 className="text-3xl font-bold text-blue-600 mt-1">${(totalRevenue || 0).toLocaleString()}</h3>
                     <p className="text-xs text-slate-400 mt-2">Across all divisions</p>
                 </div>
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <p className="text-slate-500 text-sm font-medium uppercase">Total Expenses</p>
-                    <h3 className="text-3xl font-bold text-red-500 mt-1">${totalExpenses.toLocaleString()}</h3>
+                    <h3 className="text-3xl font-bold text-red-500 mt-1">${(totalExpenses || 0).toLocaleString()}</h3>
                     <p className="text-xs text-slate-400 mt-2">COGS + OpEx</p>
                 </div>
             </div>
@@ -179,7 +179,7 @@ const BiDashboard: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h4 className="font-bold text-slate-700 mb-6">Sales by Category</h4>
                     <div className="h-72">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minHeight={0}>
                             <BarChart data={salesByCat}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                 <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
@@ -214,7 +214,7 @@ const BiDashboard: React.FC = () => {
                                         </div>
                                         <div className="text-right">
                                             <div className="font-bold text-slate-700">${totalSales.toLocaleString()}</div>
-                                            <div className="text-xs text-emerald-600">Balance: ${cust.balance.toLocaleString()}</div>
+                                            <div className="text-xs text-emerald-600">Balance: ${(cust?.balance || 0).toLocaleString()}</div>
                                         </div>
                                     </div>
                                 );
@@ -234,8 +234,8 @@ const InventoryIntelligence: React.FC = () => {
     const rawItems = state.items.filter(i => i.category === 'cat-raw'); 
     const fgItems = state.items.filter(i => i.category !== 'cat-raw');
 
-    const rawValue = rawItems.reduce((acc, i) => acc + (i.stockQty * i.weightPerUnit * i.avgCost), 0);
-    const fgValue = fgItems.reduce((acc, i) => acc + (i.stockQty * i.weightPerUnit * i.avgCost), 0);
+    const rawValue = rawItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.weightPerUnit || 0) * (i?.avgCost || 0)), 0);
+    const fgValue = fgItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.weightPerUnit || 0) * (i?.avgCost || 0)), 0);
 
     const lowStockItems = state.items.filter(i => i.stockQty > 0 && i.stockQty < 50);
     const nonMovingItems = state.items.filter(i => i.stockQty > 0 && !state.salesInvoices.some(inv => inv.items.some(si => si.itemId === i.id)));
@@ -248,7 +248,8 @@ const InventoryIntelligence: React.FC = () => {
             
             const salesFreq = state.salesInvoices.filter(inv => inv.items.some(i => i.itemId === item.id)).length;
             
-            const totalProduced = state.productions.filter(p => p.itemId === item.id && p.qtyProduced > 0).reduce((s, p) => s + p.qtyProduced, 0);
+            // Net production change (includes re-baling consumption as negative and production as positive)
+            const totalProduced = state.productions.filter(p => p.itemId === item.id).reduce((s, p) => s + p.qtyProduced, 0);
             const totalSold = state.salesInvoices.reduce((s, inv) => s + inv.items.filter(i => i.itemId === item.id).reduce((is, ii) => is + ii.qty, 0), 0);
             const ratio = totalProduced > 0 ? totalSold / totalProduced : 0;
 
@@ -284,11 +285,11 @@ const InventoryIntelligence: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-blue-600">
                     <p className="text-xs font-bold text-slate-500 uppercase">Raw Material Value</p>
-                    <h3 className="text-2xl font-bold text-slate-800">${rawValue.toLocaleString()}</h3>
+                    <h3 className="text-2xl font-bold text-slate-800">${(rawValue || 0).toLocaleString()}</h3>
                 </div>
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-emerald-500">
                     <p className="text-xs font-bold text-slate-500 uppercase">Finished Goods Value</p>
-                    <h3 className="text-2xl font-bold text-slate-800">${fgValue.toLocaleString()}</h3>
+                    <h3 className="text-2xl font-bold text-slate-800">${(fgValue || 0).toLocaleString()}</h3>
                 </div>
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-amber-500">
                     <p className="text-xs font-bold text-slate-500 uppercase">Low Stock Alerts</p>
@@ -335,7 +336,7 @@ const InventoryIntelligence: React.FC = () => {
                     </div>
                     <div className="p-4">
                         <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
+                            <ResponsiveContainer width="100%" height="100%" minHeight={0}>
                                 <PieChart>
                                     <Pie
                                         data={fgItems.reduce((acc: any[], item) => {
@@ -446,13 +447,13 @@ const ProfitLoss: React.FC = () => {
                         {revenue.map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                     </div>
                     <div className="mt-2 pt-2 border-t border-emerald-100 flex justify-between font-bold text-slate-800">
                         <span>Total Revenue</span>
-                        <span>{totalRev.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalRev || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
@@ -462,19 +463,19 @@ const ProfitLoss: React.FC = () => {
                         {expenses.map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                     </div>
                     <div className="mt-2 pt-2 border-t border-red-100 flex justify-between font-bold text-slate-800">
                         <span>Total Expenses</span>
-                        <span>{totalExp.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalExp || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
-                <div className={`p-4 rounded-xl flex justify-between items-center text-xl font-bold border ${netIncome >= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                <div className={`p-4 rounded-xl flex justify-between items-center text-xl font-bold border ${(netIncome || 0) >= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                     <span>Net Income</span>
-                    <span>{netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span>{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                 </div>
             </div>
         </div>
@@ -488,12 +489,20 @@ const BalanceSheet: React.FC = () => {
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
     
+    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
+    const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
+    const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+    
+    // Add supplier/vendor balances (Accounts Payable) - grouped as "Creditors"
+    const suppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
+    const totalSuppliersAP = suppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+    
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const netIncome = revenue - expenses;
 
-    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR;
+    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP;
     const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
 
     return (
@@ -502,16 +511,22 @@ const BalanceSheet: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
                     <div className="space-y-2">
-                        {assets.map(a => (
+                        {assets.filter(a => a && a.balance !== undefined).map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono font-medium">{a.balance.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
+                        {totalCustomersAR > 0 && (
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-600 font-medium">Debtors (Accounts Receivable)</span>
+                                <span className="font-mono font-medium">{totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            </div>
+                        )}
                     </div>
                     <div className="border-t border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800">
                         <span>Total Assets</span>
-                        <span>{totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{(totalAssets || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
 
@@ -521,42 +536,48 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Liabilities</h4>
                             <div className="space-y-2">
-                                {liabilities.map(a => (
+                                {liabilities.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
+                                {totalSuppliersAP > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
+                                        <span className="font-mono font-medium">{totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Liabilities</span>
-                                <span>{totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span>{(totalLiabilities || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         </div>
 
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Equity</h4>
                             <div className="space-y-2">
-                                {equity.map(a => (
+                                {equity.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
                                 <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">
                                     <span className="text-emerald-700 font-medium">Net Income (Current)</span>
-                                    <span className="font-mono font-bold text-emerald-700">{netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    <span className="font-mono font-bold text-emerald-700">{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                 </div>
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Equity</span>
-                                <span>{totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span>{(totalEquity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         </div>
                     </div>
                     <div className="border-t-2 border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800 text-lg">
                         <span>Total Liabilities & Equity</span>
-                        <span>{(totalLiabilities + totalEquity).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span>{((totalLiabilities || 0) + (totalEquity || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>
             </div>

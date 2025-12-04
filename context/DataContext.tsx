@@ -3,7 +3,7 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect, u
 import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
 import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 
 // Helper for simple ID generation
@@ -54,6 +54,7 @@ type Action =
     | { type: 'ADD_ORIGINAL_OPENING'; payload: OriginalOpening }
     | { type: 'ADD_PRODUCTION'; payload: ProductionEntry[] }
     | { type: 'ADD_PURCHASE'; payload: Purchase }
+    | { type: 'UPDATE_PURCHASE'; payload: Purchase }
     | { type: 'ADD_BUNDLE_PURCHASE'; payload: BundlePurchase }
     | { type: 'SAVE_LOGISTICS_ENTRY'; payload: LogisticsEntry }
     | { type: 'ADD_SALES_INVOICE'; payload: SalesInvoice }
@@ -188,7 +189,37 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         }
         case 'LOAD_LEDGER': {
             console.log('✅ LOADED LEDGER ENTRIES FROM FIREBASE:', action.payload.length);
-            return { ...state, ledger: action.payload };
+            
+            // Recalculate account balances from all ledger entries
+            const updatedAccounts = state.accounts.map(acc => {
+                const debitSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.debit || 0), 0);
+                const creditSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.credit || 0), 0);
+                let newBalance = 0;
+                if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                    newBalance = debitSum - creditSum;
+                } else {
+                    newBalance = creditSum - debitSum;
+                }
+                return { ...acc, balance: newBalance };
+            });
+            
+            // Recalculate partner balances from ledger entries
+            const updatedPartners = state.partners.map(partner => {
+                const partnerDebitSum = action.payload.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + (e.debit || 0), 0);
+                const partnerCreditSum = action.payload.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + (e.credit || 0), 0);
+                
+                let newPartnerBalance = 0;
+                if ([PartnerType.CUSTOMER].includes(partner.type)) {
+                    // Customers: debit increases balance (they owe us) - positive
+                    newPartnerBalance = partnerDebitSum - partnerCreditSum;
+                } else {
+                    // Suppliers: credit increases what we owe them - stored as NEGATIVE for liability
+                    newPartnerBalance = partnerDebitSum - partnerCreditSum; // This will be negative when credit > debit
+                }
+                return { ...partner, balance: newPartnerBalance };
+            });
+            
+            return { ...state, ledger: action.payload, accounts: updatedAccounts, partners: updatedPartners };
         }
         case 'LOAD_PRODUCTIONS': {
             console.log('✅ LOADED PRODUCTIONS FROM FIREBASE:', action.payload.length);
@@ -236,13 +267,13 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 const partnerCreditSum = newEntries.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + e.credit, 0);
                 
                 let newPartnerBalance = partner.balance;
-                // For Customers (AR), a debit to AR increases their balance (they owe us more)
-                // For Suppliers/Vendors (AP), a credit to AP increases our liability (we owe them more)
-                // The balance stored in Partner object should reflect their AR/AP status
+                // For Customers (AR), a debit increases their balance (they owe us more) - positive
+                // For Suppliers (AP), a credit increases our liability - stored as NEGATIVE
                 if ([PartnerType.CUSTOMER].includes(partner.type)) { 
                     newPartnerBalance = partner.balance + partnerDebitSum - partnerCreditSum;
                 } else { 
-                    newPartnerBalance = partner.balance + partnerCreditSum - partnerDebitSum;
+                    // Suppliers: credit increases liability, so balance becomes more negative
+                    newPartnerBalance = partner.balance + partnerDebitSum - partnerCreditSum;
                 }
                 return { ...partner, balance: newPartnerBalance };
             });
@@ -309,15 +340,23 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'ADD_BUNDLE_PURCHASE': return { ...state, bundlePurchases: [action.payload, ...state.bundlePurchases] };
         case 'ADD_PRODUCTION': {
             const updatedItems = state.items.map(item => {
-                const productionEntry = action.payload.find(p => p.itemId === item.id);
-                if (productionEntry) {
-                    const isProduction = productionEntry.qtyProduced > 0;
+                // Aggregate all production entries for this item
+                const itemProductions = action.payload.filter(p => p.itemId === item.id);
+                if (itemProductions.length > 0) {
+                    const totalQtyChange = itemProductions.reduce((sum, p) => sum + p.qtyProduced, 0);
+                    const maxSerialEnd = Math.max(
+                        ...itemProductions
+                            .filter(p => p.serialEnd !== undefined)
+                            .map(p => p.serialEnd || 0),
+                        0
+                    );
                     const isTracked = item.packingType !== PackingType.KG;
+                    
                     return {
                         ...item,
-                        stockQty: item.stockQty + productionEntry.qtyProduced,
-                        nextSerial: (item.nextSerial && isProduction && isTracked) 
-                            ? item.nextSerial + productionEntry.qtyProduced 
+                        stockQty: item.stockQty + totalQtyChange,
+                        nextSerial: (maxSerialEnd > 0 && isTracked) 
+                            ? maxSerialEnd + 1
                             : item.nextSerial
                     };
                 }
@@ -343,6 +382,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         }
         case 'ADD_SALES_INVOICE': return { ...state, salesInvoices: [action.payload, ...state.salesInvoices] };
         case 'UPDATE_SALES_INVOICE': return { ...state, salesInvoices: state.salesInvoices.map(inv => inv.id === action.payload.id ? action.payload : inv) };
+        case 'UPDATE_PURCHASE': return { ...state, purchases: state.purchases.map(p => p.id === action.payload.id ? action.payload : p) };
         case 'POST_SALES_INVOICE': {
             const updatedInvoices = state.salesInvoices.map(inv => inv.id === action.payload.id ? { ...action.payload, status: 'Posted' } : inv);
             const updatedPartners = state.partners.map(p => p.id === action.payload.customerId ? { ...p, balance: p.balance + action.payload.netTotal } : p);
@@ -427,6 +467,7 @@ interface DataContextType {
     addProduction: (productions: ProductionEntry[]) => void;
     postBaleOpening: (stagedItems: { itemId: string, qty: number, date: string }[]) => void;
     addPurchase: (purchase: Purchase) => void;
+    updatePurchase: (purchase: Purchase) => void;
     addBundlePurchase: (purchase: BundlePurchase) => void;
     saveLogisticsEntry: (entry: LogisticsEntry) => void;
     addSalesInvoice: (invoice: SalesInvoice) => void;
@@ -876,6 +917,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
     }, [currentFactory]); // Re-run when factory changes
 
+    // Debug helper - expose state to window for console debugging
+    useEffect(() => {
+        (window as any).debugState = state;
+        (window as any).debugInfo = () => {
+            console.log('=== DEBUG INFO ===');
+            console.log('Purchases:', state.purchases.length);
+            console.log('Purchase Details:', state.purchases.map(p => ({ id: p.id, batch: p.batchNumber, value: p.totalValue })));
+            console.log('Ledger Entries (PI-):', state.ledger.filter(e => e.transactionId?.startsWith('PI-')).length);
+            console.log('Ledger Details:', state.ledger.filter(e => e.transactionId?.startsWith('PI-')).map(e => ({ tx: e.transactionId, account: e.accountId, debit: e.debit, credit: e.credit })));
+        };
+    }, [state]);
+
     // 🛡️ CRITICAL: This effect is DISABLED in Phase 1 (READ-ONLY)
     // It will be enabled in Phase 2 after user confirmation
     /* WRITE OPERATIONS DISABLED
@@ -929,7 +982,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         dispatch({ type: 'POST_TRANSACTION', payload: { entries: entriesWithFactory } });
     };
-    const deleteTransaction = (transactionId: string, reason?: string, user?: string) => dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
+    
+    const deleteTransaction = async (transactionId: string, reason?: string, user?: string) => {
+        // Delete from state
+        dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
+        
+        // Delete from Firebase
+        const ledgerQuery = query(collection(db, 'ledger'), where('transactionId', '==', transactionId), where('factoryId', '==', currentFactory?.id || ''));
+        const ledgerSnapshot = await getDocs(ledgerQuery);
+        
+        console.log(`🗑️ Deleting ${ledgerSnapshot.size} ledger entries for transaction ${transactionId}`);
+        
+        const deletePromises = ledgerSnapshot.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
+        await Promise.all(deletePromises);
+        
+        console.log(`✅ Deleted all ledger entries for transaction ${transactionId}`);
+    };
+    
     const addPurchase = (purchase: Purchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
         if (!isFirestoreLoaded) {
@@ -984,17 +1053,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
 
         // Create journal entries
-        const inventoryId = '104'; 
-        const apId = '201'; 
+        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
+        const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
+        
+        if (!inventoryAccount || !apAccount) {
+            console.error('❌ Required accounts not found! Inventory:', inventoryAccount, 'AP:', apAccount);
+            alert('Warning: Chart of Accounts is incomplete. Please ensure "Inventory - Raw Materials" and "Accounts Payable" accounts exist.');
+            return;
+        }
+        
+        const inventoryId = inventoryAccount.id;
+        const apId = apAccount.id;
         const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})` }
+            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})` }
         ];
         const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
-        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name}` });
+        const supplierName = state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name || 'Unknown Supplier';
+        // Credit the SUPPLIER's account directly (not general AP)
+        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: purchaseWithFactory.supplierId, accountName: supplierName, currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${supplierName}` });
         purchaseWithFactory.additionalCosts.forEach(cost => {
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
-            entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}` });
+            // Credit the PROVIDER's account directly (freight forwarder, clearing agent, etc.)
+            entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}` });
         });
         postTransaction(entries);
     };
@@ -1119,6 +1200,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
              const entries: Omit<LedgerEntry, 'id'>[] = [ { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: inventoryId, accountName: 'Inventory Asset', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: stockValue, credit: 0, narration: `Opening Stock - ${item.name}` }, { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: capitalId, accountName: 'Capital', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: 0, credit: stockValue, narration: `Opening Stock - ${item.name}` } ]; postTransaction(entries);
         }
     };
+
+    const updateItem = async (id: string, updatedItem: Item) => {
+        const itemWithFactory = {
+            ...updatedItem,
+            factoryId: currentFactory?.id || ''
+        };
+        
+        // Update in state
+        dispatch({ type: 'UPDATE_ENTITY', payload: { type: 'items', id, data: itemWithFactory } });
+        
+        // Update in Firebase
+        try {
+            // Try direct update by document ID
+            await updateDoc(doc(db, 'items', id), itemWithFactory);
+            console.log(`✅ Updated item ${id} in Firebase`);
+        } catch (error: any) {
+            // If direct update fails, try to find and update by query
+            console.warn(`⚠️ Could not update by ID, searching...`, error);
+            try {
+                const itemsQuery = query(
+                    collection(db, 'items'),
+                    where('factoryId', '==', currentFactory?.id || ''),
+                    where('code', '==', updatedItem.code)
+                );
+                const snapshot = await getDocs(itemsQuery);
+                if (!snapshot.empty) {
+                    await updateDoc(snapshot.docs[0].ref, itemWithFactory);
+                    console.log(`✅ Updated item by query match`);
+                } else {
+                    console.error(`❌ Item not found in Firebase`);
+                }
+            } catch (queryError) {
+                console.error(`❌ Error updating item by query:`, queryError);
+            }
+        }
+    };
+
     const addOriginalOpening = (opening: OriginalOpening) => {
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, original opening not saved to database');
@@ -1135,11 +1253,103 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addDoc(collection(db, 'originalOpenings'), { ...openingData, createdAt: serverTimestamp() })
             .then(() => console.log('✅ Original Opening saved to Firebase'))
             .catch((error) => console.error('❌ Error saving original opening:', error));
-        const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105'; const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const transactionId = `OO-${openingWithFactory.id}`;
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: fgInvId, accountName: 'Inventory - Finished Goods (WIP)', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: openingWithFactory.totalValue, credit: 0, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` }, { date: openingWithFactory.date, transactionId, transactionType: TransactionType.ORIGINAL_OPENING, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: openingWithFactory.totalValue, debit: 0, credit: openingWithFactory.totalValue, narration: `Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)` } ]; postTransaction(entries);
+        
+        // Create accounting entries for raw material consumption
+        const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
+        const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
+        
+        if (rawMaterialInvId && wipId) {
+            const transactionId = `OO-${openingWithFactory.id}`;
+            const entries: Omit<LedgerEntry, 'id'>[] = [
+                // Credit Raw Materials (reduce inventory)
+                {
+                    date: openingWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.ORIGINAL_OPENING,
+                    accountId: rawMaterialInvId,
+                    accountName: 'Inventory - Raw Materials',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: openingWithFactory.totalValue,
+                    debit: 0,
+                    credit: openingWithFactory.totalValue,
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`
+                },
+                // Debit WIP (transfer to work in progress)
+                {
+                    date: openingWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.ORIGINAL_OPENING,
+                    accountId: wipId,
+                    accountName: 'Work in Progress (Inventory)',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: openingWithFactory.totalValue,
+                    debit: openingWithFactory.totalValue,
+                    credit: 0,
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`
+                }
+            ];
+            postTransaction(entries);
+        } else {
+            console.error('❌ Original Opening accounting failed: Missing accounts', {
+                rawMaterialInvId,
+                wipId,
+                availableAccounts: state.accounts.map(a => a.name)
+            });
+        }
+        
+        dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: openingWithFactory });
     };
-    const deleteOriginalOpening = (id: string) => { dispatch({ type: 'DELETE_ENTITY', payload: { type: 'originalOpenings', id } }); const transactionId = `OO-${id}`; dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason: 'Delete Original Opening', user: 'Admin' } }); };
+    const deleteOriginalOpening = async (id: string) => {
+        // Delete ledger entries first
+        const transactionId = `OO-${id}`;
+        await deleteTransaction(transactionId, 'Delete Original Opening', CURRENT_USER?.name || 'Admin');
+        
+        // Delete from state
+        dispatch({ type: 'DELETE_ENTITY', payload: { type: 'originalOpenings', id } });
+        
+        // Try to delete from Firebase by document ID
+        try {
+            await deleteDoc(doc(db, 'originalOpenings', id));
+            console.log(`✅ Deleted original opening ${id} from Firebase`);
+        } catch (error: any) {
+            // If direct delete fails (wrong ID), try to find and delete by query
+            console.warn(`⚠️ Could not delete by ID, searching...`, error);
+            try {
+                const openingsQuery = query(
+                    collection(db, 'originalOpenings'), 
+                    where('factoryId', '==', currentFactory?.id || '')
+                );
+                const snapshot = await getDocs(openingsQuery);
+                const deletePromises: Promise<void>[] = [];
+                snapshot.docs.forEach(docSnapshot => {
+                    const data = docSnapshot.data();
+                    // Match by a unique combination of fields
+                    if (data.date && data.supplierId && data.originalType && data.qtyOpened) {
+                        const opening = state.originalOpenings.find(o => o.id === id);
+                        if (opening && 
+                            data.date === opening.date &&
+                            data.supplierId === opening.supplierId &&
+                            data.originalType === opening.originalType &&
+                            data.qtyOpened === opening.qtyOpened) {
+                            deletePromises.push(deleteDoc(docSnapshot.ref));
+                        }
+                    }
+                });
+                await Promise.all(deletePromises);
+                console.log(`✅ Deleted original opening by query match`);
+            } catch (queryError) {
+                console.error(`❌ Error deleting original opening by query:`, queryError);
+            }
+        }
+        
+        // Auto-refresh to update balances
+        console.log('🔄 Refreshing page to update Balance Sheet...');
+        setTimeout(() => window.location.reload(), 500);
+    };
     const addProduction = (productions: ProductionEntry[]) => {
+        console.log('🟢 addProduction called with:', productions);
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, production not saved to database');
             return;
@@ -1150,14 +1360,277 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             factoryId: currentFactory?.id || ''
         }));
         
+        console.log('🟢 Productions with factory:', productionsWithFactory);
+        
         // Save each production entry to Firebase
         productionsWithFactory.forEach(prod => {
             const { id, ...prodData } = prod;
-            addDoc(collection(db, 'productions'), { ...prodData, createdAt: serverTimestamp() })
+            console.log('💾 Saving to Firebase:', prodData);
+            
+            // Remove undefined fields (Firebase doesn't allow undefined values)
+            const cleanedData = Object.fromEntries(
+                Object.entries(prodData).filter(([_, value]) => value !== undefined)
+            );
+            
+            addDoc(collection(db, 'productions'), { ...cleanedData, createdAt: serverTimestamp() })
                 .then(() => console.log('✅ Production entry saved to Firebase'))
                 .catch((error) => console.error('❌ Error saving production:', error));
         });
+        
+        // Create accounting entries for production
+        const fgInvId = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'))?.id;
+        const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
+        const productionGainId = state.accounts.find(a => a.name.includes('Production Gain'))?.id;
+        
+        if (fgInvId) {
+            // Check if this is a re-baling transaction
+            const isRebalingTransaction = productionsWithFactory.some(p => p.isRebaling);
+            
+            if (isRebalingTransaction) {
+                // RE-BALING ACCOUNTING: FG to FG transformation
+                const transactionId = `REBALE-${productionsWithFactory[0].id}`;
+                
+                // Calculate total value consumed and produced
+                const consumedItems = productionsWithFactory.filter(p => p.qtyProduced < 0);
+                const producedItems = productionsWithFactory.filter(p => p.qtyProduced > 0);
+                
+                const totalConsumedValue = consumedItems.reduce((sum, prod) => {
+                    const item = state.items.find(i => i.id === prod.itemId);
+                    return sum + Math.abs(prod.qtyProduced) * (item?.avgCost || 0);
+                }, 0);
+                
+                const totalProducedValue = producedItems.reduce((sum, prod) => {
+                    const item = state.items.find(i => i.id === prod.itemId);
+                    return sum + prod.qtyProduced * (item?.avgCost || 0);
+                }, 0);
+                
+                const rebalingGainLoss = totalProducedValue - totalConsumedValue;
+                
+                console.log('🔄 Re-baling Transaction:', {
+                    totalConsumedValue,
+                    totalProducedValue,
+                    rebalingGainLoss
+                });
+                
+                const entries: Omit<LedgerEntry, 'id'>[] = [];
+                
+                // Credit FG Inventory for consumed items
+                if (totalConsumedValue > 0) {
+                    entries.push({
+                        date: productionsWithFactory[0].date,
+                        transactionId,
+                        transactionType: TransactionType.PRODUCTION,
+                        accountId: fgInvId,
+                        accountName: 'Inventory - Finished Goods',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: totalConsumedValue,
+                        debit: 0,
+                        credit: totalConsumedValue,
+                        narration: `Re-baling: Consumed ${consumedItems.map(p => `${Math.abs(p.qtyProduced)} ${p.itemName}`).join(', ')}`
+                    });
+                }
+                
+                // Debit FG Inventory for produced items
+                if (totalProducedValue > 0) {
+                    entries.push({
+                        date: productionsWithFactory[0].date,
+                        transactionId,
+                        transactionType: TransactionType.PRODUCTION,
+                        accountId: fgInvId,
+                        accountName: 'Inventory - Finished Goods',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: totalProducedValue,
+                        debit: totalProducedValue,
+                        credit: 0,
+                        narration: `Re-baling: Produced ${producedItems.map(p => `${p.qtyProduced} ${p.itemName}`).join(', ')}`
+                    });
+                }
+                
+                // Record re-baling gain/loss
+                if (rebalingGainLoss !== 0 && productionGainId) {
+                    entries.push({
+                        date: productionsWithFactory[0].date,
+                        transactionId,
+                        transactionType: TransactionType.PRODUCTION,
+                        accountId: productionGainId,
+                        accountName: 'Production Gain',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: Math.abs(rebalingGainLoss),
+                        debit: rebalingGainLoss < 0 ? Math.abs(rebalingGainLoss) : 0,
+                        credit: rebalingGainLoss > 0 ? rebalingGainLoss : 0,
+                        narration: `Re-baling ${rebalingGainLoss > 0 ? 'Gain' : 'Loss'}`
+                    });
+                }
+                
+                if (entries.length > 0) {
+                    postTransaction(entries);
+                }
+                
+            } else if (wipId) {
+                // NORMAL PRODUCTION ACCOUNTING: WIP to FG
+                productionsWithFactory.forEach(prod => {
+                    const item = state.items.find(i => i.id === prod.itemId);
+                    if (!item) {
+                        console.log('❌ Item not found for production:', prod.itemId);
+                        return;
+                    }
+                    
+                    console.log('📦 Item found:', item.name, 'avgCost:', item.avgCost);
+                    
+                    // Calculate values using avgCost (can be negative for waste/garbage items)
+                    const finishedGoodsValue = prod.qtyProduced * (item.avgCost || 0);
+                    const totalKg = prod.weightProduced;
+                    const wipCostPerKg = 1; // This should ideally come from the actual WIP cost tracking
+                    const wipValueConsumed = totalKg * wipCostPerKg;
+                    const productionGain = finishedGoodsValue - wipValueConsumed;
+                    
+                    console.log('💰 Calculations:', {
+                        finishedGoodsValue,
+                        totalKg,
+                        wipValueConsumed,
+                        productionGain
+                    });
+                    
+                    const transactionId = `PROD-${prod.id}`;
+                    const entries: Omit<LedgerEntry, 'id'>[] = [
+                        // Finished Goods entry (debit if positive, credit if negative value like garbage)
+                        {
+                            date: prod.date,
+                            transactionId,
+                            transactionType: TransactionType.PRODUCTION,
+                            accountId: fgInvId,
+                            accountName: 'Inventory - Finished Goods',
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: Math.abs(finishedGoodsValue),
+                            debit: finishedGoodsValue >= 0 ? finishedGoodsValue : 0,
+                            credit: finishedGoodsValue < 0 ? Math.abs(finishedGoodsValue) : 0,
+                            narration: `Production: ${prod.itemName} (${prod.qtyProduced} units, ${totalKg}kg)`
+                        },
+                        // Credit WIP (reduce work in progress)
+                        {
+                            date: prod.date,
+                            transactionId,
+                            transactionType: TransactionType.PRODUCTION,
+                            accountId: wipId,
+                            accountName: 'Work in Progress (Inventory)',
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: wipValueConsumed,
+                            debit: 0,
+                            credit: wipValueConsumed,
+                            narration: `Production: ${prod.itemName} (${totalKg}kg raw material consumed)`
+                        }
+                    ];
+                    
+                    // If there's a production gain, credit Production Gain account
+                    if (productionGain !== 0 && productionGainId) {
+                        entries.push({
+                            date: prod.date,
+                            transactionId,
+                            transactionType: TransactionType.PRODUCTION,
+                            accountId: productionGainId,
+                            accountName: 'Production Gain',
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: Math.abs(productionGain),
+                            debit: productionGain < 0 ? Math.abs(productionGain) : 0,
+                            credit: productionGain > 0 ? productionGain : 0,
+                            narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`
+                        });
+                    }
+                    
+                    postTransaction(entries);
+                });
+            }
+        }
+        
+        // First dispatch to update local state
+        dispatch({ type: 'ADD_PRODUCTION', payload: productionsWithFactory });
+        
+        // Then update item stock quantities in Firebase based on production changes
+        const itemStockUpdates = new Map<string, { stockQtyDelta: number; maxSerialEnd: number }>();
+        
+        productionsWithFactory.forEach(prod => {
+            const existing = itemStockUpdates.get(prod.itemId);
+            const currentDelta = existing?.stockQtyDelta || 0;
+            const currentMaxSerial = existing?.maxSerialEnd || 0;
+            
+            itemStockUpdates.set(prod.itemId, {
+                stockQtyDelta: currentDelta + prod.qtyProduced,
+                maxSerialEnd: Math.max(currentMaxSerial, prod.serialEnd || 0)
+            });
+        });
+        
+        // Apply updates to Firebase
+        itemStockUpdates.forEach(({ stockQtyDelta, maxSerialEnd }, itemId) => {
+            const item = state.items.find(i => i.id === itemId);
+            if (item) {
+                const updates: any = {
+                    stockQty: item.stockQty + stockQtyDelta
+                };
+                
+                if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
+                    updates.nextSerial = maxSerialEnd + 1;
+                }
+                
+                updateDoc(doc(db, 'items', itemId), updates)
+                    .then(() => console.log(`✅ Updated stock for item ${itemId}: stockQty +${stockQtyDelta} = ${updates.stockQty}`))
+                    .catch((error) => console.error(`❌ Error updating item ${itemId}:`, error));
+            }
+        });
     };
+
+    const deleteProduction = async (id: string) => {
+        // Delete ledger entries first
+        const transactionId = `PROD-${id}`;
+        await deleteTransaction(transactionId, 'Delete Production', CURRENT_USER?.name || 'Admin');
+        
+        // Delete from state
+        dispatch({ type: 'DELETE_ENTITY', payload: { type: 'productions', id } });
+        
+        // Try to delete from Firebase by document ID
+        try {
+            await deleteDoc(doc(db, 'productions', id));
+            console.log(`✅ Deleted production ${id} from Firebase`);
+        } catch (error: any) {
+            // If direct delete fails (wrong ID), try to find and delete by query
+            console.warn(`⚠️ Could not delete by ID, searching...`, error);
+            try {
+                const productionsQuery = query(
+                    collection(db, 'productions'), 
+                    where('factoryId', '==', currentFactory?.id || '')
+                );
+                const snapshot = await getDocs(productionsQuery);
+                const deletePromises: Promise<void>[] = [];
+                snapshot.docs.forEach(docSnapshot => {
+                    const data = docSnapshot.data();
+                    // Match by a unique combination of fields
+                    if (data.date && data.itemId && data.qtyProduced) {
+                        const production = state.productions.find(p => p.id === id);
+                        if (production && 
+                            data.date === production.date &&
+                            data.itemId === production.itemId &&
+                            data.qtyProduced === production.qtyProduced) {
+                            deletePromises.push(deleteDoc(docSnapshot.ref));
+                        }
+                    }
+                });
+                await Promise.all(deletePromises);
+                console.log(`✅ Deleted production by query match`);
+            } catch (queryError) {
+                console.error(`❌ Error deleting production by query:`, queryError);
+            }
+        }
+        
+        // Auto-refresh to update balances
+        console.log('🔄 Refreshing page to update Balance Sheet...');
+        setTimeout(() => window.location.reload(), 500);
+    };
+
     const postBaleOpening = (stagedItems: { itemId: string, qty: number, date: string }[]) => {
         if (stagedItems.length === 0) return;
         const transactionId = generateId(); const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105';
@@ -1208,24 +1681,48 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .catch((error) => console.error('❌ Error saving sales invoice:', error));
     };
     const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
+    const updatePurchase = (purchase: Purchase) => dispatch({ type: 'UPDATE_PURCHASE', payload: purchase });
     const postSalesInvoice = (invoice: SalesInvoice) => {
         dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
-        const transactionId = `INV-${invoice.invoiceNo}`; const arId = '103'; const revenueId = '401'; const apId = '201'; const discountId = state.accounts.find(a => a.name.includes('Discount'))?.id || '501';
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: arId, accountName: 'Accounts Receivable', currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}` } ];
+        const transactionId = `INV-${invoice.invoiceNo}`;
+        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
+        const discountAccount = state.accounts.find(a => a.name.includes('Discount'));
+        const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
+        
+        const revenueId = revenueAccount?.id || '401';
+        const discountId = discountAccount?.id || '501';
+        
+        // Debit the CUSTOMER's account directly (not general AR)
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}` } ];
         const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => { const itemRate = item.exchangeRate || invoice.exchangeRate; return sum + (item.total / itemRate); }, 0);
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}` });
         if (invoice.surcharge > 0) { const surchargeUSD = invoice.surcharge / invoice.exchangeRate; entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: surchargeUSD, debit: 0, credit: surchargeUSD, narration: `Surcharge: ${invoice.invoiceNo}` }); }
         if (invoice.discount > 0) { const discountUSD = invoice.discount / invoice.exchangeRate; entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: discountUSD, debit: discountUSD, credit: 0, narration: `Discount: ${invoice.invoiceNo}` }); }
-        invoice.additionalCosts.forEach(cost => { const amountUSD = cost.amount / cost.exchangeRate; entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}` }); });
+        invoice.additionalCosts.forEach(cost => { 
+            const amountUSD = cost.amount / cost.exchangeRate; 
+            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+            // Credit the PROVIDER's account directly
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}` }); 
+        });
         postTransaction(entries);
     };
     const addDirectSale = (invoice: SalesInvoice, batchLandedCostPerKg: number) => {
         dispatch({ type: 'ADD_SALES_INVOICE', payload: invoice });
-        const transactionId = `DS-${invoice.invoiceNo}`; const arId = '103'; const revenueId = '401'; const cogsId = state.accounts.find(a => a.name.includes('COGS - Direct'))?.id || '503'; const rawMatInventoryId = '104';
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: arId, accountName: 'Accounts Receivable', currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` }, { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal / invoice.exchangeRate, debit: 0, credit: invoice.netTotal / invoice.exchangeRate, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` } ];
+        const transactionId = `DS-${invoice.invoiceNo}`;
+        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
+        const cogsAccount = state.accounts.find(a => a.name.includes('COGS - Direct'));
+        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
+        const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
+        
+        const revenueId = revenueAccount?.id || '401';
+        const cogsId = cogsAccount?.id || '503';
+        const rawMatInventoryId = inventoryAccount?.id || '104';
+        
+        // Debit the CUSTOMER's account directly (not general AR)
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` }, { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal / invoice.exchangeRate, debit: 0, credit: invoice.netTotal / invoice.exchangeRate, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` } ];
         const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0); const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)` });
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Material', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
         postTransaction(entries);
     };
     const addOngoingOrder = (order: OngoingOrder) => {
@@ -1411,10 +1908,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     const deleteEntity = (type: any, id: string) => {
         console.log(`🗑️ Attempting to delete ${type}/${id}`);
+        
+        // If deleting a purchase, also delete its ledger entries
+        if (type === 'purchases') {
+            const purchase = state.purchases.find(p => p.id === id);
+            if (purchase) {
+                const transactionId = `PI-${purchase.batchNumber || id.toUpperCase()}`;
+                console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
+                deleteTransaction(transactionId, 'Purchase deleted', CURRENT_USER?.name || 'System');
+            }
+        }
+        
+        // If deleting a sales invoice, also delete its ledger entries
+        if (type === 'salesInvoices') {
+            const invoice = state.salesInvoices.find(inv => inv.id === id);
+            if (invoice) {
+                const transactionId = `INV-${invoice.invoiceNo}`;
+                console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
+                deleteTransaction(transactionId, 'Sales invoice deleted', CURRENT_USER?.name || 'System');
+            }
+        }
+        
+        // If deleting payment/receipt/expense/journal vouchers, delete their ledger entries
+        if (type === 'paymentVouchers' || type === 'receiptVouchers' || type === 'expenseVouchers' || type === 'journalVouchers') {
+            // Transaction ID format: PV-XXX, RV-XXX, EV-XXX, JV-XXX
+            const prefix = type === 'paymentVouchers' ? 'PV' : 
+                          type === 'receiptVouchers' ? 'RV' : 
+                          type === 'expenseVouchers' ? 'EV' : 'JV';
+            const transactionId = `${prefix}-${id}`;
+            console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
+            deleteTransaction(transactionId, `${type} deleted`, CURRENT_USER?.name || 'System');
+        }
+        
         dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
         // Delete from Firebase
         deleteDoc(doc(db, type, id))
-            .then(() => console.log(`✅ Deleted ${type}/${id} from Firebase`))
+            .then(() => {
+                console.log(`✅ Deleted ${type}/${id} from Firebase`);
+                // Auto-refresh to update balances for financial transactions
+                if (type === 'purchases' || type === 'salesInvoices' || 
+                    type === 'paymentVouchers' || type === 'receiptVouchers' || 
+                    type === 'expenseVouchers' || type === 'journalVouchers') {
+                    console.log('🔄 Refreshing page to update Balance Sheet...');
+                    setTimeout(() => window.location.reload(), 500);
+                }
+            })
             .catch((error) => {
                 console.error(`❌ Error deleting ${type}/${id}:`, error);
                 console.error('Full error:', error);
@@ -1427,6 +1965,79 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updateGuaranteeCheque = (cheque: GuaranteeCheque) => dispatch({ type: 'UPDATE_GUARANTEE_CHEQUE', payload: cheque });
     const addCustomsDocument = (doc: CustomsDocument) => dispatch({ type: 'ADD_CUSTOMS_DOCUMENT', payload: doc });
 
+    // Cleanup orphaned ledger entries (entries whose purchase/invoice no longer exists)
+    const cleanupOrphanedLedger = async () => {
+        if (!currentFactory?.id) {
+            alert('No factory selected');
+            return;
+        }
+        
+        const purchaseTransactions = state.purchases.map(p => `PI-${p.batchNumber || p.id.toUpperCase()}`);
+        const invoiceTransactions = state.salesInvoices.map(inv => `INV-${inv.invoiceNo}`);
+        const openingTransactions = state.originalOpenings.map(oo => `OO-${oo.id}`);
+        const productionTransactions = state.productions.map(prod => `PROD-${prod.id}`);
+        const validTransactions = [...purchaseTransactions, ...invoiceTransactions, ...openingTransactions, ...productionTransactions];
+        
+        console.log('Valid Transactions:', validTransactions);
+        console.log('Opening Transactions:', openingTransactions);
+        
+        // Find orphaned entries in state (transactions with no corresponding source document)
+        const orphanedInState = state.ledger.filter(e => 
+            e.transactionId && 
+            (e.transactionId.startsWith('PI-') || e.transactionId.startsWith('INV-') || 
+             e.transactionId.startsWith('OO-') || e.transactionId.startsWith('PROD-')) &&
+            !validTransactions.includes(e.transactionId)
+        );
+        
+        console.log(`Found ${orphanedInState.length} orphaned ledger entries in state`);
+        console.log('Orphaned transactions:', [...new Set(orphanedInState.map(e => e.transactionId))]);
+        
+        // ALSO find duplicate entries (each OO should have exactly 2 entries: 1 debit WIP, 1 credit Raw Mat)
+        const transactionCounts: { [key: string]: number } = {};
+        state.ledger.forEach(e => {
+            if (e.transactionId && (e.transactionId.startsWith('PI-') || e.transactionId.startsWith('INV-') || 
+                                    e.transactionId.startsWith('OO-') || e.transactionId.startsWith('PROD-'))) {
+                transactionCounts[e.transactionId] = (transactionCounts[e.transactionId] || 0) + 1;
+            }
+        });
+        
+        const duplicates = Object.entries(transactionCounts).filter(([txId, count]) => {
+            if (txId.startsWith('OO-')) return count !== 2; // OO should have exactly 2 entries
+            if (txId.startsWith('PROD-')) return count > 4; // Production can have 3-4 entries
+            return count > 3; // Others
+        });
+        console.log(`Found ${duplicates.length} transactions with incorrect entry count:`, duplicates);
+        
+        // Delete from Firebase
+        const ledgerQuery = query(collection(db, 'ledger'), where('factoryId', '==', currentFactory.id));
+        const snapshot = await getDocs(ledgerQuery);
+        
+        let deletedCount = 0;
+        const deletePromises: Promise<void>[] = [];
+        
+        snapshot.docs.forEach(docSnapshot => {
+            const entry = docSnapshot.data();
+            const txId = entry.transactionId;
+            
+            // Delete orphaned entries (no matching source document)
+            if (txId && (txId.startsWith('PI-') || txId.startsWith('INV-') || 
+                        txId.startsWith('OO-') || txId.startsWith('PROD-')) && 
+                !validTransactions.includes(txId)) {
+                deletePromises.push(deleteDoc(docSnapshot.ref));
+                deletedCount++;
+                console.log(`Deleting orphaned entry for ${txId}`);
+            }
+        });
+        
+        await Promise.all(deletePromises);
+        
+        alert(`Cleanup complete!\nDeleted ${deletedCount} orphaned ledger entries from Firebase.\nPage will refresh automatically...`);
+        console.log(`✅ Cleanup complete: deleted ${deletedCount} entries`);
+        
+        // Auto-refresh to reload clean data
+        setTimeout(() => window.location.reload(), 1000);
+    };
+
     return (
         <DataContext.Provider value={{
             state,
@@ -1437,6 +2048,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             deleteTransaction,
             addPartner,
             addItem,
+            updateItem,
             addAccount,
             addDivision,
             addSubDivision,
@@ -1464,8 +2076,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addOriginalOpening,
             deleteOriginalOpening,
             addProduction,
+            deleteProduction,
             postBaleOpening,
             addPurchase,
+            updatePurchase,
             addBundlePurchase,
             saveLogisticsEntry,
             addSalesInvoice,
@@ -1480,7 +2094,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatePlannerEntry,
             addGuaranteeCheque,
             updateGuaranteeCheque,
-            addCustomsDocument
+            addCustomsDocument,
+            cleanupOrphanedLedger
         }}>
             {children}
         </DataContext.Provider>

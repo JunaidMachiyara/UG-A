@@ -125,6 +125,7 @@ export const INITIAL_ACCOUNTS: Account[] = [
     { id: '3100', code: '3100', name: 'Owner\'s Drawings', type: AccountType.EQUITY, balance: 0 },
     { id: '3200', code: '3200', name: 'Retained Earnings', type: AccountType.EQUITY, balance: 0 },
     { id: '3300', code: '3300', name: 'Current Year Profit/Loss', type: AccountType.EQUITY, balance: 0 },
+    { id: '3400', code: '3400', name: 'Production Gain', type: AccountType.EQUITY, balance: 0 },
     
     // ========================================
     // 4000-4999: REVENUE

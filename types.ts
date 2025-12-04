@@ -178,7 +178,7 @@ export interface Item {
     category: string; // Should link to Category ID or Name
     section?: string; // Should link to Section ID or Name
     packingType: PackingType;
-    avgCost: number; // Moving Weighted Average Cost (USD)
+    avgCost: number; // Production cost per unit (can be negative for waste/garbage)
     stockQty: number; // In Units (Bales/Sacks) or Kg depending on packing
     weightPerUnit: number; // Approx Kg per unit
     salePrice?: number; // USD
@@ -451,6 +451,7 @@ export interface ProductionEntry {
     weightProduced: number; // Total Kg
     serialStart?: number; // Was baleStart. Start of the sequence for this batch
     serialEnd?: number;   // Was baleEnd. End of the sequence for this batch
+    isRebaling?: boolean; // Flag to distinguish re-baling from actual production
 }
 
 export interface InvoiceItem {
