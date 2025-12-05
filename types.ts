@@ -390,7 +390,11 @@ export interface Purchase {
     status: 'In Transit' | 'Arrived' | 'Cleared'; // NEW: Logistics Status
     
     date: string;
-    supplierId: string;
+    supplierId: string; // Legacy: for backward compatibility
+    mainSupplierId?: string; // Main supplier for composite purchase
+    subSuppliers?: string[]; // Array of sub-supplier IDs
+    isComposite?: boolean; // Flag to indicate composite purchase
+    compositeMap?: { subSupplierId: string; item: PurchaseOriginalItem }[]; // Optional mapping
     factoryId: string; // Factory assignment
     
     // Legacy fields (kept for backward compatibility, but use items[] for multi-type)
