@@ -1118,7 +1118,7 @@ const ProductionYield: React.FC = () => {
         const totalWorkingCost = totalInputWeight * workingCostRate;
         const grandTotalCost = totalInputCost + totalWorkingCost;
 
-        const production = state.productions.filter(p => p.date >= startDate && p.date <= endDate && p.qtyProduced > 0);
+        const production = state.productions.filter(p => p.date >= startDate && p.date <= endDate && p.qtyProduced > 0 && !p.isRebaling);
         const grouped: Record<string, { name: string, weight: number, value: number, items: any[] }> = {};
         
         production.forEach(p => {
@@ -1146,7 +1146,7 @@ const ProductionYield: React.FC = () => {
     }, [state.originalOpenings, state.productions, startDate, endDate, priceBasis, workingCostRate, groupBy, state.items, state.categories, state.sections]);
 
     const dailyData = useMemo(() => {
-        const prod = state.productions.filter(p => p.date === dailyDate && p.qtyProduced > 0);
+        const prod = state.productions.filter(p => p.date === dailyDate && p.qtyProduced > 0 && !p.isRebaling);
         const openings = state.originalOpenings.filter(o => o.date === dailyDate);
         const openingValue = openings.reduce((s, o) => s + o.totalValue, 0);
         const prodValue = prod.reduce((s, p) => {

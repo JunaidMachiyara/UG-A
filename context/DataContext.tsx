@@ -385,6 +385,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'UPDATE_PURCHASE': return { ...state, purchases: state.purchases.map(p => p.id === action.payload.id ? action.payload : p) };
         case 'POST_SALES_INVOICE': {
             const updatedInvoices = state.salesInvoices.map(inv => inv.id === action.payload.id ? { ...action.payload, status: 'Posted' } : inv);
+            // Customer balance updated in USD (all sales are in USD now)
             const updatedPartners = state.partners.map(p => p.id === action.payload.customerId ? { ...p, balance: p.balance + action.payload.netTotal } : p);
             const updatedItems = state.items.map(item => {
                 const soldItem = action.payload.items.find(i => i.itemId === item.id);
@@ -1682,22 +1683,71 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
     const updatePurchase = (purchase: Purchase) => dispatch({ type: 'UPDATE_PURCHASE', payload: purchase });
-    const postSalesInvoice = (invoice: SalesInvoice) => {
-        dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
+    const postSalesInvoice = async (invoice: SalesInvoice) => {
+        // Prevent double posting - check if entries already exist
         const transactionId = `INV-${invoice.invoiceNo}`;
+        const existingEntries = state.ledger.filter(e => e.transactionId === transactionId);
+        if (existingEntries.length > 0) {
+            alert('⚠️ This invoice has already been posted! Ledger entries exist.');
+            console.warn('Prevented double posting for:', invoice.invoiceNo);
+            return;
+        }
+        
+        dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
+        
+        // Update status in Firestore (find by matching invoice data since we don't store Firebase doc ID)
+        if (isFirestoreLoaded) {
+            try {
+                const invoicesRef = collection(db, 'salesInvoices');
+                const q = query(invoicesRef, where('invoiceNo', '==', invoice.invoiceNo));
+                const snapshot = await getDocs(q);
+                if (!snapshot.empty) {
+                    const docRef = snapshot.docs[0].ref;
+                    await updateDoc(docRef, { status: 'Posted' });
+                    console.log('✅ Invoice status updated to Posted in Firestore');
+                }
+            } catch (error) {
+                console.error('❌ Error updating invoice status:', error);
+            }
+        }
+        
         const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
         const discountAccount = state.accounts.find(a => a.name.includes('Discount'));
+        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold'));
+        const finishedGoodsAccount = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'));
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
         
         const revenueId = revenueAccount?.id || '401';
         const discountId = discountAccount?.id || '501';
+        const cogsId = cogsAccount?.id || '5000';
+        const finishedGoodsId = finishedGoodsAccount?.id || '1202';
         
-        // Debit the CUSTOMER's account directly (not general AR)
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}` } ];
-        const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => { const itemRate = item.exchangeRate || invoice.exchangeRate; return sum + (item.total / itemRate); }, 0);
+        // Debit the CUSTOMER's account directly (not general AR) - Sales are in USD, but store with customer's currency for display
+        const customerCurrency = (invoice as any).customerCurrency || invoice.currency || 'USD';
+        const customerRate = (invoice as any).customerExchangeRate || invoice.exchangeRate || 1;
+        const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency using invoice's saved rate
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}` } ];
+        const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => sum + item.total, 0);
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}` });
-        if (invoice.surcharge > 0) { const surchargeUSD = invoice.surcharge / invoice.exchangeRate; entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: surchargeUSD, debit: 0, credit: surchargeUSD, narration: `Surcharge: ${invoice.invoiceNo}` }); }
-        if (invoice.discount > 0) { const discountUSD = invoice.discount / invoice.exchangeRate; entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: discountUSD, debit: discountUSD, credit: 0, narration: `Discount: ${invoice.invoiceNo}` }); }
+        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}` }); }
+        if (invoice.discount > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}` }); }
+        
+        // Calculate COGS based on item avgCost and reduce Finished Goods inventory
+        const totalCOGS = invoice.items.reduce((sum, item) => {
+            const itemDef = state.items.find(i => i.id === item.itemId);
+            if (!itemDef) return sum;
+            // COGS = quantity × avgCost (avgCost is per unit)
+            const itemCOGS = item.qty * itemDef.avgCost;
+            return sum + itemCOGS;
+        }, 0);
+        
+        if (totalCOGS > 0) {
+            // Debit COGS (Expense increases)
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'Cost of Goods Sold', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}` });
+            // Credit Finished Goods Inventory (Asset decreases)
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}` });
+        }
+        
         invoice.additionalCosts.forEach(cost => { 
             const amountUSD = cost.amount / cost.exchangeRate; 
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
@@ -1718,8 +1768,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const cogsId = cogsAccount?.id || '503';
         const rawMatInventoryId = inventoryAccount?.id || '104';
         
-        // Debit the CUSTOMER's account directly (not general AR)
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: invoice.currency, exchangeRate: invoice.exchangeRate, fcyAmount: invoice.netTotal, debit: invoice.netTotal / invoice.exchangeRate, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` }, { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal / invoice.exchangeRate, debit: 0, credit: invoice.netTotal / invoice.exchangeRate, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` } ];
+        // Debit the CUSTOMER's account directly (not general AR) - Sales are in USD, store with customer's currency for display
+        const customerCurrency = (invoice as any).customerCurrency || 'USD';
+        const customerRate = (invoice as any).customerExchangeRate || 1;
+        const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` }, { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` } ];
         const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0); const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)` });
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
@@ -1755,7 +1808,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         shipmentItems.forEach(ship => { if (ship.shipQty <= 0) return; const itemDef = state.items.find(i => i.id === ship.itemId); if (!itemDef) return; const unitRate = itemDef.salePrice || 0; invoiceItems.push({ id: generateId(), itemId: ship.itemId, itemName: itemDef.name, qty: ship.shipQty, rate: unitRate, total: ship.shipQty * unitRate, totalKg: ship.shipQty * itemDef.weightPerUnit, currency: currency, exchangeRate: rate, sourceOrderId: order.id }); });
         if (invoiceItems.length === 0) return;
         const maxInv = state.salesInvoices.map(i => parseInt(i.invoiceNo.replace('SINV-', ''))).filter(n => !isNaN(n)).reduce((max, curr) => curr > max ? curr : max, 1000); const nextInvNo = `SINV-${maxInv + 1}`; const grossTotal = invoiceItems.reduce((sum, i) => sum + i.total, 0);
-        const newInvoice: SalesInvoice = { id: generateId(), invoiceNo: nextInvNo, date: new Date().toISOString().split('T')[0], status: 'Unposted', customerId: order.customerId, logoId: state.logos[0]?.id || '', currency: currency, exchangeRate: rate, divisionId: customer?.divisionId, subDivisionId: customer?.subDivisionId, discount: 0, surcharge: 0, items: invoiceItems, additionalCosts: [], grossTotal: grossTotal, netTotal: grossTotal };
+        const newInvoice: SalesInvoice = { id: generateId(), invoiceNo: nextInvNo, date: new Date().toISOString().split('T')[0], status: 'Unposted', customerId: order.customerId, logoId: state.logos[0]?.id || '', currency: 'USD', exchangeRate: 1, customerCurrency: currency, customerExchangeRate: rate, divisionId: customer?.divisionId, subDivisionId: customer?.subDivisionId, discount: 0, surcharge: 0, items: invoiceItems, additionalCosts: [], grossTotal: grossTotal, netTotal: grossTotal };
         dispatch({ type: 'ADD_SALES_INVOICE', payload: newInvoice });
     };
     const addEmployee = (employee: Employee) => {
@@ -1919,13 +1972,35 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
-        // If deleting a sales invoice, also delete its ledger entries
+        // If deleting a sales invoice, also delete its ledger entries and restore inventory/balances
         if (type === 'salesInvoices') {
             const invoice = state.salesInvoices.find(inv => inv.id === id);
             if (invoice) {
                 const transactionId = `INV-${invoice.invoiceNo}`;
                 console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
                 deleteTransaction(transactionId, 'Sales invoice deleted', CURRENT_USER?.name || 'System');
+                
+                // Restore item stock quantities (reverse the sale)
+                if (invoice.status === 'Posted') {
+                    invoice.items.forEach(soldItem => {
+                        const itemRef = doc(db, 'items', soldItem.itemId);
+                        const item = state.items.find(i => i.id === soldItem.itemId);
+                        if (item) {
+                            updateDoc(itemRef, { stockQty: item.stockQty + soldItem.qty })
+                                .then(() => console.log(`✅ Restored stock for ${item.name}: +${soldItem.qty}`))
+                                .catch((error) => console.error(`❌ Error restoring stock:`, error));
+                        }
+                    });
+                    
+                    // Restore customer balance (reverse AR)
+                    const customerRef = doc(db, 'partners', invoice.customerId);
+                    const customer = state.partners.find(p => p.id === invoice.customerId);
+                    if (customer) {
+                        updateDoc(customerRef, { balance: customer.balance - invoice.netTotal })
+                            .then(() => console.log(`✅ Restored customer balance: -${invoice.netTotal}`))
+                            .catch((error) => console.error(`❌ Error restoring customer balance:`, error));
+                    }
+                }
             }
         }
         

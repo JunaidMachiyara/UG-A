@@ -432,7 +432,7 @@ export interface OriginalOpening {
     id: string;
     date: string;
     supplierId: string; // or 'INTERNAL' for Bales Opening
-    originalType: string; // Stores ID if linked to Purchase, or custom string for Bales Opening
+    originalType: string; // Stores originalTypeId (e.g., "OT-001"), not the name!
     batchNumber?: string; // Optional batch tracking
     qtyOpened: number;
     weightOpened: number; // Kg
@@ -552,8 +552,12 @@ export interface SalesInvoice {
     subDivisionId?: string;
     
     // Financials
-    currency: Currency; // Invoice Currency
-    exchangeRate: number; // Base to Invoice
+    currency: Currency; // Invoice Currency (always USD for accounting)
+    exchangeRate: number; // Base to Invoice (always 1 for USD)
+    
+    // Customer's currency for ledger display (optional for direct sales)
+    customerCurrency?: Currency;
+    customerExchangeRate?: number;
     
     discount: number;
     surcharge: number;

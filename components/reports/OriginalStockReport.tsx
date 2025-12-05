@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useData } from '../../context/DataContext';
-import { Download, Printer, Package, TrendingDown, TrendingUp } from 'lucide-react';
+import { Download, Printer, Package, TrendingDown, TrendingUp, X } from 'lucide-react';
+import { SalesInvoice } from '../../types';
 
 interface StockSummary {
     originalTypeId: string;
@@ -8,14 +9,21 @@ interface StockSummary {
     supplierId?: string; // Track which supplier this stock is from
     totalPurchased: number;
     totalOpened: number;
+    totalDirectSold: number;
     inHand: number;
     avgCostPerKg: number;
+    avgSaleRatePerKg: number;
+    totalDirectSaleRevenue: number;
+    totalDirectSaleCost: number;
+    profitLoss: number;
+    directSaleInvoices: SalesInvoice[];
     totalValue: number;
 }
 
 export const OriginalStockReport: React.FC = () => {
     const { state } = useData();
     const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
+    const [selectedInvoices, setSelectedInvoices] = useState<SalesInvoice[] | null>(null);
 
     // Calculate stock summary
     const stockData = useMemo(() => {
@@ -40,8 +48,14 @@ export const OriginalStockReport: React.FC = () => {
                     supplierId: purchase.supplierId,
                     totalPurchased: 0,
                     totalOpened: 0,
+                    totalDirectSold: 0,
                     inHand: 0,
                     avgCostPerKg: 0,
+                    avgSaleRatePerKg: 0,
+                    totalDirectSaleRevenue: 0,
+                    totalDirectSaleCost: 0,
+                    profitLoss: 0,
+                    directSaleInvoices: [],
                     totalValue: 0
                 });
             }
@@ -56,31 +70,80 @@ export const OriginalStockReport: React.FC = () => {
 
         // Subtract openings (consumption)
         state.originalOpenings.forEach(opening => {
-            const typeMatch = Array.from(summary.values()).find(s => 
-                s.originalTypeName === opening.originalType &&
-                (selectedSupplier === 'all' || s.supplierId === opening.supplierId)
-            );
-            if (typeMatch) {
-                typeMatch.totalOpened += opening.weightOpened;
-            }
+            // Match by supplierId and originalTypeId (opening.originalType stores the ID)
+            const matchingKeys = Array.from(summary.keys()).filter(key => {
+                const item = summary.get(key)!;
+                // Direct ID match (opening.originalType is actually the ID despite the name)
+                const idMatch = item.originalTypeId === opening.originalType;
+                const supplierMatch = item.supplierId === opening.supplierId;
+                return idMatch && (selectedSupplier === 'all' || supplierMatch);
+            });
+            
+            matchingKeys.forEach(key => {
+                const item = summary.get(key)!;
+                item.totalOpened += opening.weightOpened;
+            });
         });
 
-        // Calculate in hand and value
+        // Calculate direct sales (Posted invoices with DS- or DSINV- prefix)
+        const directSalesInvoices = state.salesInvoices.filter(inv => 
+            inv.status === 'Posted' && (inv.invoiceNo.startsWith('DS-') || inv.invoiceNo.startsWith('DSINV-'))
+        );
+
+        directSalesInvoices.forEach(invoice => {
+            invoice.items.forEach(item => {
+                if (item.originalPurchaseId) {
+                    // Find the purchase this sale came from (search all purchases, not just filtered)
+                    const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                    if (purchase) {
+                        // Skip if supplier filter is active and doesn't match
+                        if (selectedSupplier !== 'all' && purchase.supplierId !== selectedSupplier) {
+                            return;
+                        }
+                        
+                        const key = purchase.originalProductId 
+                            ? `${purchase.supplierId}-${purchase.originalTypeId}-${purchase.originalProductId}`
+                            : `${purchase.supplierId}-${purchase.originalTypeId}`;
+                        
+                        const stockItem = summary.get(key);
+                        if (stockItem) {
+                            stockItem.totalDirectSold += item.totalKg;
+                            stockItem.totalDirectSaleRevenue += item.total; // USD
+                            stockItem.totalDirectSaleCost += item.totalKg * purchase.landedCostPerKg;
+                            
+                            // Only add invoice once per stock item
+                            if (!stockItem.directSaleInvoices.find(inv => inv.id === invoice.id)) {
+                                stockItem.directSaleInvoices.push(invoice);
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        // Calculate in hand, averages, and profit/loss
         summary.forEach(item => {
-            item.inHand = item.totalPurchased - item.totalOpened;
+            item.inHand = item.totalPurchased - item.totalOpened - item.totalDirectSold;
             item.totalValue = item.inHand * item.avgCostPerKg;
+            
+            if (item.totalDirectSold > 0) {
+                item.avgSaleRatePerKg = item.totalDirectSaleRevenue / item.totalDirectSold;
+                item.profitLoss = item.totalDirectSaleRevenue - item.totalDirectSaleCost;
+            }
         });
 
         return Array.from(summary.values())
             .filter(item => item.inHand > 0 || item.totalPurchased > 0) // Show items with any activity
             .sort((a, b) => b.inHand - a.inHand);
-    }, [state.purchases, state.originalOpenings, selectedSupplier]);
+    }, [state.purchases, state.originalOpenings, state.salesInvoices, selectedSupplier]);
 
     const totals = useMemo(() => ({
         totalPurchased: stockData.reduce((sum, item) => sum + item.totalPurchased, 0),
         totalOpened: stockData.reduce((sum, item) => sum + item.totalOpened, 0),
+        totalDirectSold: stockData.reduce((sum, item) => sum + item.totalDirectSold, 0),
         totalInHand: stockData.reduce((sum, item) => sum + item.inHand, 0),
-        totalValue: stockData.reduce((sum, item) => sum + item.totalValue, 0)
+        totalValue: stockData.reduce((sum, item) => sum + item.totalValue, 0),
+        totalConsumed: stockData.reduce((sum, item) => sum + item.totalOpened + item.totalDirectSold, 0)
     }), [stockData]);
 
     const handlePrint = () => window.print();
@@ -168,7 +231,10 @@ export const OriginalStockReport: React.FC = () => {
                         <div className="text-sm font-medium text-slate-500">Total Consumed</div>
                         <TrendingDown className="text-red-500" size={20} />
                     </div>
-                    <div className="text-2xl font-bold text-slate-800">{totals.totalOpened.toFixed(0)} Kg</div>
+                    <div className="text-2xl font-bold text-slate-800">{totals.totalConsumed.toFixed(0)} Kg</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                        Opened: {totals.totalOpened.toFixed(0)} Kg | Direct Sales: {totals.totalDirectSold.toFixed(0)} Kg
+                    </div>
                 </div>
                 
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
@@ -210,6 +276,12 @@ export const OriginalStockReport: React.FC = () => {
                                     Avg Cost/Kg
                                 </th>
                                 <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                                    Avg Sale/Kg<br/>(Direct Sales)
+                                </th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                                    Profit/Loss<br/>(Direct Sales)
+                                </th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
                                     Total Value (USD)
                                 </th>
                             </tr>
@@ -224,13 +296,31 @@ export const OriginalStockReport: React.FC = () => {
                                         {item.totalPurchased.toFixed(2)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-red-600">
-                                        {item.totalOpened.toFixed(2)}
+                                        {(item.totalOpened + item.totalDirectSold).toFixed(2)}
+                                        {item.totalDirectSold > 0 && (
+                                            <div className="text-xs text-slate-500">
+                                                (Opened: {item.totalOpened.toFixed(0)} + Sold: {item.totalDirectSold.toFixed(0)})
+                                            </div>
+                                        )}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono font-bold text-emerald-600">
                                         {item.inHand.toFixed(2)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">
                                         ${item.avgCostPerKg.toFixed(3)}
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-blue-600">
+                                        {item.avgSaleRatePerKg > 0 ? `$${item.avgSaleRatePerKg.toFixed(3)}` : '-'}
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-right">
+                                        {item.profitLoss !== 0 ? (
+                                            <button
+                                                onClick={() => setSelectedInvoices(item.directSaleInvoices)}
+                                                className={`font-mono font-semibold underline cursor-pointer hover:opacity-70 ${item.profitLoss > 0 ? 'text-emerald-600' : 'text-red-600'}`}
+                                            >
+                                                ${item.profitLoss.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                            </button>
+                                        ) : '-'}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono font-semibold text-blue-600">
                                         ${item.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
@@ -239,7 +329,7 @@ export const OriginalStockReport: React.FC = () => {
                             ))}
                             {stockData.length === 0 && (
                                 <tr>
-                                    <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                                    <td colSpan={8} className="px-6 py-12 text-center text-slate-500">
                                         No data available
                                     </td>
                                 </tr>
@@ -261,6 +351,12 @@ export const OriginalStockReport: React.FC = () => {
                                     <td className="px-6 py-4 text-sm text-right font-mono text-slate-800">
                                         -
                                     </td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-800">
+                                        -
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-800">
+                                        -
+                                    </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-blue-700 text-lg">
                                         ${totals.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                                     </td>
@@ -270,6 +366,68 @@ export const OriginalStockReport: React.FC = () => {
                     </table>
                 </div>
             </div>
+
+            {/* Invoice Details Modal */}
+            {selectedInvoices && selectedInvoices.length > 0 && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelectedInvoices(null)}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-blue-600 text-white px-6 py-4 flex justify-between items-center">
+                            <h3 className="text-lg font-bold">Direct Sale Invoices</h3>
+                            <button onClick={() => setSelectedInvoices(null)} className="text-white hover:bg-blue-700 rounded p-1">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+                            <div className="space-y-4">
+                                {selectedInvoices.map(inv => (
+                                    <div key={inv.id} className="border border-slate-200 rounded-lg p-4">
+                                        <div className="grid grid-cols-3 gap-4 mb-3 pb-3 border-b border-slate-200">
+                                            <div>
+                                                <div className="text-xs text-slate-500">Invoice #</div>
+                                                <div className="font-mono font-bold text-blue-600">{inv.invoiceNo}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-xs text-slate-500">Date</div>
+                                                <div className="font-medium">{inv.date}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-xs text-slate-500">Customer</div>
+                                                <div className="font-medium">{state.partners.find(p => p.id === inv.customerId)?.name}</div>
+                                            </div>
+                                        </div>
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-slate-50">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Item</th>
+                                                    <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Qty (Kg)</th>
+                                                    <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Rate/Kg</th>
+                                                    <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Total</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {inv.items.map(item => (
+                                                    <tr key={item.id} className="border-t border-slate-100">
+                                                        <td className="px-3 py-2">{item.itemName}</td>
+                                                        <td className="px-3 py-2 text-right font-mono">{item.totalKg.toFixed(2)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono">${item.rate.toFixed(3)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono font-bold">${item.total.toFixed(2)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                            <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                                                <tr>
+                                                    <td colSpan={3} className="px-3 py-2 text-right font-bold">Net Total:</td>
+                                                    <td className="px-3 py-2 text-right font-mono font-bold text-blue-600">${inv.netTotal.toFixed(2)}</td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -131,6 +131,75 @@ export const AdminModule: React.FC = () => {
                 message: `Successfully deleted ${totalDeleted} records from ${collectionsToDelete.length} collections.`
             });
 
+            // Reset all item stock quantities to 0 and partner balances to 0 for transaction reset
+            if (resetType === 'transactions') {
+                try {
+                    // Reset Items Stock
+                    const itemsRef = collection(db, 'items');
+                    const itemsSnapshot = await getDocs(itemsRef);
+                    
+                    if (!itemsSnapshot.empty) {
+                        const batches = [];
+                        let currentBatch = writeBatch(db);
+                        let operationCount = 0;
+
+                        itemsSnapshot.docs.forEach((itemDoc) => {
+                            currentBatch.update(itemDoc.ref, { stockQty: 0 });
+                            operationCount++;
+
+                            if (operationCount === 500) {
+                                batches.push(currentBatch);
+                                currentBatch = writeBatch(db);
+                                operationCount = 0;
+                            }
+                        });
+
+                        if (operationCount > 0) {
+                            batches.push(currentBatch);
+                        }
+
+                        for (const batch of batches) {
+                            await batch.commit();
+                        }
+                        
+                        console.log(`✅ Reset stock quantities for ${itemsSnapshot.size} items to 0`);
+                    }
+
+                    // Reset Partner Balances
+                    const partnersRef = collection(db, 'partners');
+                    const partnersSnapshot = await getDocs(partnersRef);
+                    
+                    if (!partnersSnapshot.empty) {
+                        const batches = [];
+                        let currentBatch = writeBatch(db);
+                        let operationCount = 0;
+
+                        partnersSnapshot.docs.forEach((partnerDoc) => {
+                            currentBatch.update(partnerDoc.ref, { balance: 0 });
+                            operationCount++;
+
+                            if (operationCount === 500) {
+                                batches.push(currentBatch);
+                                currentBatch = writeBatch(db);
+                                operationCount = 0;
+                            }
+                        });
+
+                        if (operationCount > 0) {
+                            batches.push(currentBatch);
+                        }
+
+                        for (const batch of batches) {
+                            await batch.commit();
+                        }
+                        
+                        console.log(`✅ Reset balances for ${partnersSnapshot.size} partners to 0`);
+                    }
+                } catch (error) {
+                    console.error('Failed to reset stock/balances:', error);
+                }
+            }
+
             // Reload page after 3 seconds
             setTimeout(() => {
                 window.location.reload();

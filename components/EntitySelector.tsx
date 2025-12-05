@@ -53,6 +53,11 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
         });
     });
 
+    // Reset highlighted index when filtered list changes
+    useEffect(() => {
+        setHighlightedIndex(0);
+    }, [filteredEntities.length, searchTerm]);
+
     useEffect(() => {
         const selected = entities.find(e => e.id === selectedId);
         if (selected) {
@@ -84,20 +89,24 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
     const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
         if (disabled) return;
 
-        if (!isOpen && e.key === 'ArrowDown') {
+        // Open dropdown on ArrowDown/ArrowUp/Space when closed
+        if (!isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === ' ')) {
             e.preventDefault();
             setIsOpen(true);
+            setHighlightedIndex(0);
             return;
         }
 
         switch (e.key) {
             case 'ArrowDown':
                 e.preventDefault();
-                setHighlightedIndex(prev => (prev + 1) % filteredEntities.length);
+                setHighlightedIndex(prev => 
+                    Math.min(prev + 1, filteredEntities.length - 1)
+                );
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                setHighlightedIndex(prev => (prev - 1 + filteredEntities.length) % filteredEntities.length);
+                setHighlightedIndex(prev => Math.max(prev - 1, 0));
                 break;
             case 'Enter':
                 e.preventDefault();
@@ -107,11 +116,28 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                     setIsOpen(true);
                 }
                 break;
+            case ' ':
+                // If dropdown is open and no search term, select highlighted item
+                if (isOpen && searchTerm.trim() === '') {
+                    e.preventDefault();
+                    if (filteredEntities[highlightedIndex]) {
+                        handleSelect(filteredEntities[highlightedIndex]);
+                    }
+                }
+                // Otherwise, allow space for searching
+                break;
             case 'Escape':
+                e.preventDefault();
                 setIsOpen(false);
                 inputRef.current?.blur();
                 break;
             case 'Tab':
+                if (isOpen) {
+                    // Auto-select highlighted on Tab if dropdown is open
+                    if (filteredEntities[highlightedIndex]) {
+                        handleSelect(filteredEntities[highlightedIndex]);
+                    }
+                }
                 setIsOpen(false);
                 break;
         }
@@ -183,7 +209,11 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                                 <div
                                     key={entity.id}
                                     className={`px-3 py-2 text-sm rounded-md cursor-pointer transition-colors ${
-                                        index === highlightedIndex ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                                        index === highlightedIndex 
+                                            ? 'bg-blue-500 text-white font-medium shadow-sm' 
+                                            : entity.id === selectedId
+                                            ? 'bg-blue-50 text-blue-700'
+                                            : 'text-slate-700 hover:bg-slate-50'
                                     }`}
                                     onClick={() => handleSelect(entity)}
                                     onMouseEnter={() => setHighlightedIndex(index)}

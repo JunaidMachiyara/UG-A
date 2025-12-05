@@ -51,11 +51,12 @@ export const DataEntry: React.FC = () => {
     
     // Item formatter for dropdowns: "Code - Name - Category - Package Size"
     const formatItemOption = (item: any) => {
-        return `${item.code} - ${item.name} - ${item.category} - ${item.packingType}`;
+        const categoryName = state.categories.find(c => c.id === item.category)?.name || item.category;
+        return `${item.code} - ${item.name} - ${categoryName} - ${item.weightPerUnit}kg ${item.packingType}`;
     };
     
     const formatItemSelected = (item: any) => {
-        return `${item.code} - ${item.name}`;
+        return `${item.code} - ${item.name} - ${item.weightPerUnit}kg ${item.packingType}`;
     };
     
     // Helper function to get the next available serial number for an item
@@ -232,6 +233,7 @@ export const DataEntry: React.FC = () => {
     const [showSiSummary, setShowSiSummary] = useState(false);
 
     // --- Direct Sales State ---
+    const [dsMode, setDsMode] = useState<'create' | 'view'>('create');
     const [dsDate, setDsDate] = useState(new Date().toISOString().split('T')[0]);
     const [dsCustomer, setDsCustomer] = useState('');
     const [dsSupplier, setDsSupplier] = useState('');
@@ -323,6 +325,14 @@ export const DataEntry: React.FC = () => {
             }
         }
     }, [siCustomer, state.partners]);
+
+    // Auto-Update Customer Details (Direct Sales)
+    useEffect(() => {
+        if (dsCustomer) {
+            const p = state.partners.find(x => x.id === dsCustomer);
+            if (p?.defaultCurrency) setDsCurrency(p.defaultCurrency);
+        }
+    }, [dsCustomer, state.partners]);
 
     // Update rate when currency changes manually
     useEffect(() => {
@@ -552,6 +562,30 @@ export const DataEntry: React.FC = () => {
         if(window.confirm('Delete this production? This will reverse all accounting entries (restore Work in Progress, remove Finished Goods and Production Gain).')) {
             await deleteProduction(id);
             alert('✅ Production deleted successfully! Ledger entries reversed.');
+        }
+    }
+
+    const handleDeleteSalesInvoice = (id: string) => {
+        const pin = prompt('Enter Master Key to delete sales invoice:');
+        if (pin !== SUPERVISOR_PIN) {
+            alert('❌ Invalid Master Key! Deletion cancelled.');
+            return;
+        }
+        if(window.confirm('Delete this sales invoice? This will reverse all accounting entries (restore Finished Goods, Customer AR, and Sales Revenue).')) {
+            deleteEntity('salesInvoices', id);
+            alert('✅ Sales invoice deleted successfully! All ledger entries and inventory reversed.');
+        }
+    }
+
+    const handleDeleteDirectSale = (id: string) => {
+        const pin = prompt('Enter Master Key to delete direct sale:');
+        if (pin !== SUPERVISOR_PIN) {
+            alert('❌ Invalid Master Key! Deletion cancelled.');
+            return;
+        }
+        if(window.confirm('Delete this direct sale? This will reverse all accounting entries (restore Raw Material Inventory, Customer AR, and Sales Revenue).')) {
+            deleteEntity('salesInvoices', id);
+            alert('✅ Direct sale deleted successfully! All ledger entries and inventory reversed.');
         }
     }
 
@@ -903,17 +937,45 @@ export const DataEntry: React.FC = () => {
 
     // --- Sales Invoice Logic ---
 
+    // Auto-populate rate when item is selected - prioritize last sale rate to this customer
+    useEffect(() => {
+        if (siItemId && activeSubModule === 'sales-invoice' && siCustomer) {
+            const item = state.items.find(i => i.id === siItemId);
+            if (!item) return;
+            
+            // Find the last posted invoice for this customer that includes this item
+            const lastInvoiceWithItem = state.salesInvoices
+                .filter(inv => inv.customerId === siCustomer && inv.status === 'Posted')
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .find(inv => inv.items.some(invItem => invItem.itemId === siItemId));
+            
+            if (lastInvoiceWithItem) {
+                const lastItem = lastInvoiceWithItem.items.find(invItem => invItem.itemId === siItemId);
+                if (lastItem) {
+                    // Use the rate from the last sale to this customer
+                    setSiItemRate(lastItem.rate.toString());
+                    return;
+                }
+            }
+            
+            // Fallback to item's average sale price
+            if (item.salePrice) {
+                setSiItemRate(item.salePrice.toString());
+            }
+        }
+    }, [siItemId, siCustomer, activeSubModule, state.items, state.salesInvoices]);
+
     const handleAddSiItem = () => {
         if (!siItemId || !siItemQty) return;
         const item = state.items.find(i => i.id === siItemId);
         if (!item) return;
 
         const qty = parseFloat(siItemQty);
-        // Default rate logic: if not provided, use salePrice from item master. If that's missing, alert.
+        // Rate is per UNIT (not per kg), in USD
         let rate = siItemRate ? parseFloat(siItemRate) : (item.salePrice || 0);
         
         if (rate <= 0) {
-            alert("Please enter a Rate or set a Sale Price in Setup.");
+            alert("Please enter a Rate/Unit (USD) or set a Sale Price in Setup.");
             return;
         }
 
@@ -959,13 +1021,10 @@ export const DataEntry: React.FC = () => {
     };
 
     const saveInvoice = () => {
-        const grossTotal = siCart.reduce((s, i) => s + i.total, 0);
+        const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
         
-        // Calculate costs in Invoice Currency for Net Total display (approx)
-        // Note: Real accounting handles this via GL. Here we just sum up for the document.
-        // Assuming costs are pass-through and added to invoice.
-        // Convert costs to Invoice Currency:
-        const costsTotal = siCosts.reduce((s, c) => s + (c.amount * (c.exchangeRate / siExchangeRate)), 0); 
+        // All sales are in USD, no conversion needed
+        const costsTotal = siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / 1)), 0); 
         
         const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
 
@@ -980,8 +1039,10 @@ export const DataEntry: React.FC = () => {
             containerNumber: siContainer,
             divisionId: siDivision,
             subDivisionId: siSubDivision,
-            currency: siCurrency,
-            exchangeRate: siExchangeRate,
+            currency: 'USD', // All sales in USD for accounting
+            exchangeRate: 1, // USD base
+            customerCurrency: siCurrency, // Store customer's currency for ledger display
+            customerExchangeRate: siExchangeRate, // Store customer's exchange rate for ledger display
             discount: parseFloat(siDiscount || '0'),
             surcharge: parseFloat(siSurcharge || '0'),
             items: siCart,
@@ -1020,8 +1081,8 @@ export const DataEntry: React.FC = () => {
         setSiCustomer(inv.customerId);
         setSiLogo(inv.logoId);
         setSiColor(inv.packingColor || '');
-        setSiCurrency(inv.currency);
-        setSiExchangeRate(inv.exchangeRate);
+        setSiCurrency((inv as any).customerCurrency || inv.currency || 'USD');
+        setSiExchangeRate((inv as any).customerExchangeRate || inv.exchangeRate || 1);
         setSiContainer(inv.containerNumber || '');
         setSiDivision(inv.divisionId || '');
         setSiSubDivision(inv.subDivisionId || '');
@@ -1084,15 +1145,24 @@ export const DataEntry: React.FC = () => {
             originalPurchaseId: dsPurchaseId
         };
 
+        // Generate sequential DS invoice number
+        const maxDsInv = state.salesInvoices
+            .map(i => i.invoiceNo.startsWith('DS-') ? parseInt(i.invoiceNo.replace('DS-', '')) : 0)
+            .filter(n => !isNaN(n))
+            .reduce((max, curr) => curr > max ? curr : max, 1000);
+        const nextDsInvNo = `DS-${maxDsInv + 1}`;
+
         const invoice: SalesInvoice = {
             id: Math.random().toString(36).substr(2, 9),
-            invoiceNo: `DSINV-${Math.floor(Math.random() * 10000)}`,
+            invoiceNo: nextDsInvNo,
             date: dsDate,
             status: 'Posted',
             customerId: dsCustomer,
             logoId: state.logos[0]?.id || '', // Default Logo
-            currency: dsCurrency,
-            exchangeRate: dsExchangeRate,
+            currency: 'USD', // All sales in USD
+            exchangeRate: 1, // USD base
+            customerCurrency: dsCurrency, // Store customer currency for ledger display
+            customerExchangeRate: dsExchangeRate, // Store customer rate for ledger display
             discount: 0,
             surcharge: 0,
             items: [invoiceItem],
@@ -1730,11 +1800,18 @@ export const DataEntry: React.FC = () => {
                         
                         {/* --- DIRECT SALES --- */}
                         {activeSubModule === 'direct-sales' && (
-                             <div className="animate-in fade-in duration-300 max-w-2xl mx-auto">
-                                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                    <Truck className="text-blue-600" /> Direct Sale (Raw Material)
-                                </h3>
-                                <div className="space-y-6">
+                            <div className="animate-in fade-in duration-300">
+                                <div className="flex gap-4 mb-6 border-b border-slate-200">
+                                    <button className={`pb-2 text-sm font-medium ${dsMode === 'create' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`} onClick={() => { setDsMode('create'); setDsCustomer(''); setDsSupplier(''); setDsPurchaseId(''); setDsQty(''); setDsRate(''); }}>New Direct Sale</button>
+                                    <button className={`pb-2 text-sm font-medium ${dsMode === 'view' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`} onClick={() => setDsMode('view')}>View / Update</button>
+                                </div>
+
+                                {dsMode === 'create' ? (
+                                    <div className="max-w-2xl mx-auto">
+                                        <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                                            <Truck className="text-blue-600" /> Direct Sale (Raw Material)
+                                        </h3>
+                                        <div className="space-y-6">
                                     <div className="grid grid-cols-2 gap-6">
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={dsDate} onChange={e => setDsDate(e.target.value)} /></div>
                                         <div>
@@ -1786,22 +1863,72 @@ export const DataEntry: React.FC = () => {
 
                                     <div className="grid grid-cols-2 gap-6">
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Quantity (Kg)</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-bold" value={dsQty} onChange={e => setDsQty(e.target.value)} /></div>
-                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Sale Rate ({dsCurrency} / Kg)</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-bold" value={dsRate} onChange={e => setDsRate(e.target.value)} /></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Sale Rate (USD / Kg)</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-bold" value={dsRate} onChange={e => setDsRate(e.target.value)} /></div>
                                     </div>
                                     
                                     <div className="grid grid-cols-2 gap-6 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                         <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" value={dsCurrency} onChange={e => setDsCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
-                                         <div><label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" value={dsExchangeRate} onChange={e => setDsExchangeRate(parseFloat(e.target.value))} /></div>
+                                         <div>
+                                             <label className="block text-xs font-medium text-slate-500 mb-1">Customer Currency</label>
+                                             <input type="text" className="w-full bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-800 text-sm font-mono font-bold" value={dsCurrency} readOnly />
+                                             <p className="text-xs text-slate-500 mt-1">For ledger display</p>
+                                         </div>
+                                         <div>
+                                             <label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label>
+                                             <input type="number" step="0.0001" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm font-mono" value={dsExchangeRate} onChange={e => setDsExchangeRate(parseFloat(e.target.value) || 1)} />
+                                             <p className="text-xs text-slate-500 mt-1">Update if needed</p>
+                                         </div>
                                     </div>
 
-                                    <button 
-                                        onClick={handleRecordDirectSale} 
-                                        disabled={!dsSelectedBatch || !dsQty}
-                                        className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg disabled:bg-slate-300 disabled:shadow-none transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <Truck size={18} /> Record Direct Sale
-                                    </button>
-                                </div>
+                                            <button 
+                                                onClick={handleRecordDirectSale} 
+                                                disabled={!dsSelectedBatch || !dsQty}
+                                                className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg disabled:bg-slate-300 disabled:shadow-none transition-all flex items-center justify-center gap-2"
+                                            >
+                                                <Truck size={18} /> Record Direct Sale
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-xs">
+                                                <tr>
+                                                    <th className="px-4 py-3">Date</th>
+                                                    <th className="px-4 py-3">Invoice #</th>
+                                                    <th className="px-4 py-3">Customer</th>
+                                                    <th className="px-4 py-3 text-right">Qty (Kg)</th>
+                                                    <th className="px-4 py-3 text-right">Net Total</th>
+                                                    <th className="px-4 py-3 text-center">Status</th>
+                                                    <th className="px-4 py-3 text-center">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {state.salesInvoices.filter(inv => 
+                                                    inv.invoiceNo.startsWith('DS-') || 
+                                                    inv.invoiceNo.startsWith('DSINV-') ||
+                                                    inv.items.some(item => item.originalPurchaseId) // Also show invoices with originalPurchaseId (direct sales)
+                                                ).map(inv => (
+                                                    <tr key={inv.id} className="hover:bg-slate-50">
+                                                        <td className="px-4 py-3">{inv.date}</td>
+                                                        <td className="px-4 py-3 font-mono font-bold text-blue-600">{inv.invoiceNo}</td>
+                                                        <td className="px-4 py-3">{state.partners.find(p => p.id === inv.customerId)?.name}</td>
+                                                        <td className="px-4 py-3 text-right font-mono">{inv.items.reduce((sum, i) => sum + i.totalKg, 0).toLocaleString()}</td>
+                                                        <td className="px-4 py-3 text-right font-mono">{inv.netTotal.toLocaleString()} {inv.currency}</td>
+                                                        <td className="px-4 py-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${inv.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{inv.status}</span></td>
+                                                        <td className="px-4 py-3 text-center flex justify-center gap-2">
+                                                            <button onClick={() => handleDeleteDirectSale(inv.id)} className="text-red-400 hover:text-red-600" title="Delete"><Trash2 size={16} /></button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {state.salesInvoices.filter(inv => 
+                                                    inv.invoiceNo.startsWith('DS-') || 
+                                                    inv.invoiceNo.startsWith('DSINV-') ||
+                                                    inv.items.some(item => item.originalPurchaseId)
+                                                ).length === 0 && <tr><td colSpan={7} className="text-center py-8 text-slate-400">No direct sales found.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                              </div>
                         )}
 
@@ -2232,7 +2359,7 @@ export const DataEntry: React.FC = () => {
                                 {siMode === 'create' ? (
                                     <div className="max-w-5xl mx-auto space-y-6">
                                         {/* Core Info */}
-                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-6">
                                             <div>
                                                 <label className="block text-sm font-medium text-slate-600 mb-1">Customer</label>
                                                 <EntitySelector 
@@ -2245,6 +2372,11 @@ export const DataEntry: React.FC = () => {
                                             </div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} readOnly /></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siDate} onChange={e => setSiDate(e.target.value)} /></div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Customer Currency</label>
+                                                <input type="text" className="w-full bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm font-bold" value={siCurrency} readOnly />
+                                                <p className="text-xs text-slate-500 mt-1">For ledger display</p>
+                                            </div>
                                             
                                             <div>
                                                 <label className="block text-sm font-medium text-slate-600 mb-1">Branding / Logo</label>
@@ -2262,9 +2394,10 @@ export const DataEntry: React.FC = () => {
                                                     <option value="">None</option><option value="Blue">Blue</option><option value="Red">Red</option><option value="Green">Green</option><option value="White">White</option><option value="Yellow">Yellow</option>
                                                 </select>
                                             </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                 <div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siCurrency} onChange={e => setSiCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
-                                                 <div><label className="block text-xs font-medium text-slate-500 mb-1">Rate</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siExchangeRate} onChange={e => setSiExchangeRate(parseFloat(e.target.value))} /></div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label>
+                                                <input type="number" step="0.0001" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono text-sm" value={siExchangeRate} onChange={e => setSiExchangeRate(parseFloat(e.target.value) || 1)} />
+                                                <p className="text-xs text-slate-500 mt-1">Update if needed</p>
                                             </div>
                                         </div>
                                         
@@ -2304,22 +2437,31 @@ export const DataEntry: React.FC = () => {
                                         {/* Item Cart */}
                                         <div className="border-t border-slate-200 pt-6">
                                              <h4 className="font-bold text-slate-700 mb-4">Item Entry</h4>
-                                             <div className="bg-slate-100 p-3 rounded-lg flex flex-wrap md:flex-nowrap gap-3 mb-4 z-10 relative">
-                                                 <div className="w-full md:w-1/3">
-                                                    <EntitySelector 
-                                                        entities={state.items} 
-                                                        selectedId={siItemId} 
-                                                        onSelect={setSiItemId} 
-                                                        placeholder="Select Item..." 
-                                                        onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
-                                                        formatOption={formatItemOption}
-                                                        formatSelected={formatItemSelected}
-                                                        searchFields={['code', 'name', 'category']}
-                                                    />
+                                             <div className="bg-slate-100 p-3 rounded-lg mb-4">
+                                                 <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                                                     <div className="md:col-span-6">
+                                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Item</label>
+                                                        <EntitySelector 
+                                                            entities={state.items} 
+                                                            selectedId={siItemId} 
+                                                            onSelect={setSiItemId} 
+                                                            placeholder="Select Item..." 
+                                                            onQuickAdd={() => openQuickAdd(setupConfigs.itemConfig)}
+                                                            formatOption={formatItemOption}
+                                                            formatSelected={formatItemSelected}
+                                                            searchFields={['code', 'name', 'category']}
+                                                        />
+                                                     </div>
+                                                     <div className="md:col-span-2">
+                                                         <label className="block text-xs font-semibold text-slate-500 mb-1">Qty</label>
+                                                         <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="0" value={siItemQty} onChange={e => setSiItemQty(e.target.value)} />
+                                                     </div>
+                                                     <div className="md:col-span-2">
+                                                         <label className="block text-xs font-semibold text-slate-500 mb-1">Rate/Unit (USD)</label>
+                                                         <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="0.00" value={siItemRate} onChange={e => setSiItemRate(e.target.value)} />
+                                                     </div>
+                                                     <div className="md:col-span-2 flex items-end"><button onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
                                                  </div>
-                                                 <div className="w-1/2 md:w-24"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Qty" value={siItemQty} onChange={e => setSiItemQty(e.target.value)} /></div>
-                                                 <div className="w-1/2 md:w-32"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Rate/Unit" value={siItemRate} onChange={e => setSiItemRate(e.target.value)} /></div>
-                                                 <div className="w-full md:w-auto"><button onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
                                              </div>
                                              <table className="w-full text-sm text-left border border-slate-200 rounded-lg overflow-hidden">
                                                  <thead className="bg-slate-50 font-bold text-slate-600 border-b border-slate-200"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2 text-right">Qty</th><th className="px-4 py-2 text-right">Total Kg</th><th className="px-4 py-2 text-right">Rate ({siCurrency})</th><th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-center">Action</th></tr></thead>
@@ -2375,7 +2517,7 @@ export const DataEntry: React.FC = () => {
                                                         <td className="px-4 py-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${inv.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{inv.status}</span></td>
                                                         <td className="px-4 py-3 text-center flex justify-center gap-2">
                                                             <button onClick={() => handleEditInvoice(inv)} className="text-blue-500 hover:text-blue-700" title="Edit"><Edit2 size={16} /></button>
-                                                            <button onClick={() => deleteEntity('salesInvoices', inv.id)} className="text-red-400 hover:text-red-600" title="Delete"><Trash2 size={16} /></button>
+                                                            <button onClick={() => handleDeleteSalesInvoice(inv.id)} className="text-red-400 hover:text-red-600" title="Delete"><Trash2 size={16} /></button>
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -2599,7 +2741,113 @@ export const DataEntry: React.FC = () => {
                 </div>
             )}
             
-            {/* Sales Invoice Summary Modal (Mock PDF) */}
+            {/* Sales Invoice Summary Modal */}
+            {showSiSummary && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-200 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
+                            <h3 className="text-2xl font-bold">Sales Invoice Summary</h3>
+                            <p className="text-sm text-blue-100 mt-1">Review and confirm invoice details</p>
+                        </div>
+                        
+                        <div className="p-6 space-y-6">
+                            {/* Invoice Header */}
+                            <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Invoice Number</p>
+                                    <p className="text-lg font-bold text-slate-800">{siInvoiceNo}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Date</p>
+                                    <p className="text-lg font-bold text-slate-800">{siDate}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Customer</p>
+                                    <p className="text-lg font-bold text-slate-800">{state.partners.find(p => p.id === siCustomer)?.name}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Container</p>
+                                    <p className="text-lg font-bold text-slate-800">{siContainer || 'N/A'}</p>
+                                </div>
+                            </div>
+
+                            {/* Items Table */}
+                            <div>
+                                <h4 className="font-bold text-slate-700 mb-3">Items</h4>
+                                <table className="w-full text-sm">
+                                    <thead className="bg-slate-100 text-slate-600">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Item</th>
+                                            <th className="px-3 py-2 text-center">Qty</th>
+                                            <th className="px-3 py-2 text-center">Kg</th>
+                                            <th className="px-3 py-2 text-right">Rate</th>
+                                            <th className="px-3 py-2 text-right">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {siCart.map((item, idx) => (
+                                            <tr key={idx}>
+                                                <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name}</td>
+                                                <td className="px-3 py-2 text-center">{item.qty || 0}</td>
+                                                <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{(item.ratePerUnit || 0).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Summary */}
+                            <div className="bg-slate-50 p-4 rounded-lg">
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600">Gross Total</span>
+                                        <span className="font-mono font-bold">{siCurrency} {siCart.reduce((s, i) => s + (i.total || 0), 0).toFixed(2)}</span>
+                                    </div>
+                                    {parseFloat(siDiscount || '0') > 0 && (
+                                        <div className="flex justify-between text-sm text-red-600">
+                                            <span>Discount</span>
+                                            <span className="font-mono">-{parseFloat(siDiscount || '0').toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    {parseFloat(siSurcharge || '0') > 0 && (
+                                        <div className="flex justify-between text-sm text-emerald-600">
+                                            <span>Surcharge</span>
+                                            <span className="font-mono">+{parseFloat(siSurcharge || '0').toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    {siCosts.length > 0 && (
+                                        <div className="flex justify-between text-sm text-blue-600">
+                                            <span>Additional Costs</span>
+                                            <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0).toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
+                                        <span>Net Total</span>
+                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0)).toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                            <button
+                                onClick={() => setShowSiSummary(false)}
+                                className="px-6 py-2 text-slate-600 hover:text-slate-800 font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={saveInvoice}
+                                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold flex items-center gap-2"
+                            >
+                                <CheckCircle size={18} /> Confirm & Save Invoice
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
