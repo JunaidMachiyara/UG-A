@@ -125,10 +125,17 @@ export const OriginalStockReport: React.FC = () => {
         summary.forEach(item => {
             item.inHand = item.totalPurchased - item.totalOpened - item.totalDirectSold;
             item.totalValue = item.inHand * item.avgCostPerKg;
-            
             if (item.totalDirectSold > 0) {
                 item.avgSaleRatePerKg = item.totalDirectSaleRevenue / item.totalDirectSold;
                 item.profitLoss = item.totalDirectSaleRevenue - item.totalDirectSaleCost;
+                // Calculate margin as percentage
+                item.margin = item.totalDirectSaleRevenue > 0
+                  ? ((item.totalDirectSaleRevenue - item.totalDirectSaleCost) / item.totalDirectSaleRevenue) * 100
+                  : 0;
+            } else {
+                item.avgSaleRatePerKg = 0;
+                item.profitLoss = 0;
+                item.margin = 0;
             }
         });
 
@@ -260,41 +267,22 @@ export const OriginalStockReport: React.FC = () => {
                     <table className="w-full">
                         <thead className="bg-slate-50 border-b border-slate-200">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Original Type
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Total Purchased (Kg)
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Total Consumed (Kg)
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    In Hand (Kg)
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Avg Cost/Kg
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Avg Sale/Kg<br/>(Direct Sales)
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Profit/Loss<br/>(Direct Sales)
-                                </th>
-                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                    Total Value (USD)
-                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Original Type</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Total Purchased (Kg)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Total Consumed (Kg)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">In Hand (Kg)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Avg Cost/Kg</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Avg Sale/Kg<br/>(Direct Sales)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Profit/Loss<br/>(Direct Sales)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Margin (%)</th>
+                                <th className="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Total Value (USD)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {stockData.map((item) => (
                                 <tr key={item.originalTypeId} className="hover:bg-slate-50 transition-colors">
-                                    <td className="px-6 py-4 text-sm font-medium text-slate-800">
-                                        {item.originalTypeName}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">
-                                        {item.totalPurchased.toFixed(2)}
-                                    </td>
+                                    <td className="px-6 py-4 text-sm font-medium text-slate-800">{item.originalTypeName}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">{item.totalPurchased.toFixed(2)}</td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-red-600">
                                         {(item.totalOpened + item.totalDirectSold).toFixed(2)}
                                         {item.totalDirectSold > 0 && (
@@ -303,28 +291,12 @@ export const OriginalStockReport: React.FC = () => {
                                             </div>
                                         )}
                                     </td>
-                                    <td className="px-6 py-4 text-sm text-right font-mono font-bold text-emerald-600">
-                                        {item.inHand.toFixed(2)}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">
-                                        ${item.avgCostPerKg.toFixed(3)}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-right font-mono text-blue-600">
-                                        {item.avgSaleRatePerKg > 0 ? `$${item.avgSaleRatePerKg.toFixed(3)}` : '-'}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-right">
-                                        {item.profitLoss !== 0 ? (
-                                            <button
-                                                onClick={() => setSelectedInvoices(item.directSaleInvoices)}
-                                                className={`font-mono font-semibold underline cursor-pointer hover:opacity-70 ${item.profitLoss > 0 ? 'text-emerald-600' : 'text-red-600'}`}
-                                            >
-                                                ${item.profitLoss.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                                            </button>
-                                        ) : '-'}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-right font-mono font-semibold text-blue-600">
-                                        ${item.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                                    </td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono font-bold text-emerald-600">{item.inHand.toFixed(2)}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">${item.avgCostPerKg.toFixed(3)}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-blue-600">{item.avgSaleRatePerKg > 0 ? `$${item.avgSaleRatePerKg.toFixed(3)}` : '-'}</td>
+                                    <td className="px-6 py-4 text-sm text-right">{item.profitLoss !== 0 ? (<button onClick={() => setSelectedInvoices(item.directSaleInvoices)} className={`font-mono font-semibold underline cursor-pointer hover:opacity-70 ${item.profitLoss > 0 ? 'text-emerald-600' : 'text-red-600'}`}>${item.profitLoss.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</button>) : '-'}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono text-purple-600">{item.margin !== undefined ? `${item.margin.toFixed(2)}%` : '0%'}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono font-semibold text-blue-600">${item.totalValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                                 </tr>
                             ))}
                             {stockData.length === 0 && (
