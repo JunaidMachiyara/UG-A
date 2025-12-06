@@ -170,6 +170,7 @@ export const DataEntry: React.FC = () => {
     
     // NEW: Multi-Original Type Cart
     const [purOriginalTypeId, setPurOriginalTypeId] = useState('');
+    const [purSubSupplierId, setPurSubSupplierId] = useState('');
     const [purOriginalProductId, setPurOriginalProductId] = useState('');
     const [purWeight, setPurWeight] = useState('');
     const [purPrice, setPurPrice] = useState(''); // Gross Price per Kg
@@ -383,6 +384,7 @@ export const DataEntry: React.FC = () => {
             originalTypeId: purOriginalTypeId,
             originalType: finalName,
             originalProductId: purOriginalProductId,
+            subSupplierId: purSubSupplierId,
             weightPurchased: weight,
             qtyPurchased: calculatedQty,
             costPerKgFCY: grossPricePerKgFCY,
@@ -397,6 +399,7 @@ export const DataEntry: React.FC = () => {
         // Clear item fields
         setPurOriginalTypeId('');
         setPurOriginalProductId('');
+        setPurSubSupplierId('');
         setPurWeight('');
         setPurPrice('');
         setPurItemDiscount('');
@@ -2125,6 +2128,16 @@ export const DataEntry: React.FC = () => {
                                             />
                                         </div>
                                         <div>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Sub Supplier</label>
+                                            <EntitySelector
+                                                entities={state.partners.filter(p => p.type === PartnerType.SUB_SUPPLIER && p.parentSupplier === purSupplier)}
+                                                selectedId={purSubSupplierId}
+                                                onSelect={setPurSubSupplierId}
+                                                placeholder="Select Sub Supplier..."
+                                                disabled={!purSupplier}
+                                            />
+                                        </div>
+                                        <div>
                                             <label className="block text-sm font-medium text-slate-600 mb-1">Original Product (Optional)</label>
                                             <EntitySelector
                                                 entities={filteredProducts}
@@ -2157,6 +2170,7 @@ export const DataEntry: React.FC = () => {
                                                     <thead className="bg-slate-100 text-slate-600">
                                                         <tr>
                                                             <th className="p-2 text-left">Original Type</th>
+                                                            <th className="p-2 text-left">Sub Supplier</th>
                                                             <th className="p-2 text-right">Weight (Kg)</th>
                                                             <th className="p-2 text-right">Price/Kg</th>
                                                             <th className="p-2 text-right">Discount</th>
@@ -2170,6 +2184,7 @@ export const DataEntry: React.FC = () => {
                                                         {purCart.map(item => (
                                                             <tr key={item.id} className="border-t border-slate-200 hover:bg-slate-50">
                                                                 <td className="p-2 font-medium text-slate-700">{item.originalType}</td>
+                                                                <td className="p-2 font-medium text-slate-700">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td>
                                                                 <td className="p-2 text-right font-mono">{item.weightPurchased.toFixed(2)}</td>
                                                                 <td className="p-2 text-right font-mono">{item.costPerKgFCY.toFixed(2)}</td>
                                                                 <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${item.discountPerKgFCY.toFixed(2)}` : '-'}</td>
@@ -2976,7 +2991,7 @@ export const DataEntry: React.FC = () => {
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Supplier</h4><div className="text-lg font-bold text-slate-800">{state.partners.find(p=>p.id===purSupplier)?.name}</div><div className="text-sm text-slate-500">{state.partners.find(p=>p.id===purSupplier)?.country}</div></div>
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Logistics</h4><div className="text-sm text-slate-800 font-medium">Container: {purContainer || 'N/A'}</div><div className="text-sm text-slate-500">Div: {state.divisions.find(d=>d.id===purDivision)?.name || '-'} / {state.subDivisions.find(s=>s.id===purSubDivision)?.name || '-'}</div></div>
                             </div>
-                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{item.weightPurchased.toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{item.totalCostFCY.toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={3}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td></tr></tbody></table>
+                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3 text-right">Sub Supplier</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 text-right">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{item.weightPurchased.toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{item.totalCostFCY.toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={4}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td></tr></tbody></table>
                             
                              <div className="border-t border-slate-200 pt-6"><h4 className="font-bold text-slate-700 mb-4">Landed Cost Calculation (Base USD)</h4><div className="space-y-2 text-sm max-w-sm ml-auto">
                                 <div className="flex justify-between border-b border-slate-100 pb-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</span></div>

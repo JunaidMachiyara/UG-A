@@ -375,6 +375,7 @@ export interface PurchaseOriginalItem {
     originalTypeId: string; // ID of OriginalType
     originalType: string; // Display Name
     originalProductId?: string; // ID of OriginalProduct
+    subSupplierId?: string; // ID of Sub Supplier
     weightPurchased: number; // Kg for this specific original type
     qtyPurchased: number; // Units (calculated based on packing size)
     costPerKgFCY: number; // Price per Kg in Foreign Currency
