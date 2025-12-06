@@ -1133,8 +1133,13 @@ export const DataEntry: React.FC = () => {
             return;
         }
 
+
         const rate = parseFloat(dsRate);
         const netTotal = qty * rate;
+        // Calculate raw material cost for this direct sale
+        const landedCostPerKg = dsSelectedBatch?.landedCostPerKg || 0;
+        const totalRawMaterialCost = qty * landedCostPerKg;
+        const profit = netTotal - totalRawMaterialCost;
 
         // Create Sales Invoice Item (Linked to Batch)
         const invoiceItem: SalesInvoiceItem = {
@@ -1145,7 +1150,10 @@ export const DataEntry: React.FC = () => {
             rate: rate,
             total: netTotal,
             totalKg: qty,
-            originalPurchaseId: dsPurchaseId
+            originalPurchaseId: dsPurchaseId,
+            // Optionally, you can add cost and profit fields for reporting
+            cost: totalRawMaterialCost,
+            profit: profit
         };
 
         // Generate sequential DS invoice number
@@ -1171,10 +1179,19 @@ export const DataEntry: React.FC = () => {
             items: [invoiceItem],
             additionalCosts: [],
             grossTotal: netTotal,
-            netTotal: netTotal
+            netTotal: profit // Net income is now profit for direct sales
         };
 
-        addDirectSale(invoice, dsSelectedBatch?.landedCostPerKg || 0);
+        // Adjust Raw Material inventory for the batch used in direct sale
+        if (dsSelectedBatch && dsSelectedBatch.purchase && dsSelectedBatch.purchase.originalProductId) {
+            // Find the item in state.items
+            const rawMaterialItem = state.items.find(i => i.id === dsSelectedBatch.purchase.originalProductId);
+            if (rawMaterialItem) {
+                // Decrease stockQty by qty sold
+                updateStock(rawMaterialItem.id, -qty);
+            }
+        }
+        addDirectSale(invoice, landedCostPerKg);
         
         // Reset
         setDsQty('');
