@@ -1421,7 +1421,19 @@ export const DataEntry: React.FC = () => {
     };
 
     const selectedItem = state.items.find(i => i.id === prodItemId);
-    const subModules = getSubModules(activeModule);
+    // Patch: Add 'Original Purchase-2' to Purchases submodules
+    let subModules = getSubModules(activeModule);
+    if (activeModule === 'purchase') {
+        subModules = [
+            ...subModules,
+            {
+                id: 'original-purchase-2',
+                label: 'Original Purchase-2',
+                icon: Box,
+                desc: 'Replica for future changes',
+            },
+        ];
+    }
     const currentSubModuleDef = subModules.find(s => s.id === activeSubModule);
     const suppliersWithStock = useMemo(() => {
         const ids = Array.from(new Set(state.purchases.map(p => p.supplierId)));
@@ -2132,6 +2144,282 @@ export const DataEntry: React.FC = () => {
                                     {purCart.length > 0 && (
                                         <div className="bg-white border border-slate-300 rounded-xl overflow-hidden">
                                             <div className="bg-slate-700 text-white p-3 font-bold text-sm">Purchase Cart ({purCart.length} type{purCart.length > 1 ? 's' : ''})</div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-slate-100 text-slate-600">
+                                                        <tr>
+                                                            <th className="p-2 text-left">Original Type</th>
+                                                            <th className="p-2 text-right">Weight (Kg)</th>
+                                                            <th className="p-2 text-right">Price/Kg</th>
+                                                            <th className="p-2 text-right">Discount</th>
+                                                            <th className="p-2 text-right">Surcharge</th>
+                                                            <th className="p-2 text-right">Total ({purCurrency})</th>
+                                                            <th className="p-2 text-right">Total (USD)</th>
+                                                            <th className="p-2"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {purCart.map(item => (
+                                                            <tr key={item.id} className="border-t border-slate-200 hover:bg-slate-50">
+                                                                <td className="p-2 font-medium text-slate-700">{item.originalType}</td>
+                                                                <td className="p-2 text-right font-mono">{item.weightPurchased.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{item.costPerKgFCY.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${item.discountPerKgFCY.toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${item.surchargePerKgFCY.toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono font-bold">{item.totalCostFCY.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${item.totalCostUSD.toFixed(2)}</td>
+                                                                <td className="p-2 text-right"><button type="button" onClick={() => handleRemoveFromPurCart(item.id)} className="text-red-500 hover:text-red-700"><X size={16}/></button></td>
+                                                            </tr>
+                                                        ))}
+                                                        <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
+                                                            <td className="p-2">TOTALS</td>
+                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+i.weightPurchased,0).toFixed(2)}</td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2"></td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</td>
+                                                            <td className="p-2"></td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="border-t border-slate-200 pt-6">
+                                        <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Anchor size={18} className="text-blue-500" /> Landed Cost / Additional Charges</h4>
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => setAcType(e.target.value as any)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
+                                                <div className="md:col-span-1">
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Provider/Agent</label>
+                                                    <EntitySelector
+                                                        entities={filteredProviders}
+                                                        selectedId={acProvider}
+                                                        onSelect={setAcProvider}
+                                                        placeholder="Select..."
+                                                        onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                    />
+                                                </div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
+                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
+                                            </div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${cost.amountUSD.toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
+                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Material Cost (Base USD):</span><span className="font-mono font-bold">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                    </div>
+                                    <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed" disabled={!purSupplier || purCart.length === 0}><FileText size={18} /> Review & Submit</button>
+                                </form>
+                                )}
+                            </div>
+                        )}
+
+                        {/* --- ORIGINAL PURCHASE-2 FORM --- */}
+                        {activeSubModule === 'original-purchase-2' && (
+                            <div className="animate-in fade-in duration-300 max-w-6xl mx-auto">
+                                {/* Mode Toggle */}
+                                <div className="mb-6 flex items-center justify-between">
+                                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                        <Box className="text-blue-600" /> {purEditingId ? 'Edit Purchase-2' : (purMode === 'create' ? 'New Raw Material Purchase-2' : 'Manage Purchases-2')}
+                                    </h3>
+                                    {!purEditingId && (
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setPurMode('create')}
+                                                className={`px-4 py-2 rounded-lg font-medium transition-all ${purMode === 'create' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                            >
+                                                Create New
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setPurMode('manage')}
+                                                className={`px-4 py-2 rounded-lg font-medium transition-all ${purMode === 'manage' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                            >
+                                                Manage Existing
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Manage Mode - List View */}
+                                {purMode === 'manage' && !purEditingId && (
+                                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                        <div className="p-4 bg-slate-50 border-b border-slate-200">
+                                            <h4 className="font-bold text-slate-800">Purchase-2 List</h4>
+                                            <p className="text-xs text-slate-500 mt-1">{state.purchases.length} purchase(s) recorded</p>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 text-slate-600 font-bold text-xs uppercase border-b border-slate-200">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left">Batch #</th>
+                                                        <th className="px-4 py-3 text-left">Date</th>
+                                                        <th className="px-4 py-3 text-left">Supplier</th>
+                                                        <th className="px-4 py-3 text-left">Original Types</th>
+                                                        <th className="px-4 py-3 text-right">Weight (Kg)</th>
+                                                        <th className="px-4 py-3 text-right">Value (USD)</th>
+                                                        <th className="px-4 py-3 text-center">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {state.purchases.length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                                                                No purchases found. Click "Create New" to add your first purchase.
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        state.purchases.map(purchase => {
+                                                            const supplier = state.partners.find(p => p.id === purchase.supplierId);
+                                                            const originalTypes = purchase.items?.length > 0
+                                                                ? purchase.items.map(item => state.originalTypes.find(t => t.id === item.originalTypeId)?.name || 'Unknown').join(', ')
+                                                                : (state.originalTypes.find(t => t.id === purchase.originalTypeId)?.name || 'Unknown');
+                                                            
+                                                            return (
+                                                                <tr key={purchase.id} className="hover:bg-slate-50">
+                                                                    <td className="px-4 py-3 font-mono font-bold text-blue-600">{purchase.batchNumber}</td>
+                                                                    <td className="px-4 py-3">{new Date(purchase.date).toLocaleDateString()}</td>
+                                                                    <td className="px-4 py-3 font-medium">{supplier?.name || 'Unknown'}</td>
+                                                                    <td className="px-4 py-3 text-xs text-slate-600 max-w-xs truncate" title={originalTypes}>{originalTypes}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono">{purchase.weightPurchased.toLocaleString()}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono text-emerald-600">${purchase.totalLandedCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                                    <td className="px-4 py-3">
+                                                                        <div className="flex items-center justify-center gap-2">
+                                                                            <button
+                                                                                onClick={() => initiatePurchaseAction('EDIT', purchase.id)}
+                                                                                className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-xs transition-all"
+                                                                            >
+                                                                                Edit
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => initiatePurchaseAction('DELETE', purchase.id)}
+                                                                                className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-medium text-xs transition-all"
+                                                                            >
+                                                                                Delete
+                                                                            </button>
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Create/Edit Mode - Form View */}
+                                {(purMode === 'create' || purEditingId) && (
+                                <form onSubmit={handlePreSubmitPurchase} className="space-y-6">
+                                    {purEditingId && (
+                                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                            <p className="text-sm font-medium text-amber-800">
+                                                Editing Purchase-2: <span className="font-bold">{purBatch}</span>
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={handleCancelEdit}
+                                                className="mt-2 text-xs text-amber-600 hover:text-amber-800 font-medium"
+                                            >
+                                                Cancel Edit
+                                            </button>
+                                        </div>
+                                    )}
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="col-span-2 md:col-span-1"><label className="block text-sm font-medium text-slate-600 mb-1">Batch Number</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300 font-mono font-bold" value={purBatch} onChange={e => setPurBatch(e.target.value)} required /><p className="text-xs text-slate-400 mt-1">Auto-generated (Editable)</p></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={purDate} onChange={e => setPurDate(e.target.value)} required /></div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Supplier</label>
+                                            <EntitySelector
+                                                entities={state.partners.filter(p => p.type === 'SUPPLIER')}
+                                                selectedId={purSupplier}
+                                                onSelect={setPurSupplier}
+                                                placeholder="Select Supplier..."
+                                                required
+                                                onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.SUPPLIER })}
+                                            />
+                                        </div>
+                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-3"><div><label className="block text-xs font-medium text-slate-500 mb-1">Currency</label><select value={purCurrency} onChange={e => setPurCurrency(e.target.value as Currency)} className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono">{state.currencies.length > 0 ? state.currencies.map(c => ( <option key={c.code} value={c.code}>{c.code}</option> )) : <option value="USD">USD</option>}</select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Rate</label><input type="number" value={purExchangeRate} onChange={e => setPurExchangeRate(parseFloat(e.target.value))} step="0.0001" className="w-full bg-white border border-slate-300 rounded-md p-2 text-slate-800 text-sm font-mono"/></div></div>
+                                    </div>
+
+                                    {/* Logistics & Destination */}
+                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
+                                        <h4 className="font-bold text-slate-700 flex items-center gap-2 text-sm uppercase"><Truck size={16} /> Logistics & Destination</h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div><label className="block text-xs font-semibold text-slate-500 mb-1">Container Number</label><input type="text" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purContainer} onChange={e => setPurContainer(e.target.value)} placeholder="e.g. MSCU1234567" /></div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Division</label>
+                                                <EntitySelector
+                                                    entities={state.divisions}
+                                                    selectedId={purDivision}
+                                                    onSelect={setPurDivision}
+                                                    placeholder="Select..."
+                                                    onQuickAdd={() => openQuickAdd(setupConfigs.divisionConfig)}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Sub-Division</label>
+                                                <EntitySelector
+                                                    entities={state.subDivisions.filter(sd => sd.divisionId === purDivision)}
+                                                    selectedId={purSubDivision}
+                                                    onSelect={setPurSubDivision}
+                                                    placeholder="Select..."
+                                                    disabled={!purDivision}
+                                                    onQuickAdd={() => openQuickAdd(setupConfigs.subDivisionConfig, { divisionId: purDivision })}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Original Type</label>
+                                            <EntitySelector
+                                                entities={state.originalTypes}
+                                                selectedId={purOriginalTypeId}
+                                                onSelect={(id) => { setPurOriginalTypeId(id); setPurOriginalProductId(''); }}
+                                                placeholder="Select Original Type..."
+                                                onQuickAdd={() => openQuickAdd(setupConfigs.originalTypeConfig)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Original Product (Optional)</label>
+                                            <EntitySelector
+                                                entities={filteredProducts}
+                                                selectedId={purOriginalProductId}
+                                                onSelect={setPurOriginalProductId}
+                                                placeholder="Select Product..."
+                                                disabled={!purOriginalTypeId}
+                                                onQuickAdd={() => openQuickAdd(setupConfigs.originalProductConfig, { originalTypeId: purOriginalTypeId })}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Weight (Kg)</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500" value={purWeight} onChange={e => setPurWeight(e.target.value)}/></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Price per Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 font-bold" value={purPrice} onChange={e => setPurPrice(e.target.value)}/></div>
+                                    </div>
+
+                                    {/* Discount & Surcharge for this item */}
+                                    <div className="grid grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Discount/Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purItemDiscount} onChange={e => setPurItemDiscount(e.target.value)}/></div>
+                                        <div><label className="block text-xs font-semibold text-slate-500 mb-1">Surcharge/Kg ({purCurrency})</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={purItemSurcharge} onChange={e => setPurItemSurcharge(e.target.value)}/></div>
+                                        <div className="flex items-end"><button type="button" onClick={handleAddToPurCart} disabled={!purOriginalTypeId || !purWeight || !purPrice} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-slate-300 flex items-center justify-center gap-1"><Plus size={16}/> Add to Cart</button></div>
+                                    </div>
+
+                                    {/* Cart Display */}
+                                    {purCart.length > 0 && (
+                                        <div className="bg-white border border-slate-300 rounded-xl overflow-hidden">
+                                            <div className="bg-slate-700 text-white p-3 font-bold text-sm">Purchase-2 Cart ({purCart.length} type{purCart.length > 1 ? 's' : ''})</div>
                                             <div className="overflow-x-auto">
                                                 <table className="w-full text-sm">
                                                     <thead className="bg-slate-100 text-slate-600">
