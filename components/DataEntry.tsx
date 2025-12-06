@@ -1421,17 +1421,17 @@ export const DataEntry: React.FC = () => {
     };
 
     const selectedItem = state.items.find(i => i.id === prodItemId);
-    // Patch: Add 'Original Purchase-2' to Purchases submodules
+    // Patch: Add 'Optional' to Purchases submodules
     let subModules = getSubModules(activeModule);
     if (activeModule === 'purchase') {
         subModules = [
             ...subModules,
-            {
-                id: 'original-purchase-2',
-                label: 'Original Purchase-2',
-                icon: Box,
-                desc: 'Replica for future changes',
-            },
+            // {
+            //     id: 'original-purchase-2',
+            //     label: 'Optional',
+            //     icon: Box,
+            //     desc: 'Replica for future changes',
+            // },
         ];
     }
     const currentSubModuleDef = subModules.find(s => s.id === activeSubModule);
@@ -2058,8 +2058,16 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     )}
                                     <div className="grid grid-cols-2 gap-6">
-                                        <div className="col-span-2 md:col-span-1"><label className="block text-sm font-medium text-slate-600 mb-1">Batch Number</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300 font-mono font-bold" value={purBatch} onChange={e => setPurBatch(e.target.value)} required /><p className="text-xs text-slate-400 mt-1">Auto-generated (Editable)</p></div>
-                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={purDate} onChange={e => setPurDate(e.target.value)} required /></div>
+                                        <div className="col-span-2 md:col-span-1">
+                                            <span className="inline-block mb-2 text-green-600 font-semibold text-sm">Note (Active)</span>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Batch Number</label>
+                                            <input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300 font-mono font-bold" value={purBatch} onChange={e => setPurBatch(e.target.value)} required />
+                                            <p className="text-xs text-slate-400 mt-1">Auto-generated (Editable)</p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1">Date</label>
+                                            <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={purDate} onChange={e => setPurDate(e.target.value)} required />
+                                        </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-6">
                                         <div>
@@ -2107,7 +2115,7 @@ export const DataEntry: React.FC = () => {
 
                                     <div className="grid grid-cols-2 gap-6">
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-600 mb-1">Original Type</label>
+                                            <label className="block text-sm font-medium text-slate-600 mb-1 flex items-center gap-2">Original Type <span className="text-green-600 font-semibold text-xs">Active</span></label>
                                             <EntitySelector
                                                 entities={state.originalTypes}
                                                 selectedId={purOriginalTypeId}
@@ -2220,7 +2228,7 @@ export const DataEntry: React.FC = () => {
                             </div>
                         )}
 
-                        {/* --- ORIGINAL PURCHASE-2 FORM --- */}
+                        {/* --- OPTIONAL FORM --- */}
                         {activeSubModule === 'original-purchase-2' && (
                             <div className="animate-in fade-in duration-300 max-w-6xl mx-auto">
                                 {/* Mode Toggle */}
@@ -2246,6 +2254,10 @@ export const DataEntry: React.FC = () => {
                                             </button>
                                         </div>
                                     )}
+                                </div>
+                                {/* Welcome Note for Optional */}
+                                <div className="mb-4 flex justify-end">
+                                    <span className="text-blue-700 font-semibold text-base">Welcome Optional</span>
                                 </div>
 
                                 {/* Manage Mode - List View */}
