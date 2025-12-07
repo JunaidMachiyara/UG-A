@@ -462,6 +462,27 @@ export const DataEntry: React.FC = () => {
             (!ooBatch || o.batchNumber === ooBatch)
         );
 
+        // Filter direct sales for this batch
+        const relevantDirectSales = state.salesInvoices.filter(inv => 
+            inv.status === 'Posted' && inv.items.some(item => {
+                // Find purchase for item
+                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                return purchase && purchase.supplierId === ooSupplier && purchase.originalTypeId === ooType && (!ooBatch || purchase.batchNumber === ooBatch);
+            })
+        );
+
+        // Sum sold qty/weight for direct sales
+        const sold = relevantDirectSales.reduce((acc, inv) => {
+            inv.items.forEach(item => {
+                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                if (purchase && purchase.supplierId === ooSupplier && purchase.originalTypeId === ooType && (!ooBatch || purchase.batchNumber === ooBatch)) {
+                    acc.qty += item.qty;
+                    acc.weight += item.totalKg;
+                }
+            });
+            return acc;
+        }, { qty: 0, weight: 0 });
+
         const purchased = relevantPurchases.reduce((acc, curr) => ({
                 qty: acc.qty + curr.qtyPurchased,
                 weight: acc.weight + curr.weightPurchased,
@@ -473,8 +494,9 @@ export const DataEntry: React.FC = () => {
                 weight: acc.weight + curr.weightOpened
             }), { qty: 0, weight: 0 });
 
-        const currentQty = purchased.qty - opened.qty;
-        const currentWeight = purchased.weight - opened.weight;
+        // Subtract direct sales from available stock
+        const currentQty = purchased.qty - opened.qty - sold.qty;
+        const currentWeight = purchased.weight - opened.weight - sold.weight;
         const avgCostPerKg = purchased.weight > 0 ? (purchased.cost / purchased.weight) : 0;
 
         return { 
@@ -482,7 +504,7 @@ export const DataEntry: React.FC = () => {
             weight: currentWeight, 
             avgCost: avgCostPerKg 
         };
-    }, [ooSupplier, ooType, ooBatch, state.purchases, state.originalOpenings]);
+    }, [ooSupplier, ooType, ooBatch, state.purchases, state.originalOpenings, state.salesInvoices]);
 
     const handleOpeningSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -1139,7 +1161,6 @@ export const DataEntry: React.FC = () => {
         // Calculate raw material cost for this direct sale
         const landedCostPerKg = dsSelectedBatch?.landedCostPerKg || 0;
         let totalRawMaterialCost = qty * landedCostPerKg;
-        totalRawMaterialCost += 10000; // Temporary adjustment for testing
         const profit = netTotal - totalRawMaterialCost;
 
         // Temporary popup to show key variables after calculation
