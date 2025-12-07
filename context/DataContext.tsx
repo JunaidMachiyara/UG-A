@@ -1760,7 +1760,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dispatch({ type: 'ADD_SALES_INVOICE', payload: invoice });
         const transactionId = `DS-${invoice.invoiceNo}`;
         const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
-        const cogsAccount = state.accounts.find(a => a.name.includes('COGS - Direct'));
+        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold - Direct Sales'));
         const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
         
@@ -1772,8 +1772,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const customerCurrency = (invoice as any).customerCurrency || 'USD';
         const customerRate = (invoice as any).customerExchangeRate || 1;
         const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` }, { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` } ];
-        const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0); const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
+        const entries: Omit<LedgerEntry, 'id'>[] = [
+            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` },
+            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` }
+        ];
+        const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0);
+        const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)` });
         entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
         postTransaction(entries);

@@ -1138,8 +1138,18 @@ export const DataEntry: React.FC = () => {
         const netTotal = qty * rate;
         // Calculate raw material cost for this direct sale
         const landedCostPerKg = dsSelectedBatch?.landedCostPerKg || 0;
-        const totalRawMaterialCost = qty * landedCostPerKg;
+        let totalRawMaterialCost = qty * landedCostPerKg;
+        totalRawMaterialCost += 10000; // Temporary adjustment for testing
         const profit = netTotal - totalRawMaterialCost;
+
+        // Temporary popup to show key variables after calculation
+        alert(
+            `Direct Sale Variables:\n` +
+            `Total Sales Kg: ${qty}\n` +
+            `Batch Landed Cost Per Kg: ${landedCostPerKg}\n` +
+            `Total Cost USD: ${totalRawMaterialCost}\n` +
+            `Invoice.netTotal: ${netTotal}`
+        );
 
         // Create Sales Invoice Item (Linked to Batch)
         const invoiceItem: SalesInvoiceItem = {
@@ -1150,10 +1160,7 @@ export const DataEntry: React.FC = () => {
             rate: rate,
             total: netTotal,
             totalKg: qty,
-            originalPurchaseId: dsPurchaseId,
-            // Optionally, you can add cost and profit fields for reporting
-            cost: totalRawMaterialCost,
-            profit: profit
+            originalPurchaseId: dsPurchaseId
         };
 
         // Generate sequential DS invoice number
@@ -1169,6 +1176,7 @@ export const DataEntry: React.FC = () => {
             date: dsDate,
             status: 'Posted',
             customerId: dsCustomer,
+            factoryId: state.currentFactory?.id || '',
             logoId: state.logos[0]?.id || '', // Default Logo
             currency: 'USD', // All sales in USD
             exchangeRate: 1, // USD base
@@ -1179,7 +1187,7 @@ export const DataEntry: React.FC = () => {
             items: [invoiceItem],
             additionalCosts: [],
             grossTotal: netTotal,
-            netTotal: profit // Net income is now profit for direct sales
+            netTotal: netTotal // Customer is debited with full sale value
         };
 
         // Adjust Raw Material inventory for the batch used in direct sale
