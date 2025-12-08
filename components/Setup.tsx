@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
 import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
 import { PartnerType, AccountType, PackingType } from '../types';
@@ -1138,6 +1139,22 @@ export const SetupModule: React.FC = () => {
     const { state } = useData();
     const configs = useSetupConfigs();
 
+    // Export CSV for Categories or Sections
+    const handleExportCSV = (data: { id: string; name: string }[], filename: string) => {
+        if (!data || data.length === 0) {
+            alert('No data to export');
+            return;
+        }
+        const csv = Papa.unparse(data.map(({ id, name }) => ({ ID: id, Name: name })));
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        window.URL.revokeObjectURL(url);
+    };
+
     return (
         <div className="max-w-7xl mx-auto space-y-8">
             <DataImporter />
@@ -1166,8 +1183,25 @@ export const SetupModule: React.FC = () => {
                     <div className="flex items-center gap-2 mb-2">
                         <Package className="text-slate-400" size={20} />
                         <h2 className="text-lg font-bold text-slate-800 uppercase tracking-wide">Finished Goods & Operations</h2>
+                    <button
+                        className="ml-auto flex items-center gap-2 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs"
+                        onClick={() => handleExportCSV(state.categories, 'categories_export.csv')}
+                        title="Export Categories to CSV"
+                    >
+                        <Download size={14} /> Export Categories
+                    </button>
                     </div>
                     <CrudManager config={configs.categoryConfig} data={state.categories} />
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-semibold text-slate-600">Export Sections:</span>
+                        <button
+                            className="flex items-center gap-2 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs"
+                            onClick={() => handleExportCSV(state.sections, 'sections_export.csv')}
+                            title="Export Sections to CSV"
+                        >
+                            <Download size={14} /> Export Sections
+                        </button>
+                    </div>
                     <CrudManager config={configs.sectionConfig} data={state.sections} />
                     <CrudManager config={configs.itemConfig} data={state.items} />
                     <CrudManager config={configs.warehouseConfig} data={state.warehouses} />

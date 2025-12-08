@@ -4,14 +4,14 @@ import { useAuth } from '../context/AuthContext';
 import { UserRole } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw } from 'lucide-react';
-import { collection, writeBatch, doc, getDocs } from 'firebase/firestore';
+import { collection, writeBatch, doc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
-type ResetType = 'transactions' | 'complete' | null;
+type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
     const { state } = useData();
-    const { currentUser } = useAuth();
+    const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [resetType, setResetType] = useState<ResetType>(null);
@@ -23,6 +23,7 @@ export const AdminModule: React.FC = () => {
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
 
+
     const handleResetRequest = (type: ResetType) => {
         setResetType(type);
         setShowConfirmModal(true);
@@ -31,7 +32,7 @@ export const AdminModule: React.FC = () => {
         setResetResult(null);
     };
 
-    const executeReset = async () => {
+    const executeReset = async (factoryArg?: { id: string }) => {
         if (confirmText !== CONFIRMATION_TEXT) {
             alert('Please type the confirmation text exactly');
             return;
@@ -46,6 +47,8 @@ export const AdminModule: React.FC = () => {
         setResetResult(null);
 
         try {
+            // Use factoryArg for factory reset, otherwise undefined
+
             // Collections to delete for transaction reset
             const transactionCollections = [
                 'ledger',
@@ -66,7 +69,7 @@ export const AdminModule: React.FC = () => {
                 'customsDocuments'
             ];
 
-            // Additional collections to delete for complete reset
+            // Additional collections to delete for complete/factory reset
             const setupCollections = [
                 'items',
                 'partners',
@@ -85,44 +88,53 @@ export const AdminModule: React.FC = () => {
                 'vehicles'
             ];
 
-            const collectionsToDelete = resetType === 'complete' 
-                ? [...transactionCollections, ...setupCollections]
-                : transactionCollections;
+            let collectionsToDelete: string[] = [];
+            if (resetType === 'complete') {
+                collectionsToDelete = [...transactionCollections, ...setupCollections];
+            } else if (resetType === 'factory') {
+                collectionsToDelete = [...transactionCollections, ...setupCollections];
+            } else {
+                collectionsToDelete = transactionCollections;
+            }
 
             let totalDeleted = 0;
+            const { currentFactory } = useAuth();
 
+            const factoryToUse = factoryArg || currentFactory;
             for (const collectionName of collectionsToDelete) {
-                const collectionRef = collection(db, collectionName);
-                const snapshot = await getDocs(collectionRef);
-                
+                let snapshot;
+                // For factory reset, filter by factoryId if possible
+                if (resetType === 'factory' && factoryToUse && [
+                    'items','partners','accounts','divisions','subDivisions','logos','warehouses','employees','originalTypes','originalProducts','categories','sections','ledger','salesInvoices','purchases','productions','originalOpenings','bundlePurchases','logisticsEntries','ongoingOrders','archive','attendance','salaryPayments','vehicleCharges','chatMessages','planners','guaranteeCheques','customsDocuments','tasks','enquiries','vehicles'
+                ].includes(collectionName)) {
+                    const q = query(collection(db, collectionName), where('factoryId', '==', factoryToUse.id));
+                    snapshot = await getDocs(q);
+                } else {
+                    const collectionRef = collection(db, collectionName);
+                    snapshot = await getDocs(collectionRef);
+                }
                 if (snapshot.empty) continue;
-
                 // Firebase allows max 500 operations per batch
                 const batches = [];
                 let currentBatch = writeBatch(db);
                 let operationCount = 0;
-
                 snapshot.docs.forEach((document) => {
                     currentBatch.delete(document.ref);
                     operationCount++;
                     totalDeleted++;
-
                     if (operationCount === 500) {
                         batches.push(currentBatch);
                         currentBatch = writeBatch(db);
                         operationCount = 0;
                     }
                 });
-
                 if (operationCount > 0) {
                     batches.push(currentBatch);
                 }
-
                 // Commit all batches
                 for (const batch of batches) {
                     await batch.commit();
                 }
-
                 console.log(`✅ Deleted ${snapshot.size} documents from ${collectionName}`);
             }
 
@@ -216,6 +228,14 @@ export const AdminModule: React.FC = () => {
         }
     };
 
+    // Pass currentFactory to executeReset for factory reset
+    const handleConfirmReset = () => {
+        if (resetType === 'factory') {
+            executeReset(currentFactory);
+        } else {
+            executeReset();
+        }
+    };
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -417,6 +437,13 @@ export const AdminModule: React.FC = () => {
                             <AlertTriangle size={20} />
                             Complete Hard Reset
                         </button>
+                        <button
+                            onClick={() => handleResetRequest('factory')}
+                            className="w-full mt-3 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold flex items-center justify-center gap-2"
+                        >
+                            <AlertTriangle size={20} />
+                            Factory Hard Reset (Current Only)
+                        </button>
                     </div>
                 </div>
             </div>
@@ -563,7 +590,7 @@ export const AdminModule: React.FC = () => {
                                 Cancel
                             </button>
                             <button
-                                onClick={executeReset}
+                                onClick={handleConfirmReset}
                                 disabled={resetting || confirmText !== CONFIRMATION_TEXT || pinCode !== ADMIN_PIN}
                                 className={`flex-1 px-4 py-2 rounded-lg font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
                                     resetType === 'complete' 
