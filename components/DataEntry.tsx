@@ -110,6 +110,7 @@ export const DataEntry: React.FC = () => {
                 return [
                     { id: 'original-opening', label: 'Original Opening', icon: Package, desc: 'Consume raw material batches' },
                     { id: 'fg-production', label: 'Finished Goods Production', icon: Factory, desc: 'Record output of graded items' },
+                    { id: 'produced-production', label: 'Produced Production', icon: Layers, desc: 'View produced entries with filters' },
                     { id: 're-baling', label: 'Re-baling', icon: ArrowLeftRight, desc: 'Convert loose stock or re-process items' }
                 ];
             case 'purchase':
@@ -234,6 +235,55 @@ export const DataEntry: React.FC = () => {
     const [showSiSummary, setShowSiSummary] = useState(false);
 
     // --- Direct Sales State ---
+        // --- Produced Production Report State ---
+        const [prodReportStart, setProdReportStart] = useState(new Date().toISOString().split('T')[0]);
+        const [prodReportEnd, setProdReportEnd] = useState(new Date().toISOString().split('T')[0]);
+        const [prodReportItem, setProdReportItem] = useState('');
+        const [prodReportSort, setProdReportSort] = useState({ col: 'Timestamp', asc: false });
+
+        // Filter and sort produced entries
+        const filteredProducedEntries = useMemo(() => {
+            let entries = state.productions.filter(p => {
+                // Support both Firestore timestamp and date string
+                let entryDateObj;
+                if (p.createdAt?.seconds) {
+                    entryDateObj = new Date(p.createdAt.seconds * 1000);
+                } else if (p.date) {
+                    // If p.date is 'YYYY-MM-DD', parse as local date
+                    entryDateObj = new Date(p.date + 'T00:00:00');
+                } else {
+                    return false;
+                }
+                // Compare only date part for string dates
+                const startDateObj = new Date(prodReportStart + 'T00:00:00');
+                const endDateObj = new Date(prodReportEnd + 'T23:59:59');
+                return entryDateObj >= startDateObj && entryDateObj <= endDateObj && (prodReportItem === '' || p.itemId === prodReportItem);
+            });
+            if (prodReportSort.col) {
+                entries = [...entries].sort((a, b) => {
+                    let aVal, bVal;
+                    switch (prodReportSort.col) {
+                        case 'Item': aVal = state.items.find(i => i.id === a.itemId)?.name || a.itemId; bVal = state.items.find(i => i.id === b.itemId)?.name || b.itemId; break;
+                        case 'Category': aVal = state.items.find(i => i.id === a.itemId)?.category || ''; bVal = state.items.find(i => i.id === b.itemId)?.category || ''; break;
+                        case 'Bale Size': aVal = state.items.find(i => i.id === a.itemId)?.packingType || ''; bVal = state.items.find(i => i.id === b.itemId)?.packingType || ''; break;
+                        case 'Qty': aVal = a.qtyProduced; bVal = b.qtyProduced; break;
+                        case 'Weight': aVal = a.weightProduced; bVal = b.weightProduced; break;
+                        case 'Avg. Prod. Price': aVal = state.items.find(i => i.id === a.itemId)?.avgProdPrice || 0; bVal = state.items.find(i => i.id === b.itemId)?.avgProdPrice || 0; break;
+                        case 'Total': aVal = state.items.find(i => i.id === a.itemId)?.avgProdPrice * a.qtyProduced || 0; bVal = state.items.find(i => i.id === b.itemId)?.avgProdPrice * b.qtyProduced || 0; break;
+                        case 'Timestamp': aVal = a.createdAt?.seconds || new Date(a.date).getTime() / 1000; bVal = b.createdAt?.seconds || new Date(b.date).getTime() / 1000; break;
+                        default: aVal = ''; bVal = ''; break;
+                    }
+                    if (aVal < bVal) return prodReportSort.asc ? -1 : 1;
+                    if (aVal > bVal) return prodReportSort.asc ? 1 : -1;
+                    return 0;
+                });
+            }
+            return entries;
+        }, [state.productions, prodReportStart, prodReportEnd, prodReportItem, prodReportSort]);
+
+        const handleProdReportSort = (col: string) => {
+            setProdReportSort(prev => ({ col, asc: prev.col === col ? !prev.asc : true }));
+        };
     const [dsMode, setDsMode] = useState<'create' | 'view'>('create');
     const [dsDate, setDsDate] = useState(new Date().toISOString().split('T')[0]);
     const [dsCustomer, setDsCustomer] = useState('');
@@ -2909,6 +2959,74 @@ export const DataEntry: React.FC = () => {
                         )}
 
                         {/* --- FINISHED GOODS PRODUCTION FORM --- */}
+                                                {/* --- PRODUCED PRODUCTION REPORT TAB --- */}
+                                                {activeSubModule === 'produced-production' && (
+                                                    <div className="animate-in fade-in duration-300 grid grid-cols-1 md:grid-cols-12 gap-8">
+                                                        <div className="md:col-span-12 mb-6 flex gap-4 items-center">
+                                                            <div>
+                                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Date Range</label>
+                                                                <input type="date" value={prodReportStart} onChange={e => setProdReportStart(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm mr-2" />
+                                                                <input type="date" value={prodReportEnd} onChange={e => setProdReportEnd(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm" />
+                                                            </div>
+                                                            <div className="ml-6">
+                                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Item</label>
+                                                                <select value={prodReportItem} onChange={e => setProdReportItem(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm">
+                                                                    <option value="">All Items</option>
+                                                                    {state.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                                                </select>
+                                                            </div>
+                                                            {/* Cards for Total Packages and Total Weight */}
+                                                            <div className="ml-auto flex gap-4">
+                                                                <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
+                                                                    <span className="text-xs text-slate-500 font-semibold mb-1">Total Packages (Qty)</span>
+                                                                    <span className="text-2xl font-bold text-blue-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.qtyProduced, 0)}</span>
+                                                                </div>
+                                                                <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
+                                                                    <span className="text-xs text-slate-500 font-semibold mb-1">Total Weight</span>
+                                                                    <span className="text-2xl font-bold text-emerald-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.weightProduced, 0)}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="md:col-span-12">
+                                                            <div className="overflow-x-auto">
+                                                                <table className="w-full text-sm text-left">
+                                                                    <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
+                                                                        <tr>
+                                                                            {['Item','Category','Bale Size','Qty','Weight','Timestamp'].map((col, idx) => {
+                                                                                return (
+                                                                                    <th key={col} className="px-4 py-2 cursor-pointer" onClick={() => handleProdReportSort(col)}>
+                                                                                        {col}
+                                                                                        {prodReportSort.col === col && (prodReportSort.asc ? ' ▲' : ' ▼')}
+                                                                                    </th>
+                                                                                );
+                                                                            })}
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-slate-100">
+                                                                        {filteredProducedEntries.length === 0 ? (
+                                                                            <tr><td colSpan={8} className="text-center py-8 text-slate-400">No production entries found.</td></tr>
+                                                                        ) : (
+                                                                            filteredProducedEntries.map(entry => {
+                                                                                const item = state.items.find(i => i.id === entry.itemId);
+                                                                                const packageSize = item?.weightPerUnit !== undefined ? Number(item.weightPerUnit) : null;
+                                                                                return (
+                                                                                    <tr key={entry.id} className="hover:bg-slate-50">
+                                                                                        <td className="px-4 py-2 font-medium text-slate-700">{item?.name || entry.itemId}</td>
+                                                                                        <td className="px-4 py-2">{item?.category || '-'}</td>
+                                                                                        <td className="px-4 py-2">{packageSize !== null ? packageSize : '-'}</td>
+                                                                                        <td className="px-4 py-2">{entry.qtyProduced}</td>
+                                                                                        <td className="px-4 py-2">{entry.weightProduced}</td>
+                                                                                        <td className="px-4 py-2">{entry.createdAt ? new Date(entry.createdAt.seconds * 1000).toLocaleString() : '-'}</td>
+                                                                                    </tr>
+                                                                                );
+                                                                            })
+                                                                        )}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
                         {activeSubModule === 'fg-production' && (
                             <div className="animate-in fade-in duration-300 grid grid-cols-1 md:grid-cols-12 gap-8">
                                     <div className="md:col-span-7 space-y-6">
