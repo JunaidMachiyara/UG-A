@@ -1758,6 +1758,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     const addDirectSale = (invoice: SalesInvoice, batchLandedCostPerKg: number) => {
         dispatch({ type: 'ADD_SALES_INVOICE', payload: invoice });
+        // Save Direct Sale to Firestore (same as addSalesInvoice)
+        if (isFirestoreLoaded) {
+            const invoiceWithFactory = {
+                ...invoice,
+                factoryId: currentFactory?.id || ''
+            };
+            const { id, ...invoiceData } = invoiceWithFactory;
+            addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+                .then(() => console.log('✅ Direct Sale saved to Firebase'))
+                .catch((error) => console.error('❌ Error saving direct sale:', error));
+        }
         const transactionId = `DS-${invoice.invoiceNo}`;
         const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
         const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold - Direct Sales'));
