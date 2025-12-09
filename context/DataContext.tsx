@@ -137,7 +137,19 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         }
         case 'LOAD_ITEMS': {
             console.log('✅ LOADED ITEMS FROM FIREBASE:', action.payload.length);
-            return { ...state, items: action.payload };
+            // Calculate total finished goods value
+            const finishedGoodsValue = action.payload
+                .filter(item => item.factoryId === state.currentFactory?.id)
+                .reduce((sum, item) => sum + ((item.stockQty || 0) * (item.avgCost || 0)), 0);
+
+            // Update Inventory - Finished Goods account (id: '1202')
+            const updatedAccounts = state.accounts.map(acc =>
+                acc.id === '1202'
+                    ? { ...acc, balance: finishedGoodsValue }
+                    : acc
+            );
+
+            return { ...state, items: action.payload, accounts: updatedAccounts };
         }
         case 'LOAD_CATEGORIES': {
             console.log('✅ LOADED CATEGORIES FROM FIREBASE:', action.payload.length);

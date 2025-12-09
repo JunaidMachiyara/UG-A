@@ -234,8 +234,8 @@ const InventoryIntelligence: React.FC = () => {
     const rawItems = state.items.filter(i => i.category === 'cat-raw'); 
     const fgItems = state.items.filter(i => i.category !== 'cat-raw');
 
-    const rawValue = rawItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.weightPerUnit || 0) * (i?.avgCost || 0)), 0);
-    const fgValue = fgItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.weightPerUnit || 0) * (i?.avgCost || 0)), 0);
+    const rawValue = rawItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.avgCost || 0)), 0);
+    const fgValue = fgItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.avgCost || 0)), 0);
 
     const lowStockItems = state.items.filter(i => i.stockQty > 0 && i.stockQty < 50);
     const nonMovingItems = state.items.filter(i => i.stockQty > 0 && !state.salesInvoices.some(inv => inv.items.some(si => si.itemId === i.id)));
@@ -322,7 +322,7 @@ const InventoryIntelligence: React.FC = () => {
                                 <tr key={i.id}>
                                     <td className="px-4 py-3 font-medium text-slate-700">{i.name}</td>
                                     <td className="px-4 py-3 text-right">{i.stockQty}</td>
-                                    <td className="px-4 py-3 text-right font-mono">${(i.stockQty * i.avgCost * i.weightPerUnit).toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right font-mono">${(i.stockQty * i.avgCost).toLocaleString()}</td>
                                 </tr>
                             ))}
                             {nonMovingItems.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-slate-400">Great! No dead stock found.</td></tr>}
