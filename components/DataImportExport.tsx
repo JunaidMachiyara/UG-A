@@ -124,11 +124,7 @@ export const DataImportExport: React.FC = () => {
                     }
 
                     // Entity-specific transformations
-                    let document: any = { 
-                        ...row,
-                        factoryId: currentFactory.id // Add factoryId to all imports
-                    };
-
+                    let document: any = { ...row };
                     if (selectedEntity === 'items') {
                         document = {
                             ...row,
@@ -136,18 +132,16 @@ export const DataImportExport: React.FC = () => {
                             avgCost: parseFloat(row.avgCost) || 0,
                             salePrice: parseFloat(row.salePrice) || 0,
                             stockQty: parseFloat(row.stockQty) || 0,
-                            openingStock: parseFloat(row.openingStock) || 0
+                            openingStock: parseFloat(row.openingStock) || 0,
+                            factoryId: currentFactory.id // Always add factoryId for items
                         };
-                    } else if (selectedEntity === 'partners') {
-                        document = {
-                            ...row,
-                            balance: parseFloat(row.balance) || 0
-                        };
-                    } else if (selectedEntity === 'accounts') {
-                        document = {
-                            ...row,
-                            balance: parseFloat(row.balance) || 0
-                        };
+                    } else {
+                        document.factoryId = currentFactory.id;
+                        if (selectedEntity === 'partners') {
+                            document.balance = parseFloat(row.balance) || 0;
+                        } else if (selectedEntity === 'accounts') {
+                            document.balance = parseFloat(row.balance) || 0;
+                        }
                     }
 
                     const docRef = doc(db, collectionName, row.id);
