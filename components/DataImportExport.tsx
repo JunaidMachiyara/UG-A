@@ -5,6 +5,7 @@ import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } fro
 import Papa from 'papaparse';
 import { collection, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { getAccountId } from '../services/accountMap';
 
 type ImportableEntity = 
     | 'items' 
@@ -135,6 +136,53 @@ export const DataImportExport: React.FC = () => {
                             openingStock: parseFloat(row.openingStock) || 0,
                             factoryId: currentFactory.id // Always add factoryId for items
                         };
+                        // --- Ledger entry for opening stock ---
+                        if (document.openingStock > 0 && document.avgCost > 0) {
+                            const stockValue = document.openingStock * document.avgCost;
+                            const prevYear = new Date().getFullYear() - 1;
+                            const date = `${prevYear}-12-31`;
+                            // Use centralized account mapping
+                            const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
+                            const capitalId = getAccountId('301'); // Capital
+                            const entries = [
+                                {
+                                    date,
+                                    transactionId: `OB-STK-${document.id}`,
+                                    transactionType: 'OPENING_BALANCE',
+                                    accountId: finishedGoodsId,
+                                    accountName: 'Inventory - Finished Goods',
+                                    currency: 'USD',
+                                    exchangeRate: 1,
+                                    fcyAmount: stockValue,
+                                    debit: stockValue,
+                                    credit: 0,
+                                    narration: `Opening Stock - ${document.name}`,
+                                    factoryId: currentFactory.id
+                                },
+                                {
+                                    date,
+                                    transactionId: `OB-STK-${document.id}`,
+                                    transactionType: 'OPENING_BALANCE',
+                                    accountId: capitalId,
+                                    accountName: 'Capital',
+                                    currency: 'USD',
+                                    exchangeRate: 1,
+                                    fcyAmount: stockValue,
+                                    debit: 0,
+                                    credit: stockValue,
+                                    narration: `Opening Stock - ${document.name}`,
+                                    factoryId: currentFactory.id
+                                }
+                            ];
+                            // Use addItem to trigger ledger logic if available
+                            if (typeof addItem === 'function') {
+                                addItem(document, document.openingStock);
+                            }
+                            // Optionally, postTransaction directly if available
+                            if (typeof window !== 'undefined' && window.postTransaction) {
+                                window.postTransaction(entries);
+                            }
+                        }
                     } else {
                         document.factoryId = currentFactory.id;
                         if (selectedEntity === 'partners') {

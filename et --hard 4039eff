@@ -1,0 +1,35 @@
+[33mc94df7a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Fix: Negative customer opening balances now post to AR, not Customer Deposits. Supplier logic unchanged.
+[33m4039eff[m Fix: Inventory value calculation in reports uses stockQty * avgCost
+[33m7bd3933[m Fix: Import logic now always adds factoryId to items
+[33m1854d5a[m Add Factory-Specific Hard Reset button and fix invalid hook call; add export to Excel for Categories and Sections
+[33mc534cd6[m UI: Add summary cards for total packages and weight in Produced Production tab, remove Avg. Prod. Price and Total columns
+[33m599868a[m Fix: Persist Direct Sales to Firestore for Data Entry
+[33m3180eac[m Fix: strict batch visibility after Direct Sale and Original Opening; only show batches with remaining stock
+[33m7100448[m Fix: strict batch linkage for Direct Sale and available stock calculation
+[33m1fccbac[m Fix: COGS account lookup for Direct Sales and remove temporary +10000 adjustment
+[33m65a3ce5[m Fix: Margin calculation and reporting now shows 0% for products with no sales. Table updated to display margin column.
+[33m20ccbba[m Implement raw material inventory adjustment for Direct Sales
+[33m85dbc57[m Display Sub Supplier before Description in Review Invoice Details modal
+[33mf5dbe61[m feat: UI and logic improvements up to Sub Supplier discussion (safe point)
+[33mf447003[m Save stable state with Original Purchase-2 replica
+[33ma70f909[m Restore app to last stable state (24f08c5)
+[33m24f08c5[m Major fixes: Currency USD enforcement, Direct Sales prefix, Original Openings matching, Keyboard navigation, Transaction Reset improvements, Item display with package size
+[33m267cbc3[m Fix Re-baling Display + Complete Accounting Implementation - Fixed Feasibility report NET production change - Re-baling accounting FG-to-FG separate from production - Enhanced EntitySelector multi-field search - Serial number continuity fixed - Stock reduction with Firebase persistence
+[33m973b7f6[m  CRITICAL: Complete Firebase Persistence for ALL Data Entries
+[33m5e94963[m  Fix Purchase Form & Balance Sheet Issues
+[33m58273ab[m  CRITICAL FIX: Firebase Persistence for Purchases & Ledger Entries
+[33ma4d49b6[m  Complete Feature Release: Multi-Factory System + Currency Management + Animated Dashboard
+[33md800481[m Fix Netlify secrets scanner blocking Firebase client keys
+[33ma4d1c87[m Optimize Vite build with code splitting to reduce bundle size
+[33m6551bcb[m Add Node.js memory optimization for Netlify builds
+[33m09e8fae[m Apply Netlify Agent fixes: improve ErrorBoundary implementation
+[33m602128b[m Remove hardcoded Firebase config from documentation files
+[33m319a48a[m Fix TypeScript compilation errors for Netlify deployment
+[33m9553c27[m Remove hardcoded Firebase fallbacks to pass secrets scan
+[33ma3c4fbe[m Move Firebase config to environment variables for security
+[33mcb33000[m Add netlify.toml configuration for deployment
+[33m9da9b2e[m Add CSV Validator module for pre-import validation
+[33m31a322d[m Add new features: Order Fulfillment, Original Stock & Item Performance Reports, CSV Import/Export, Admin Module
+[33m37f6181[m feat: Implement Firebase integration with proper database structure - Connected to new Firebase project (ug-a-64252) - Added proper service layer (PartnerService, DatabaseInitService) - Implemented real-time sync for partners and accounts - Replaced monolith approach with separate collections - Added database initialization with sample data - Fixed DataEntry.tsx JSX syntax error - Added error boundary and status indicators - Enabled live read/write with safeguards
+[33maeeb5ba[m feat: Initialize Usman Global Inventory project
+[33mb914c76[m Initial commit

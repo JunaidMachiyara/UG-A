@@ -5,6 +5,7 @@ import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCH
 import { db } from '../services/firebase';
 import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
+import { getAccountId } from '../services/accountMap';
 
 // Helper for simple ID generation
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -1195,6 +1196,46 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
     const addItem = (item: Item, openingStock: number = 0) => {
+                // Post ledger entries for opening stock if present
+        if (openingStock > 0 && item.avgCost > 0) {
+            const prevYear = new Date().getFullYear() - 1;
+            const date = `${prevYear}-12-31`;
+            const stockValue = openingStock * item.avgCost;
+            // Use centralized account mapping
+            const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
+            const capitalId = getAccountId('301'); // Capital
+            const entries = [
+                {
+                    date,
+                    transactionId: `OB-STK-${item.id}`,
+                    transactionType: 'OPENING_BALANCE',
+                    accountId: finishedGoodsId,
+                    accountName: 'Inventory - Finished Goods',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: stockValue,
+                    debit: stockValue,
+                    credit: 0,
+                    narration: `Opening Stock - ${item.name}`,
+                    factoryId: currentFactory?.id || ''
+                },
+                {
+                    date,
+                    transactionId: `OB-STK-${item.id}`,
+                    transactionType: 'OPENING_BALANCE',
+                    accountId: capitalId,
+                    accountName: 'Capital',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: stockValue,
+                    debit: 0,
+                    credit: stockValue,
+                    narration: `Opening Stock - ${item.name}`,
+                    factoryId: currentFactory?.id || ''
+                }
+            ];
+            postTransaction(entries);
+        }
         const itemWithFactory = {
             ...item,
             factoryId: currentFactory?.id || ''
@@ -1208,10 +1249,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addDoc(collection(db, 'items'), { ...itemData, createdAt: serverTimestamp() })
             .then(() => console.log('✅ Item saved to Firebase'))
             .catch((error) => console.error('❌ Error saving item:', error));
-        if (openingStock > 0 && item.avgCost > 0) {
-             const prevYear = new Date().getFullYear() - 1; const date = `${prevYear}-12-31`; const stockValue = openingStock * item.avgCost; const inventoryId = item.category === 'Raw Material' ? '104' : '105'; const capitalId = '301';
-             const entries: Omit<LedgerEntry, 'id'>[] = [ { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: inventoryId, accountName: 'Inventory Asset', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: stockValue, credit: 0, narration: `Opening Stock - ${item.name}` }, { date, transactionId: `OB-STK-${item.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: capitalId, accountName: 'Capital', currency: 'USD', exchangeRate: 1, fcyAmount: stockValue, debit: 0, credit: stockValue, narration: `Opening Stock - ${item.name}` } ]; postTransaction(entries);
-        }
+           // Do NOT post duplicate ledger entries for opening stock here
     };
 
     const updateItem = async (id: string, updatedItem: Item) => {
