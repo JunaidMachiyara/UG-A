@@ -218,16 +218,19 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             
             // Recalculate partner balances from ledger entries
             const updatedPartners = state.partners.map(partner => {
-                const partnerDebitSum = action.payload.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + (e.debit || 0), 0);
-                const partnerCreditSum = action.payload.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + (e.credit || 0), 0);
-                
+                const mappedAccountId = getAccountId(partner.id);
+                const partnerDebitSum = action.payload.filter(e => e.accountId === mappedAccountId).reduce((sum, e) => sum + (e.debit || 0), 0);
+                const partnerCreditSum = action.payload.filter(e => e.accountId === mappedAccountId).reduce((sum, e) => sum + (e.credit || 0), 0);
                 let newPartnerBalance = 0;
-                if ([PartnerType.CUSTOMER].includes(partner.type)) {
+                if (partner.type === PartnerType.CUSTOMER) {
                     // Customers: debit increases balance (they owe us) - positive
                     newPartnerBalance = partnerDebitSum - partnerCreditSum;
+                } else if ([PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                    // Suppliers/agents: credit increases liability, so balance becomes more negative
+                    newPartnerBalance = partnerCreditSum - partnerDebitSum;
                 } else {
-                    // Suppliers: credit increases what we owe them - stored as NEGATIVE for liability
-                    newPartnerBalance = partnerDebitSum - partnerCreditSum; // This will be negative when credit > debit
+                    // Other partners: default logic
+                    newPartnerBalance = partnerDebitSum - partnerCreditSum;
                 }
                 return { ...partner, balance: newPartnerBalance };
             });
@@ -1080,16 +1083,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const apId = apAccount.id;
         const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})` }
+            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`, factoryId: purchaseWithFactory.factoryId }
         ];
         const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
         const supplierName = state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name || 'Unknown Supplier';
         // Credit the SUPPLIER's account directly (not general AP)
-        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: purchaseWithFactory.supplierId, accountName: supplierName, currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${supplierName}` });
+        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: purchaseWithFactory.supplierId, accountName: supplierName, currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${supplierName}`, factoryId: purchaseWithFactory.factoryId });
+        // ...existing code...
         purchaseWithFactory.additionalCosts.forEach(cost => {
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
             // Credit the PROVIDER's account directly (freight forwarder, clearing agent, etc.)
-            entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}` });
+            entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}`, factoryId: purchaseWithFactory.factoryId });
         });
         postTransaction(entries);
     };
@@ -1133,12 +1137,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Create journal entries
         const apId = '201'; const inventoryAssetId = '105'; const transactionId = `BUN-${bundle.batchNumber}`; const entries: Omit<LedgerEntry, 'id'>[] = [];
         const materialCostUSD = bundle.items.reduce((sum, item) => sum + item.totalUSD, 0); const materialCostFCY = bundle.items.reduce((sum, item) => sum + item.totalFCY, 0);
-        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: materialCostUSD, debit: materialCostUSD, credit: 0, narration: `Bundle Purchase Material: ${bundle.batchNumber}` });
-        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: bundle.currency, exchangeRate: bundle.exchangeRate, fcyAmount: materialCostFCY, debit: 0, credit: materialCostUSD, narration: `Bundle Purchase: ${state.partners.find(p=>p.id===bundle.supplierId)?.name}` });
+        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: materialCostUSD, debit: materialCostUSD, credit: 0, narration: `Bundle Purchase Material: ${bundle.batchNumber}`, factoryId: bundle.factoryId });
+        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: bundle.currency, exchangeRate: bundle.exchangeRate, fcyAmount: materialCostFCY, debit: 0, credit: materialCostUSD, narration: `Bundle Purchase: ${state.partners.find(p=>p.id===bundle.supplierId)?.name}`, factoryId: bundle.factoryId });
+            // ...existing code...
         bundle.additionalCosts.forEach(cost => {
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown';
-            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: cost.amountUSD, debit: cost.amountUSD, credit: 0, narration: `${cost.costType} (Capitalized): ${providerName}` });
-            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}` });
+            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: cost.amountUSD, debit: cost.amountUSD, credit: 0, narration: `${cost.costType} (Capitalized): ${providerName}`, factoryId: bundle.factoryId });
+            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}`, factoryId: bundle.factoryId });
+                    // ...existing code...
         });
         postTransaction(entries);
     };
@@ -1267,7 +1273,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 {
                     date,
                     transactionId: `OB-STK-${item.id}`,
-                    transactionType: 'OPENING_BALANCE',
+                    transactionType: TransactionType.OPENING_BALANCE,
                     accountId: finishedGoodsId,
                     accountName: 'Inventory - Finished Goods',
                     currency: 'USD',
@@ -1281,7 +1287,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 {
                     date,
                     transactionId: `OB-STK-${item.id}`,
-                    transactionType: 'OPENING_BALANCE',
+                    transactionType: TransactionType.OPENING_BALANCE,
                     accountId: capitalId,
                     accountName: 'Capital',
                     currency: 'USD',
@@ -1383,7 +1389,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     fcyAmount: openingWithFactory.totalValue,
                     debit: 0,
                     credit: openingWithFactory.totalValue,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                    factoryId: openingWithFactory.factoryId
                 },
                 // Debit WIP (transfer to work in progress)
                 {
@@ -1397,7 +1404,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     fcyAmount: openingWithFactory.totalValue,
                     debit: openingWithFactory.totalValue,
                     credit: 0,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                    factoryId: openingWithFactory.factoryId
                 }
             ];
             postTransaction(entries);
@@ -1537,7 +1545,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         fcyAmount: totalConsumedValue,
                         debit: 0,
                         credit: totalConsumedValue,
-                        narration: `Re-baling: Consumed ${consumedItems.map(p => `${Math.abs(p.qtyProduced)} ${p.itemName}`).join(', ')}`
+                        narration: `Re-baling: Consumed ${consumedItems.map(p => `${Math.abs(p.qtyProduced)} ${p.itemName}`).join(', ')}`,
+                        factoryId: productionsWithFactory[0].factoryId
                     });
                 }
                 
@@ -1554,7 +1563,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         fcyAmount: totalProducedValue,
                         debit: totalProducedValue,
                         credit: 0,
-                        narration: `Re-baling: Produced ${producedItems.map(p => `${p.qtyProduced} ${p.itemName}`).join(', ')}`
+                        narration: `Re-baling: Produced ${producedItems.map(p => `${p.qtyProduced} ${p.itemName}`).join(', ')}`,
+                        factoryId: productionsWithFactory[0].factoryId
                     });
                 }
                 
@@ -1571,7 +1581,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         fcyAmount: Math.abs(rebalingGainLoss),
                         debit: rebalingGainLoss < 0 ? Math.abs(rebalingGainLoss) : 0,
                         credit: rebalingGainLoss > 0 ? rebalingGainLoss : 0,
-                        narration: `Re-baling ${rebalingGainLoss > 0 ? 'Gain' : 'Loss'}`
+                        narration: `Re-baling ${rebalingGainLoss > 0 ? 'Gain' : 'Loss'}`,
+                        factoryId: productionsWithFactory[0].factoryId
                     });
                 }
                 
@@ -1618,7 +1629,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             fcyAmount: Math.abs(finishedGoodsValue),
                             debit: finishedGoodsValue >= 0 ? finishedGoodsValue : 0,
                             credit: finishedGoodsValue < 0 ? Math.abs(finishedGoodsValue) : 0,
-                            narration: `Production: ${prod.itemName} (${prod.qtyProduced} units, ${totalKg}kg)`
+                            narration: `Production: ${prod.itemName} (${prod.qtyProduced} units, ${totalKg}kg)`,
+                            factoryId: prod.factoryId
                         },
                         // Credit WIP (reduce work in progress)
                         {
@@ -1632,7 +1644,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             fcyAmount: wipValueConsumed,
                             debit: 0,
                             credit: wipValueConsumed,
-                            narration: `Production: ${prod.itemName} (${totalKg}kg raw material consumed)`
+                            narration: `Production: ${prod.itemName} (${totalKg}kg raw material consumed)`,
+                            factoryId: prod.factoryId
                         }
                     ];
                     
@@ -1649,7 +1662,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             fcyAmount: Math.abs(productionGain),
                             debit: productionGain < 0 ? Math.abs(productionGain) : 0,
                             credit: productionGain > 0 ? productionGain : 0,
-                            narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`
+                            narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`,
+                            factoryId: prod.factoryId
                         });
                     }
                     
@@ -1748,11 +1762,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         stagedItems.forEach(itemData => {
             const item = state.items.find(i => i.id === itemData.itemId); if (!item) return;
             const totalKg = itemData.qty * item.weightPerUnit; const value = totalKg * item.avgCost;
-            productionEntries.push({ id: `NEG-PROD-${item.id}-${transactionId}`, date: itemData.date, itemId: item.id, itemName: item.name, packingType: item.packingType, qtyProduced: -itemData.qty, weightProduced: -totalKg });
+            productionEntries.push({ id: `NEG-PROD-${item.id}-${transactionId}`, date: itemData.date, itemId: item.id, itemName: item.name, packingType: item.packingType, qtyProduced: -itemData.qty, weightProduced: -totalKg, factoryId: currentFactory?.id || '' });
             const dummyOpening: OriginalOpening = { id: `OO-INT-${item.id}-${transactionId}`, date: itemData.date, supplierId: 'SUP-INTERNAL-STOCK', originalType: `FROM-${item.name}`, qtyOpened: itemData.qty, weightOpened: totalKg, costPerKg: item.avgCost, totalValue: value };
             dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: dummyOpening });
-            journalEntries.push({ date: itemData.date, transactionId: `JV-BO-${transactionId}`, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: value, debit: value, credit: 0, narration: `Bale Opening: ${item.name} (${itemData.qty} Units)` });
-            journalEntries.push({ date: itemData.date, transactionId: `JV-BO-${transactionId}`, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: fgInvId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: value, debit: 0, credit: value, narration: `Bale Opening: ${item.name} (${itemData.qty} Units)` });
+            journalEntries.push({ date: itemData.date, transactionId: `JV-BO-${transactionId}`, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: expenseId, accountName: 'Raw Material Consumption Expense', currency: 'USD', exchangeRate: 1, fcyAmount: value, debit: value, credit: 0, narration: `Bale Opening: ${item.name} (${itemData.qty} Units)`, factoryId: currentFactory?.id || '' });
+            journalEntries.push({ date: itemData.date, transactionId: `JV-BO-${transactionId}`, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: fgInvId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: value, debit: 0, credit: value, narration: `Bale Opening: ${item.name} (${itemData.qty} Units)`, factoryId: currentFactory?.id || '' });
         });
         dispatch({ type: 'ADD_PRODUCTION', payload: productionEntries }); postTransaction(journalEntries);
     };
@@ -1835,11 +1849,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const customerCurrency = (invoice as any).customerCurrency || invoice.currency || 'USD';
         const customerRate = (invoice as any).customerExchangeRate || invoice.exchangeRate || 1;
         const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency using invoice's saved rate
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}` } ];
+        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}`, factoryId: invoice.factoryId } ];
         const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => sum + item.total, 0);
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}` });
-        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}` }); }
-        if (invoice.discount > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}` }); }
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
+        if (invoice.discount > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory
         const totalCOGS = invoice.items.reduce((sum, item) => {
@@ -1852,16 +1866,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (totalCOGS > 0) {
             // Debit COGS (Expense increases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'Cost of Goods Sold', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}` });
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'Cost of Goods Sold', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
             // Credit Finished Goods Inventory (Asset decreases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}` });
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
         }
         
         invoice.additionalCosts.forEach(cost => { 
             const amountUSD = cost.amount / cost.exchangeRate; 
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
             // Credit the PROVIDER's account directly
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}` }); 
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); 
         });
         postTransaction(entries);
     };
@@ -1893,13 +1907,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const customerRate = (invoice as any).customerExchangeRate || 1;
         const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}` },
-            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}` }
+            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}`, factoryId: invoice.factoryId },
+            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }
         ];
         const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0);
         const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)` });
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}` });
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)`, factoryId: invoice.factoryId });
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
         postTransaction(entries);
     };
     const addOngoingOrder = (order: OngoingOrder) => {
@@ -1932,7 +1946,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         shipmentItems.forEach(ship => { if (ship.shipQty <= 0) return; const itemDef = state.items.find(i => i.id === ship.itemId); if (!itemDef) return; const unitRate = itemDef.salePrice || 0; invoiceItems.push({ id: generateId(), itemId: ship.itemId, itemName: itemDef.name, qty: ship.shipQty, rate: unitRate, total: ship.shipQty * unitRate, totalKg: ship.shipQty * itemDef.weightPerUnit, currency: currency, exchangeRate: rate, sourceOrderId: order.id }); });
         if (invoiceItems.length === 0) return;
         const maxInv = state.salesInvoices.map(i => parseInt(i.invoiceNo.replace('SINV-', ''))).filter(n => !isNaN(n)).reduce((max, curr) => curr > max ? curr : max, 1000); const nextInvNo = `SINV-${maxInv + 1}`; const grossTotal = invoiceItems.reduce((sum, i) => sum + i.total, 0);
-        const newInvoice: SalesInvoice = { id: generateId(), invoiceNo: nextInvNo, date: new Date().toISOString().split('T')[0], status: 'Unposted', customerId: order.customerId, logoId: state.logos[0]?.id || '', currency: 'USD', exchangeRate: 1, customerCurrency: currency, customerExchangeRate: rate, divisionId: customer?.divisionId, subDivisionId: customer?.subDivisionId, discount: 0, surcharge: 0, items: invoiceItems, additionalCosts: [], grossTotal: grossTotal, netTotal: grossTotal };
+        const newInvoice: SalesInvoice = { id: generateId(), invoiceNo: nextInvNo, date: new Date().toISOString().split('T')[0], status: 'Unposted', customerId: order.customerId, logoId: state.logos[0]?.id || '', currency: 'USD', exchangeRate: 1, customerCurrency: currency, customerExchangeRate: rate, divisionId: customer?.divisionId, subDivisionId: customer?.subDivisionId, discount: 0, surcharge: 0, items: invoiceItems, additionalCosts: [], grossTotal: grossTotal, netTotal: grossTotal, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_SALES_INVOICE', payload: newInvoice });
     };
     const addEmployee = (employee: Employee) => {
@@ -1972,13 +1986,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const processPayroll = (payment: SalaryPayment, sourceAccountId: string) => {
         dispatch({ type: 'PROCESS_PAYROLL', payload: payment });
         const salaryExpenseId = state.accounts.find(a => a.name.includes('Salaries'))?.id || '504';
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: payment.paymentDate, transactionId: payment.voucherId, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: salaryExpenseId, accountName: 'Salaries & Wages', currency: 'USD', exchangeRate: 1, fcyAmount: payment.netPaid, debit: payment.netPaid, credit: 0, narration: `Payroll ${payment.monthYear}: ${state.employees.find(e => e.id === payment.employeeId)?.name}` }, { date: payment.paymentDate, transactionId: payment.voucherId, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceAccountId, accountName: 'Cash/Bank', currency: 'USD', exchangeRate: 1, fcyAmount: payment.netPaid, debit: 0, credit: payment.netPaid, narration: `Payroll ${payment.monthYear}: ${state.employees.find(e => e.id === payment.employeeId)?.name}` } ]; postTransaction(entries);
+        const entries: Omit<LedgerEntry, 'id'>[] = [
+            { date: payment.paymentDate, transactionId: payment.voucherId, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: salaryExpenseId, accountName: 'Salaries & Wages', currency: 'USD', exchangeRate: 1, fcyAmount: payment.netPaid, debit: payment.netPaid, credit: 0, narration: `Payroll ${payment.monthYear}: ${state.employees.find(e => e.id === payment.employeeId)?.name}`, factoryId: payment.factoryId },
+            { date: payment.paymentDate, transactionId: payment.voucherId, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceAccountId, accountName: 'Cash/Bank', currency: 'USD', exchangeRate: 1, fcyAmount: payment.netPaid, debit: 0, credit: payment.netPaid, narration: `Payroll ${payment.monthYear}: ${state.employees.find(e => e.id === payment.employeeId)?.name}`, factoryId: payment.factoryId }
+        ];
+        postTransaction(entries);
     };
     const addVehicleFine = (vehicleId: string, type: string, amount: number, employeeId: string) => {
         const vehicle = state.vehicles.find(v => v.id === vehicleId); const employee = state.employees.find(e => e.id === employeeId); if (!vehicle || !employee) return;
         const charge: VehicleCharge = { id: generateId(), vehicleId, employeeId, date: new Date().toISOString().split('T')[0], type, amount, journalEntryId: `JV-VF-${generateId()}` }; dispatch({ type: 'ADD_VEHICLE_CHARGE', payload: charge });
         const salaryExpenseId = state.accounts.find(a => a.name.includes('Vehicle Expenses'))?.id || '505'; const otherIncomeId = '401'; 
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: charge.date, transactionId: charge.journalEntryId, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: salaryExpenseId, accountName: 'Vehicle Expenses', currency: 'USD', exchangeRate: 1, fcyAmount: amount, debit: amount, credit: 0, narration: `Fine: ${type} - ${vehicle.plateNumber}` }, { date: charge.date, transactionId: charge.journalEntryId, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: otherIncomeId, accountName: 'Other Income / Recoverable', currency: 'USD', exchangeRate: 1, fcyAmount: amount, debit: 0, credit: amount, narration: `Fine Recovery from ${employee.name}` } ]; postTransaction(entries);
+        const entries: Omit<LedgerEntry, 'id'>[] = [
+            { date: charge.date, transactionId: charge.journalEntryId, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: salaryExpenseId, accountName: 'Vehicle Expenses', currency: 'USD', exchangeRate: 1, fcyAmount: amount, debit: amount, credit: 0, narration: `Fine: ${type} - ${vehicle.plateNumber}`, factoryId: currentFactory?.id || '' },
+            { date: charge.date, transactionId: charge.journalEntryId, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: otherIncomeId, accountName: 'Other Income / Recoverable', currency: 'USD', exchangeRate: 1, fcyAmount: amount, debit: 0, credit: amount, narration: `Fine Recovery from ${employee.name}`, factoryId: currentFactory?.id || '' }
+        ];
+        postTransaction(entries);
     };
     const sendMessage = (msg: ChatMessage) => dispatch({ type: 'SEND_MESSAGE', payload: msg });
     const markChatRead = (chatId: string) => dispatch({ type: 'MARK_CHAT_READ', payload: { chatId, userId: CURRENT_USER.id } });

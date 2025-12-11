@@ -270,6 +270,7 @@ export interface SalaryPayment {
     netPaid: number;
     paymentMethod: 'Cash' | 'Bank';
     voucherId: string; // Link to PV
+    factoryId: string; // Factory assignment
 }
 
 export interface Task {
@@ -358,13 +359,11 @@ export interface BundlePurchase {
     containerNumber?: string;
     divisionId?: string;
     subDivisionId?: string;
-    
+    factoryId: string; // Factory assignment
     currency: Currency;
     exchangeRate: number;
-    
     items: BundlePurchaseItem[];
     additionalCosts: PurchaseAdditionalCost[];
-    
     totalAmountFCY: number;
     totalAmountUSD: number;
 }

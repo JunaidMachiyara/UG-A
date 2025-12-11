@@ -142,38 +142,34 @@ const REPORT_STRUCTURE: ReportNode[] = [
 
 const BalanceSheet: React.FC = () => {
     const { state } = useData();
-    
     const assets = state.accounts.filter(a => a.type === AccountType.ASSET);
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
-    
-    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
+
+    // Split customer balances
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
     const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+    const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
+    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + c.balance, 0);
 
-    // Add generic AR account balance
-    // Use getAccountId utility to get Firestore ID for AR account
-    // If you use a different code for AR, update 'AR-001' below
-    const getAccountId = require('../services/accountMap').getAccountId;
-    const arAccountId = getAccountId('AR-001');
-    const arAccount = state.accounts.find(a => a.id === arAccountId);
-    const genericARBalance = arAccount ? arAccount.balance : 0;
-
-    // Add supplier/vendor balances (Accounts Payable) - grouped as "Creditors"
-    const suppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
-    const totalSuppliersAP = suppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
-
-    console.log('Balance Sheet - Suppliers with negative balance:', suppliers.length, suppliers);
+    // Split supplier/vendor/agent balances
+    const supplierTypes = [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT];
+    const positiveSupplierBalances = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance > 0);
+    const totalAdvancesToSuppliers = positiveSupplierBalances.reduce((sum, s) => sum + s.balance, 0);
+    const negativeSupplierBalances = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance < 0);
+    const totalCreditors = negativeSupplierBalances.reduce((sum, s) => sum + s.balance, 0);
 
     // Net Income Calculation for Equity Section
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const netIncome = revenue - expenses;
 
-    // Show both generic AR and sum of customer balances in total assets
-    const totalAssets = assets.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR + genericARBalance;
-    const totalLiabilities = liabilities.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0) + totalSuppliersAP;
-    const totalEquity = equity.filter(a => a && a.balance !== undefined).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0) + netIncome;
+    // Total assets: sum of asset accounts + positive customer balance + positive supplier/agent advances
+    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalAdvancesToSuppliers;
+    // Total liabilities: liabilities + true sign for supplier/agent balances (Creditors) + negative customer balances (advances)
+    const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0) + totalCreditors + totalCustomerAdvances;
+    // Show true sign for equity
+    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -190,14 +186,14 @@ const BalanceSheet: React.FC = () => {
                         ))}
                         {totalCustomersAR > 0 && (
                             <div className="flex justify-between text-sm">
-                                <span className="text-slate-600 font-medium">Debtors (Sum of Customer Balances)</span>
+                                <span className="text-slate-600 font-medium">Debtors (Accounts Receivable)</span>
                                 <span className="font-mono font-medium">{totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         )}
-                        {genericARBalance !== 0 && (
+                        {totalAdvancesToSuppliers > 0 && (
                             <div className="flex justify-between text-sm">
-                                <span className="text-slate-600 font-medium">Accounts Receivable (Generic AR Account)</span>
-                                <span className="font-mono font-medium">{genericARBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className="text-slate-600 font-medium">Advances to Suppliers</span>
+                                <span className="font-mono font-medium">{totalAdvancesToSuppliers.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         )}
                     </div>
@@ -217,13 +213,19 @@ const BalanceSheet: React.FC = () => {
                                 {liabilities.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
-                                {totalSuppliersAP > 0 && (
+                                {totalCreditors > 0 && (
                                     <div className="flex justify-between text-sm">
                                         <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
-                                        <span className="font-mono font-medium">{totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className="font-mono font-medium">{totalCreditors.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
+                                {totalCustomerAdvances > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600 font-medium">Customer Advances (Credit Balances)</span>
+                                        <span className="font-mono font-medium text-blue-700">{totalCustomerAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 )}
                             </div>
