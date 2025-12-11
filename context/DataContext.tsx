@@ -1175,25 +1175,84 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .then((docRef) => {
                 console.log('✅ Partner saved to Firebase:', docRef.id);
                 // Firebase listener will handle adding to local state
+
+                // Handle opening balance if needed
+                if (partner.balance !== 0) {
+                    const prevYear = new Date().getFullYear() - 1;
+                    const date = `${prevYear}-12-31`;
+                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                    const apId = state.accounts.find(a => a.name.includes('Payable'))?.id || '201';
+                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                    const currency = partner.defaultCurrency || 'USD';
+                    const exchangeRates = getExchangeRates(state.currencies);
+                    const rate = exchangeRates[currency] || 1;
+                    const fcyAmt = partner.balance * rate;
+                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+                    if (partner.type === 'CUSTOMER') {
+                        // Debit the individual customer's account (not generic AR)
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: docRef.id,
+                                accountName: partner.name,
+                                debit: partner.balance,
+                                credit: 0,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: 0,
+                                credit: partner.balance,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
+                        // Suppliers, Vendors, etc. (credit balance)
+                        const absBalance = Math.abs(partner.balance);
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: docRef.id,
+                                accountName: partner.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    }
+                    postTransaction(entries);
+                }
             })
             .catch((error) => {
                 console.error('❌ Error saving partner to Firebase:', error);
                 alert('Failed to save partner: ' + error.message);
             });
-
-        // Handle opening balance if needed
-        if (partner.balance !== 0) {
-            const prevYear = new Date().getFullYear() - 1; const date = `${prevYear}-12-31`; const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301'; const arId = state.accounts.find(a => a.name.includes('Receivable'))?.id || '103'; const apId = state.accounts.find(a => a.name.includes('Payable'))?.id || '201';
-            let entries: Omit<LedgerEntry, 'id'>[] = []; 
-            const currency = partner.defaultCurrency || 'USD'; 
-            const exchangeRates = getExchangeRates(state.currencies);
-            const rate = exchangeRates[currency] || 1; 
-            const fcyAmt = partner.balance * rate; 
-            const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
-            if (partner.balance > 0) { entries = [ { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: arId, accountName: 'Accounts Receivable', debit: partner.balance, credit: 0, narration: `Opening Balance - ${partner.name}` }, { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: openingEquityId, accountName: 'Opening Equity', debit: 0, credit: partner.balance, narration: `Opening Balance - ${partner.name}` } ]; } 
-            else { const absBalance = Math.abs(partner.balance); entries = [ { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: openingEquityId, accountName: 'Opening Equity', debit: absBalance, credit: 0, narration: `Opening Balance - ${partner.name}` }, { ...commonProps, date, transactionId: `OB-${partner.id}`, transactionType: TransactionType.OPENING_BALANCE, accountId: apId, accountName: 'Accounts Payable', debit: 0, credit: absBalance, narration: `Opening Balance - ${partner.name}` } ]; }
-            postTransaction(entries);
-        }
     };
     const addItem = (item: Item, openingStock: number = 0) => {
                 // Post ledger entries for opening stock if present
