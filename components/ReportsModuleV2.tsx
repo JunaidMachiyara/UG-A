@@ -492,7 +492,11 @@ const BalanceSheet: React.FC = () => {
     // Add customer balances (Accounts Receivable) - grouped as "Debtors"
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
     const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
-    
+
+    // Add negative customer balances (Customer Advances) - grouped as liability
+    const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
+    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
+
     // Add supplier/vendor balances (Accounts Payable) - grouped as "Creditors"
     const suppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
     const totalSuppliersAP = suppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
@@ -502,7 +506,7 @@ const BalanceSheet: React.FC = () => {
     const netIncome = revenue - expenses;
 
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR;
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP;
+    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP + totalCustomerAdvances;
     const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
 
     return (
@@ -546,6 +550,12 @@ const BalanceSheet: React.FC = () => {
                                     <div className="flex justify-between text-sm">
                                         <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
                                         <span className="font-mono font-medium">{totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
+                                {totalCustomerAdvances > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600 font-medium">Customer Advances (Credit Balances)</span>
+                                        <span className="font-mono font-medium text-blue-700">{totalCustomerAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 )}
                             </div>
