@@ -497,15 +497,17 @@ const BalanceSheet: React.FC = () => {
     const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
     const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
 
-    // Add supplier/vendor balances (Accounts Payable) - grouped as "Creditors"
-    const suppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
-    const totalSuppliersAP = suppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+    // Split supplier/vendor balances
+    const positiveSuppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance > 0);
+    const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + s.balance, 0);
+    const negativeSuppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
+    const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
     
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
     const netIncome = revenue - expenses;
 
-    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR;
+    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalSupplierAdvances;
     const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP + totalCustomerAdvances;
     const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
 
@@ -525,6 +527,12 @@ const BalanceSheet: React.FC = () => {
                             <div className="flex justify-between text-sm">
                                 <span className="text-slate-600 font-medium">Debtors (Accounts Receivable)</span>
                                 <span className="font-mono font-medium">{totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            </div>
+                        )}
+                        {totalSupplierAdvances > 0 && (
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-600 font-medium">Advances to Suppliers</span>
+                                <span className="font-mono font-medium">{totalSupplierAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         )}
                     </div>
