@@ -157,7 +157,7 @@ export const Accounting: React.FC = () => {
     };
 
     // --- Actions ---
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!date) return alert("Date is required");
         if (vType !== 'JV' && vType !== 'TR' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
@@ -264,7 +264,7 @@ export const Accounting: React.FC = () => {
             entries = jvRows.map(row => ({ date, transactionId: voucherNo, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: row.accountId, accountName: 'Journal Entry', currency: row.currency, exchangeRate: row.exchangeRate, fcyAmount: row.debit > 0 ? row.debit : row.credit, debit: row.debit / row.exchangeRate, credit: row.credit / row.exchangeRate, narration: row.desc || description || 'Manual Journal' }));
         }
 
-        postTransaction(entries);
+        await postTransaction(entries);
         alert(`${voucherNo} Posted Successfully!`);
         
         // Reset for next entry

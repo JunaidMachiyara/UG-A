@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { getExchangeRates } from '../context/DataContext';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
 import Papa from 'papaparse';
 import { collection, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { TransactionType, LedgerEntry } from '../types';
 
 type ImportableEntity = 
     | 'items' 
@@ -83,7 +85,8 @@ export const DataImportExport: React.FC = () => {
         addOriginalType,
         addOriginalProduct,
         addCategory,
-        addSection
+        addSection,
+        postTransaction
     } = useData();
     const { currentFactory } = useAuth();
     const [selectedEntity, setSelectedEntity] = useState<ImportableEntity>('items');
@@ -196,7 +199,355 @@ export const DataImportExport: React.FC = () => {
                         for (const item of batchItems) {
                             // Use addItem with skipFirebase=true to update local state and handle opening stock
                             // Firebase already saved via batch, so skip duplicate save
-                            addItem(item, item.openingStock, true);
+                            await addItem(item, item.openingStock, true);
+                        }
+                        
+                        successCount += batchItems.length;
+                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validItems.length / BATCH_SIZE)} saved: ${batchItems.length} items to Firebase`);
+                        
+                        // Small delay between batches to avoid rate limiting
+                        if (i + BATCH_SIZE < validItems.length) {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                    } catch (batchError: any) {
+                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchItems.length + 1}) failed: ${batchError.message}`);
+                    }
+                }
+            }
+            
+            // Special handling for large partner imports - use batch writes
+            if (selectedEntity === 'partners' && parsedData.length > 50) {
+                // Batch import for large partner lists (210+ partners)
+                const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
+                const validPartners: any[] = [];
+                
+                // Validate and prepare all partners first
+                for (let index = 0; index < parsedData.length; index++) {
+                    const row = parsedData[index];
+                    if (!row.name) {
+                        errors.push(`Row ${index + 2}: Missing required field 'name'`);
+                        continue;
+                    }
+                    
+                    if (!row.type) {
+                        errors.push(`Row ${index + 2}: Partner missing required field 'type'`);
+                        continue;
+                    }
+                    
+                    // Check for duplicate by name and type (if ID not provided)
+                    if (!row.id || row.id.trim() === '') {
+                        const existingPartner = state.partners.find((p: any) => 
+                            p.name.toLowerCase().trim() === row.name.toLowerCase().trim() && 
+                            p.type === row.type
+                        );
+                        if (existingPartner) {
+                            errors.push(`Row ${index + 2}: Partner "${row.name}" (${row.type}) already exists with ID "${existingPartner.id}". Please include the ID in CSV to update, or delete existing partner first.`);
+                            continue;
+                        }
+                    }
+                    
+                    // Support both defaultCur and defaultCurrency column names
+                    const defaultCurrency = row.defaultCurrency || row.defaultCur || 'USD';
+                    
+                    // Auto-generate ID if not provided
+                    let partnerId = row.id;
+                    if (!partnerId || partnerId.trim() === '') {
+                        // Get prefix based on partner type
+                        let prefix = 'PTN'; // Default prefix
+                        switch(row.type) {
+                            case 'SUPPLIER': prefix = 'SUP'; break;
+                            case 'CUSTOMER': prefix = 'CUS'; break;
+                            case 'SUB SUPPLIER': prefix = 'SUB'; break;
+                            case 'VENDOR': prefix = 'VEN'; break;
+                            case 'CLEARING AGENT': prefix = 'CLA'; break;
+                            case 'FREIGHT_FORWARDER':
+                            case 'FREIGHT FORWARDER': prefix = 'FFW'; break;
+                            case 'COMMISSION AGENT': prefix = 'COM'; break;
+                        }
+                        
+                        // Find existing partners of same type to get next number
+                        const sameTypePartners = state.partners.filter((p: any) => p.type === row.type);
+                        const existingIds = sameTypePartners
+                            .map((p: any) => {
+                                // Extract number from IDs like SUP-1001, CUS-1002, etc.
+                                const match = p.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                                return match ? parseInt(match[1]) : 0;
+                            })
+                            .filter(n => n > 0)
+                            .sort((a, b) => b - a);
+                        
+                        // Also check already processed rows in this import
+                        const processedIds = parsedData.slice(0, index)
+                            .filter((r: any) => r.type === row.type && r.id)
+                            .map((r: any) => {
+                                const match = r.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                                return match ? parseInt(match[1]) : 0;
+                            })
+                            .filter(n => n > 0);
+                        
+                        const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                        const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                        partnerId = `${prefix}-${nextNumber}`;
+                    }
+                    
+                    // Parse balance from CSV (can be positive or negative)
+                    const balance = row.balance ? parseFloat(row.balance) : 0;
+                    
+                    const partner = {
+                        id: partnerId,
+                        name: row.name,
+                        type: row.type,
+                        balance: balance, // Will be set to 0 when saving, balance handled via ledger
+                        defaultCurrency: defaultCurrency,
+                        contact: row.contact || '',
+                        country: row.country || '',
+                        phone: row.phone || '',
+                        email: row.email || '',
+                        divisionId: row.divisionId || undefined,
+                        subDivisionId: row.subDivisionId || undefined,
+                        creditLimit: row.creditLimit ? parseFloat(row.creditLimit) : undefined,
+                        taxId: row.taxId || undefined,
+                        commissionRate: row.commissionRate ? parseFloat(row.commissionRate) : undefined,
+                        parentSupplier: row.parentSupplier || undefined,
+                        licenseNumber: row.licenseNumber || undefined,
+                        scacCode: row.scacCode || undefined,
+                        factoryId: currentFactory?.id || '',
+                        openingBalance: balance // Store original balance for ledger entry creation
+                    };
+                    validPartners.push(partner);
+                }
+                
+                // Process in batches with delays to avoid rate limiting
+                for (let i = 0; i < validPartners.length; i += BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchPartners = validPartners.slice(i, i + BATCH_SIZE);
+                    
+                    for (const partner of batchPartners) {
+                        // Prepare for batch write - use partner's ID as document ID
+                        const { id, openingBalance, ...partnerData } = partner;
+                        const partnerRef = doc(db, 'partners', id);
+                        
+                        // Save with balance = 0, opening balance will be handled via ledger
+                        const partnerDataForSave = {
+                            ...partnerData,
+                            balance: 0, // Save with 0, balance comes from ledger
+                            createdAt: serverTimestamp(),
+                            updatedAt: serverTimestamp()
+                        };
+                        
+                        // Remove undefined values
+                        Object.keys(partnerDataForSave).forEach(key => {
+                            if ((partnerDataForSave as any)[key] === undefined) {
+                                (partnerDataForSave as any)[key] = null;
+                            }
+                        });
+                        
+                        batch.set(partnerRef, partnerDataForSave);
+                    }
+                    
+                    // Commit batch with error handling
+                    try {
+                        await batch.commit();
+                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPartners.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
+                        
+                        // After successful batch commit, handle opening balance ledger entries
+                        // Note: Firebase listener will automatically add partners to local state
+                        // Process opening balances with a small delay to avoid rate limiting
+                        let balanceEntriesCreated = 0;
+                        for (let pIdx = 0; pIdx < batchPartners.length; pIdx++) {
+                            const partner = batchPartners[pIdx];
+                            // Handle opening balance if needed (similar to addPartner logic)
+                            if (partner.openingBalance !== 0) {
+                                try {
+                                    const prevYear = new Date().getFullYear() - 1;
+                                    const date = `${prevYear}-12-31`;
+                                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                                    const currency = partner.defaultCurrency || 'USD';
+                                    const exchangeRates = getExchangeRates(state.currencies);
+                                    const rate = exchangeRates[currency] || 1;
+                                    const fcyAmt = partner.openingBalance * rate;
+                                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+                                    
+                                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                                    if (partner.type === 'CUSTOMER') {
+                                        entries = [
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${partner.id}`,
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: partner.id,
+                                                accountName: partner.name,
+                                                debit: partner.openingBalance,
+                                                credit: 0,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            },
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${partner.id}`,
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: openingEquityId,
+                                                accountName: 'Opening Equity',
+                                                debit: 0,
+                                                credit: partner.openingBalance,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            }
+                                        ];
+                                    } else {
+                                        // Suppliers, Vendors, etc.
+                                        const absBalance = Math.abs(partner.openingBalance);
+                                        if (partner.openingBalance < 0) {
+                                            // Negative: Accounts Payable
+                                            entries = [
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: 'Opening Equity',
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: partner.id,
+                                                    accountName: partner.name,
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        } else {
+                                            // Positive: Advance to Supplier
+                                            entries = [
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: 'Opening Equity',
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: partner.id,
+                                                    accountName: partner.name,
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        }
+                                    }
+                                    await postTransaction(entries);
+                                    balanceEntriesCreated++;
+                                    
+                                    // Small delay every 10 partners to avoid Firebase rate limiting
+                                    if ((pIdx + 1) % 10 === 0) {
+                                        await new Promise(resolve => setTimeout(resolve, 200));
+                                    }
+                                } catch (error: any) {
+                                    console.error(`❌ Error creating opening balance for ${partner.name}:`, error);
+                                    errors.push(`Failed to create opening balance for ${partner.name}: ${error.message}`);
+                                }
+                            }
+                        }
+                        
+                        if (balanceEntriesCreated > 0) {
+                            console.log(`✅ Created ${balanceEntriesCreated} opening balance entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+                        }
+                        
+                        successCount += batchPartners.length;
+                        
+                        // Small delay between batches to avoid rate limiting
+                        if (i + BATCH_SIZE < validPartners.length) {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                    } catch (batchError: any) {
+                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchPartners.length + 1}) failed: ${batchError.message}`);
+                    }
+                }
+            }
+            
+            if ((selectedEntity !== 'items' && selectedEntity !== 'partners') || 
+                (selectedEntity === 'items' && parsedData.length <= 100) ||
+                (selectedEntity === 'partners' && parsedData.length <= 50)) {
+                const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
+                const validItems: any[] = [];
+                
+                // Validate and prepare all items first
+                for (let index = 0; index < parsedData.length; index++) {
+                    const row = parsedData[index];
+                    if (!row.name) {
+                        errors.push(`Row ${index + 2}: Missing required field 'name'`);
+                        continue;
+                    }
+                    
+                    const openingStock = parseFloat(row.openingStock) || 0;
+                    const item = {
+                        id: row.id || `ITEM-${Date.now()}-${index}`,
+                        code: row.code || row.id || `ITEM-${Date.now()}-${index}`,
+                        name: row.name,
+                        category: row.category || '',
+                        section: row.section || '',
+                        packingType: row.packingType || 'Kg',
+                        weightPerUnit: parseFloat(row.weightPerUnit) || 0,
+                        avgCost: parseFloat(row.avgCost) || 0,
+                        salePrice: parseFloat(row.salePrice) || 0,
+                        stockQty: parseFloat(row.stockQty) || 0,
+                        openingStock: openingStock,
+                        nextSerial: openingStock + 1,
+                        factoryId: currentFactory?.id || ''
+                    };
+                    validItems.push(item);
+                }
+                
+                // Process in batches with delays to avoid rate limiting
+                for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchItems = validItems.slice(i, i + BATCH_SIZE);
+                    
+                    for (const item of batchItems) {
+                        // Prepare for batch write - use item's ID as document ID if provided
+                        const { id, ...itemData } = item;
+                        const itemRef = id 
+                            ? doc(db, 'items', id)  // Use item's ID as document ID
+                            : doc(collection(db, 'items'));  // Auto-generate if no ID
+                        batch.set(itemRef, {
+                            ...itemData,
+                            createdAt: serverTimestamp()
+                        });
+                    }
+                    
+                    // Commit batch with error handling
+                    try {
+                        await batch.commit();
+                        
+                        // After successful batch commit, add to local state and handle opening stock ledger entries
+                        for (const item of batchItems) {
+                            // Use addItem with skipFirebase=true to update local state and handle opening stock
+                            // Firebase already saved via batch, so skip duplicate save
+                            await addItem(item, item.openingStock, true);
                         }
                         
                         successCount += batchItems.length;
@@ -250,7 +601,7 @@ export const DataImportExport: React.FC = () => {
                                     openingStock: openingStock,
                                     nextSerial: 1
                                 };
-                                addItem(item, openingStock);
+                                await addItem(item, openingStock);
                                 successCount++;
                                 break;
                             }
@@ -302,14 +653,23 @@ export const DataImportExport: React.FC = () => {
                                 }
                                 
                                 // Parse balance from CSV (can be positive or negative)
-                                const balance = row.balance ? parseFloat(row.balance) : 0;
+                                // Support case-insensitive column names
+                                const balanceStr = row.balance || row.Balance || row.BAL || '0';
+                                const balance = balanceStr ? parseFloat(balanceStr.toString()) : 0;
+                                if (isNaN(balance)) {
+                                    errors.push(`Row ${index + 2}: Invalid balance value "${balanceStr}"`);
+                                    continue;
+                                }
+                                
+                                // Support both defaultCur and defaultCurrency column names (case-insensitive)
+                                const defaultCurrency = (row.defaultCurrency || row.defaultCur || row.DefaultCurrency || row.DefaultCur || 'USD').trim();
                                 
                                 const partner = {
                                     id: partnerId,
                                     name: row.name,
                                     type: row.type,
                                     balance: balance, // Set balance from CSV - addPartner will handle opening balance entries
-                                    defaultCurrency: row.defaultCurrency || 'USD',
+                                    defaultCurrency: defaultCurrency,
                                     contact: row.contact || '',
                                     country: row.country || '',
                                     phone: row.phone || '',
@@ -323,7 +683,7 @@ export const DataImportExport: React.FC = () => {
                                     licenseNumber: row.licenseNumber || undefined,
                                     scacCode: row.scacCode || undefined
                                 };
-                                addPartner(partner);
+                                await addPartner(partner);
                                 successCount++;
                                 break;
                             }

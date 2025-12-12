@@ -1,16 +1,18 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { UserRole } from '../types';
+import { UserRole, TransactionType, LedgerEntry, PartnerType } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { getExchangeRates } from '../context/DataContext';
+import Papa from 'papaparse';
 
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state } = useData();
+    const { state, postTransaction } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -19,9 +21,14 @@ export const AdminModule: React.FC = () => {
     const [pinCode, setPinCode] = useState('');
     const [resetting, setResetting] = useState(false);
     const [resetResult, setResetResult] = useState<{ success: boolean; message: string } | null>(null);
+    const [fixingBalances, setFixingBalances] = useState(false);
+    const [balanceFixResult, setBalanceFixResult] = useState<{ success: boolean; message: string; fixed: number } | null>(null);
+    const [csvFile, setCsvFile] = useState<File | null>(null);
+    const [csvData, setCsvData] = useState<any[]>([]);
 
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
+    const SUPERVISOR_PIN = '7860';
 
 
     const handleResetRequest = (type: ResetType) => {
@@ -523,6 +530,339 @@ export const AdminModule: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* Fix Missing Opening Balances Section */}
+            <div className="bg-white border-2 border-blue-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-blue-100 p-3 rounded-lg">
+                        <FileText className="text-blue-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Missing Opening Balances</h3>
+                        <p className="text-sm text-slate-600">Create missing opening balance ledger entries for partners</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    {/* Auto-detect missing opening balances */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-semibold text-blue-900">
+                                Partners Missing Opening Balance Entries:
+                            </p>
+                            <button
+                                onClick={() => {
+                                    const missing = state.partners.filter(partner => {
+                                        const hasOpeningBalance = state.ledger.some(e => 
+                                            e.transactionId === `OB-${partner.id}` && 
+                                            e.transactionType === TransactionType.OPENING_BALANCE
+                                        );
+                                        return !hasOpeningBalance;
+                                    });
+                                    
+                                    if (missing.length === 0) {
+                                        alert('✅ All partners have opening balance entries!');
+                                    } else {
+                                        // Create CSV content
+                                        const csvContent = 'id,balance\n' + missing.map(p => `${p.id},${p.balance || 0}`).join('\n');
+                                        const blob = new Blob([csvContent], { type: 'text/csv' });
+                                        const url = window.URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url;
+                                        a.download = 'missing_opening_balances.csv';
+                                        a.click();
+                                        window.URL.revokeObjectURL(url);
+                                        
+                                        alert(`Found ${missing.length} partners without opening balance entries.\n\nCSV file downloaded with their IDs and current balances.\n\nYou can edit the balances in the CSV and upload it to fix them.`);
+                                    }
+                                }}
+                                className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                            >
+                                Download Missing List as CSV
+                            </button>
+                        </div>
+                        <p className="text-xs text-blue-700">
+                            Click to download a CSV file with all partners that don't have opening balance entries. Edit the balances and upload to fix them.
+                        </p>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <p className="text-sm text-amber-800">
+                            <strong>Instructions:</strong> Upload a CSV file with columns: <code>id</code> (partner ID like CUS-001), <code>balance</code> (opening balance amount).
+                            This will create missing opening balance ledger entries for partners that don't have them.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-semibold text-slate-700 mb-2">
+                            Upload CSV with Partner IDs and Balances:
+                        </label>
+                        <input
+                            type="file"
+                            accept=".csv"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                    setCsvFile(file);
+                                    Papa.parse(file, {
+                                        header: true,
+                                        complete: (results) => {
+                                            setCsvData(results.data);
+                                        },
+                                        error: (error) => {
+                                            alert(`Error parsing CSV: ${error.message}`);
+                                        }
+                                    });
+                                }
+                            }}
+                            className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                        {csvData.length > 0 && (
+                            <p className="text-sm text-emerald-600 mt-2">
+                                ✓ Loaded {csvData.length} records from CSV
+                            </p>
+                        )}
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            if (!csvFile || csvData.length === 0) {
+                                alert('Please upload a CSV file first');
+                                return;
+                            }
+
+                            const pin = prompt('Enter Supervisor PIN (7860):');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            setFixingBalances(true);
+                            setBalanceFixResult(null);
+
+                            try {
+                                let fixed = 0;
+                                let skipped = 0;
+                                let errors: string[] = [];
+                                const totalRows = csvData.length;
+
+                                for (let idx = 0; idx < csvData.length; idx++) {
+                                    const row = csvData[idx];
+                                    
+                                    try {
+                                        const partnerId = row.id || row.ID || row.Id;
+                                        const balanceStr = row.balance || row.Balance || row.BAL || '0';
+                                        const balance = parseFloat(balanceStr.toString()) || 0;
+
+                                        if (!partnerId) {
+                                            errors.push(`Row ${idx + 2}: Missing partner ID`);
+                                            continue;
+                                        }
+
+                                        if (balance === 0) {
+                                            skipped++;
+                                            continue;
+                                        }
+
+                                        const partner = state.partners.find(p => p.id === partnerId);
+                                        if (!partner) {
+                                            errors.push(`Row ${idx + 2}: Partner ${partnerId} not found`);
+                                            continue;
+                                        }
+
+                                        // Check if already has opening balance
+                                        const hasOpeningBalance = state.ledger.some(e => 
+                                            e.transactionId === `OB-${partnerId}` && 
+                                            e.transactionType === TransactionType.OPENING_BALANCE
+                                        );
+                                        if (hasOpeningBalance) {
+                                            skipped++;
+                                            continue; // Skip if already has opening balance
+                                        }
+
+                                    // Create opening balance entries
+                                    const prevYear = new Date().getFullYear() - 1;
+                                    const date = `${prevYear}-12-31`;
+                                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                                    const currency = partner.defaultCurrency || 'USD';
+                                    const exchangeRates = getExchangeRates(state.currencies);
+                                    const rate = exchangeRates[currency] || 1;
+                                    const fcyAmt = balance * rate;
+                                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+
+                                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                                    if (partner.type === PartnerType.CUSTOMER) {
+                                        entries = [
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${partnerId}`,
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: partnerId,
+                                                accountName: partner.name,
+                                                debit: balance,
+                                                credit: 0,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            },
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${partnerId}`,
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: openingEquityId,
+                                                accountName: 'Opening Equity',
+                                                debit: 0,
+                                                credit: balance,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            }
+                                        ];
+                                    } else {
+                                        const absBalance = Math.abs(balance);
+                                        if (balance < 0) {
+                                            entries = [
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partnerId}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: 'Opening Equity',
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partnerId}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: partnerId,
+                                                    accountName: partner.name,
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        } else {
+                                            entries = [
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partnerId}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: 'Opening Equity',
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${partnerId}`,
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: partnerId,
+                                                    accountName: partner.name,
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        }
+                                    }
+
+                                        // Post the entries
+                                        postTransaction(entries);
+                                        fixed++;
+                                        console.log(`✅ Created opening balance for ${partner.name} (${partnerId}): ${balance}`);
+
+                                        // Small delay to avoid rate limiting
+                                        if (fixed % 10 === 0) {
+                                            await new Promise(resolve => setTimeout(resolve, 100));
+                                        }
+                                    } catch (error: any) {
+                                        console.error(`❌ Error processing row ${idx + 2}:`, error);
+                                        errors.push(`Row ${idx + 2}: ${error.message || 'Unknown error'}`);
+                                        // Continue with next row instead of stopping
+                                    }
+                                }
+
+                                const message = `Processed ${totalRows} rows: ${fixed} created, ${skipped} skipped (already exist or zero balance), ${errors.length} errors.`;
+                                setBalanceFixResult({
+                                    success: fixed > 0,
+                                    message: message + (errors.length > 0 ? `\n\nErrors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}` : ''),
+                                    fixed
+                                });
+
+                                // Refresh page after 3 seconds
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 3000);
+
+                            } catch (error: any) {
+                                setBalanceFixResult({
+                                    success: false,
+                                    message: `Failed: ${error.message}`,
+                                    fixed: 0
+                                });
+                            } finally {
+                                setFixingBalances(false);
+                            }
+                        }}
+                        disabled={fixingBalances || !csvFile || csvData.length === 0}
+                        className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {fixingBalances ? (
+                            <>
+                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                Creating Opening Balance Entries...
+                            </>
+                        ) : (
+                            <>
+                                <Upload size={18} />
+                                Fix Missing Opening Balances
+                            </>
+                        )}
+                    </button>
+
+                    {balanceFixResult && (
+                        <div className={`p-4 rounded-lg border-2 ${
+                            balanceFixResult.success 
+                                ? 'bg-emerald-50 border-emerald-300' 
+                                : 'bg-red-50 border-red-300'
+                        }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {balanceFixResult.success ? (
+                                    <CheckCircle className="text-emerald-600" size={20} />
+                                ) : (
+                                    <XCircle className="text-red-600" size={20} />
+                                )}
+                                <span className={`font-bold ${
+                                    balanceFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                }`}>
+                                    {balanceFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                </span>
+                            </div>
+                            <p className={`text-sm ${
+                                balanceFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                            }`}>
+                                {balanceFixResult.message}
+                            </p>
+                            {balanceFixResult.success && (
+                                <p className="text-xs text-emerald-600 mt-2">
+                                    Page will refresh automatically in 3 seconds to update balances...
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
 
             {/* Security Notice */}
             <div className="bg-slate-800 text-white rounded-lg p-6">
