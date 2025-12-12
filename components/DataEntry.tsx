@@ -242,6 +242,9 @@ export const DataEntry: React.FC = () => {
     
     // SI Additional Costs
     const [siCosts, setSiCosts] = useState<InvoiceAdditionalCost[]>([]);
+    
+    // Last Invoice for Proforma
+    const [lastInvoiceForCustomer, setLastInvoiceForCustomer] = useState<SalesInvoice | null>(null);
     const [siCostType, setSiCostType] = useState<any>('Freight');
     const [siCostProvider, setSiCostProvider] = useState('');
     const [siCostAmount, setSiCostAmount] = useState('');
@@ -381,7 +384,7 @@ export const DataEntry: React.FC = () => {
         }
     }, [bpSupplier, state.partners]);
     
-    // Auto-Update Customer Details (Sales Invoice)
+    // Auto-Update Customer Details (Sales Invoice) and Find Last Invoice
     useEffect(() => {
         if (siCustomer) {
             const p = state.partners.find(x => x.id === siCustomer);
@@ -390,8 +393,17 @@ export const DataEntry: React.FC = () => {
                 if (p.divisionId) setSiDivision(p.divisionId);
                 if (p.subDivisionId) setSiSubDivision(p.subDivisionId);
             }
+            
+            // Find the last posted invoice for this customer
+            const lastInvoice = state.salesInvoices
+                .filter(inv => inv.customerId === siCustomer && inv.status === 'Posted')
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+            
+            setLastInvoiceForCustomer(lastInvoice || null);
+        } else {
+            setLastInvoiceForCustomer(null);
         }
-    }, [siCustomer, state.partners]);
+    }, [siCustomer, state.partners, state.salesInvoices]);
 
     // Auto-Update Customer Details (Direct Sales)
     useEffect(() => {
@@ -1374,6 +1386,32 @@ export const DataEntry: React.FC = () => {
         setSiCosts([...siCosts, newCost]);
         setSiCostAmount('');
         setSiCostProvider('');
+    };
+
+    // Load Last Invoice as Proforma
+    const loadLastInvoiceAsProforma = () => {
+        if (!lastInvoiceForCustomer) return;
+        
+        // Copy all items from last invoice
+        setSiCart(lastInvoiceForCustomer.items.map(item => ({
+            ...item,
+            id: Math.random().toString(36).substr(2, 9) // Generate new IDs
+        })));
+        
+        // Copy additional costs
+        setSiCosts(lastInvoiceForCustomer.additionalCosts.map(cost => ({
+            ...cost,
+            id: Math.random().toString(36).substr(2, 9) // Generate new IDs
+        })));
+        
+        // Copy other details
+        setSiLogo(lastInvoiceForCustomer.logoId);
+        setSiColor(lastInvoiceForCustomer.packingColor || '');
+        setSiContainer(lastInvoiceForCustomer.containerNumber || '');
+        setSiDiscount(lastInvoiceForCustomer.discount.toString());
+        setSiSurcharge(lastInvoiceForCustomer.surcharge.toString());
+        
+        alert(`Loaded ${lastInvoiceForCustomer.items.length} items from last invoice (${lastInvoiceForCustomer.invoiceNo}) as proforma. You can now edit and save.`);
     };
 
     const handleFinalizeInvoice = () => {
@@ -3285,6 +3323,29 @@ export const DataEntry: React.FC = () => {
                                                     placeholder="Select Customer..." 
                                                     onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.CUSTOMER })}
                                                 />
+                                                {/* Show Last Invoice as Proforma */}
+                                                {lastInvoiceForCustomer && (
+                                                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="flex-1">
+                                                                <p className="text-xs font-semibold text-blue-700 mb-1">Last Invoice Available</p>
+                                                                <p className="text-sm text-blue-900 font-medium">{lastInvoiceForCustomer.invoiceNo}</p>
+                                                                <p className="text-xs text-blue-600">
+                                                                    {new Date(lastInvoiceForCustomer.date).toLocaleDateString()} • 
+                                                                    {lastInvoiceForCustomer.items.length} items • 
+                                                                    ${lastInvoiceForCustomer.netTotal.toLocaleString()}
+                                                                </p>
+                                                            </div>
+                                                            <button
+                                                                onClick={loadLastInvoiceAsProforma}
+                                                                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                                                                title="Load this invoice as proforma"
+                                                            >
+                                                                <FileText size={14} /> Use as Proforma
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} readOnly /></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siDate} onChange={e => setSiDate(e.target.value)} /></div>

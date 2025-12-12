@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
-import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
 import { PartnerType, AccountType, PackingType } from '../types';
 import { EXCHANGE_RATES, INITIAL_ACCOUNTS } from '../constants';
 import { EntitySelector } from './EntitySelector';
@@ -432,26 +432,6 @@ const HRModule: React.FC = () => {
     );
 };
 
-const DataImporter: React.FC = () => {
-    return (
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 mb-6 text-white shadow-lg">
-            <div className="flex items-center gap-4">
-                <div className="bg-white/20 p-3 rounded-lg">
-                    <FileSpreadsheet size={24} className="text-white" />
-                </div>
-                <div>
-                    <h3 className="font-bold text-lg">Bulk Data Import & Utilities</h3>
-                    <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import data or cleanup orphaned records.</p>
-                </div>
-                <div className="ml-auto flex gap-2">
-                    <button className="bg-white text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors">
-                        <Upload size={16} /> Upload CSV
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
 
 // --- Hook for Configurations (Exported for Reuse) ---
 export const useSetupConfigs = () => {
@@ -1372,8 +1352,6 @@ export const SetupModule: React.FC = () => {
 
     return (
         <div className="max-w-7xl mx-auto space-y-8">
-            <DataImporter />
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 lg:gap-8">
                 <div className="space-y-6">
                     <div className="flex items-center gap-2 mb-2">

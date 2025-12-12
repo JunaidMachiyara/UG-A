@@ -1357,14 +1357,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
         }
         
-        // Post ledger entries for opening stock if present
-        if (openingStock > 0 && item.avgCost > 0) {
+        // Post ledger entries for opening stock if present (handles both positive and negative costs)
+        if (openingStock > 0 && item.avgCost !== 0) {
             const prevYear = new Date().getFullYear() - 1;
             const date = `${prevYear}-12-31`;
             const stockValue = openingStock * item.avgCost;
             // Use centralized account mapping
             const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
             const capitalId = getAccountId('301'); // Capital
+            
+            // For positive stock value: Debit Inventory (asset increase), Credit Capital (equity increase)
+            // For negative stock value: Credit Inventory (asset decrease), Debit Capital (equity decrease)
             const entries = [
                 {
                     date,
@@ -1374,9 +1377,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     accountName: 'Inventory - Finished Goods',
                     currency: 'USD',
                     exchangeRate: 1,
-                    fcyAmount: stockValue,
-                    debit: stockValue,
-                    credit: 0,
+                    fcyAmount: Math.abs(stockValue),
+                    debit: stockValue > 0 ? stockValue : 0,
+                    credit: stockValue < 0 ? Math.abs(stockValue) : 0,
                     narration: `Opening Stock - ${item.name}`,
                     factoryId: currentFactory?.id || ''
                 },
@@ -1388,9 +1391,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     accountName: 'Capital',
                     currency: 'USD',
                     exchangeRate: 1,
-                    fcyAmount: stockValue,
-                    debit: 0,
-                    credit: stockValue,
+                    fcyAmount: Math.abs(stockValue),
+                    debit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                    credit: stockValue > 0 ? stockValue : 0,
                     narration: `Opening Stock - ${item.name}`,
                     factoryId: currentFactory?.id || ''
                 }

@@ -301,11 +301,14 @@ export const DataImportExport: React.FC = () => {
                                     partnerId = `${prefix}-${nextNumber}`;
                                 }
                                 
+                                // Parse balance from CSV (can be positive or negative)
+                                const balance = row.balance ? parseFloat(row.balance) : 0;
+                                
                                 const partner = {
                                     id: partnerId,
                                     name: row.name,
                                     type: row.type,
-                                    balance: 0, // Will be set via opening balance if provided
+                                    balance: balance, // Set balance from CSV - addPartner will handle opening balance entries
                                     defaultCurrency: row.defaultCurrency || 'USD',
                                     contact: row.contact || '',
                                     country: row.country || '',
@@ -321,10 +324,6 @@ export const DataImportExport: React.FC = () => {
                                     scacCode: row.scacCode || undefined
                                 };
                                 addPartner(partner);
-                                // Handle opening balance if provided
-                                if (row.balance && parseFloat(row.balance) !== 0) {
-                                    // Opening balance will be handled by addPartner function
-                                }
                                 successCount++;
                                 break;
                             }
