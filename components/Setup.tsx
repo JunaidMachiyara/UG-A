@@ -490,7 +490,22 @@ export const useSetupConfigs = () => {
                 required: false,
                 hidden: (data) => !data.divisionId
             },
-            { name: 'defaultCurrency', label: 'Default Currency', type: 'select', options: () => state.currencies.length > 0 ? state.currencies.map(c => c.code) : ['USD'], required: true, defaultValue: 'USD' },
+            { 
+                name: 'defaultCurrency', 
+                label: 'Default Currency', 
+                type: 'select', 
+                options: (allData, formData) => {
+                    // Access current state from closure - state is from useSetupConfigs hook
+                    // Return currency codes from state.currencies
+                    if (state.currencies && state.currencies.length > 0) {
+                        return state.currencies.map(c => c.code);
+                    }
+                    // Fallback to USD if no currencies
+                    return ['USD'];
+                }, 
+                required: true, 
+                defaultValue: 'USD' 
+            },
             { name: 'contact', label: 'Contact Person', type: 'text' },
             { name: 'phone', label: 'Phone', type: 'text' },
             { name: 'email', label: 'Email', type: 'text' },
@@ -717,7 +732,7 @@ export const useSetupConfigs = () => {
 const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
     const { addCurrency, updateCurrency, deleteEntity } = useData();
     const [showForm, setShowForm] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true); // Expanded by default for better visibility
     const [editingCurrency, setEditingCurrency] = useState<any>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [formData, setFormData] = useState({
@@ -762,24 +777,35 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
     return (
         <div className="bg-white rounded-xl shadow-md p-6 border border-slate-200">
-            <div 
-                className="flex justify-between items-center mb-4 cursor-pointer select-none"
-                onClick={() => setIsExpanded(!isExpanded)}
-            >
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    Currency Management
-                    {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                </h3>
+            <div className="flex justify-between items-center mb-4">
+                <div 
+                    className="flex items-center gap-2 cursor-pointer select-none"
+                    onClick={() => setIsExpanded(!isExpanded)}
+                >
+                    <CreditCard className="text-blue-500" size={24} />
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        Currency Management
+                        {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                    </h3>
+                </div>
                 <button 
                     onClick={(e) => {
                         e.stopPropagation();
+                        setIsExpanded(true); // Auto-expand when adding
                         setShowForm(!showForm);
                     }} 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
                 >
+                    <Plus size={18} />
                     {showForm ? 'Cancel' : '+ Add Currency'}
                 </button>
             </div>
+            
+            {!isExpanded && data.length > 0 && (
+                <div className="text-sm text-slate-600 mb-2">
+                    {data.length} currency{data.length !== 1 ? 'ies' : ''} configured. Click to expand and manage.
+                </div>
+            )}
 
             {isExpanded && (
                 <div>

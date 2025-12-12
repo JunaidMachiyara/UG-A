@@ -178,16 +178,33 @@ export const Accounting: React.FC = () => {
 
         if (vType === 'RV') {
             if (!sourceId || !destId) return alert("Select Received From and Deposit To");
-            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: destId, accountName: 'Cash/Bank', debit: baseAmount, credit: 0 });
-            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: sourceId, accountName: 'Payer/Capital/Loan', debit: 0, credit: baseAmount });
+            // Resolve actual account/partner names
+            const destAccount = state.accounts.find(a => a.id === destId);
+            const sourceAccount = state.accounts.find(a => a.id === sourceId);
+            const sourcePartner = state.partners.find(p => p.id === sourceId);
+            const destName = destAccount?.name || 'Cash/Bank';
+            const sourceName = sourcePartner?.name || sourceAccount?.name || 'Payer';
+            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: destId, accountName: destName, debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.RECEIPT_VOUCHER, accountId: sourceId, accountName: sourceName, debit: 0, credit: baseAmount });
         } else if (vType === 'PV') {
             if (!sourceId || !destId) return alert("Select Paid To and Paid From");
-            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: destId, accountName: 'Payee/Drawings', debit: baseAmount, credit: 0 });
-            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceId, accountName: 'Bank/Cash', debit: 0, credit: baseAmount });
+            // Resolve actual account/partner names
+            const sourceAccount = state.accounts.find(a => a.id === sourceId);
+            const destAccount = state.accounts.find(a => a.id === destId);
+            const destPartner = state.partners.find(p => p.id === destId);
+            const sourceName = sourceAccount?.name || 'Bank/Cash';
+            const destName = destPartner?.name || destAccount?.name || 'Payee';
+            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: destId, accountName: destName, debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceId, accountName: sourceName, debit: 0, credit: baseAmount });
         } else if (vType === 'EV') {
             if (!sourceId || !destId) return alert("Select Expense and Paid From");
-            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: destId, accountName: 'Expense', debit: baseAmount, credit: 0 });
-            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: sourceId, accountName: 'Bank/Cash', debit: 0, credit: baseAmount });
+            // Resolve actual account names
+            const destAccount = state.accounts.find(a => a.id === destId);
+            const sourceAccount = state.accounts.find(a => a.id === sourceId);
+            const destName = destAccount?.name || 'Expense';
+            const sourceName = sourceAccount?.name || 'Bank/Cash';
+            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: destId, accountName: destName, debit: baseAmount, credit: 0 });
+            entries.push({ ...common, transactionType: TransactionType.EXPENSE_VOUCHER, accountId: sourceId, accountName: sourceName, debit: 0, credit: baseAmount });
         } else if (vType === 'PB') {
             if (!destId) return alert("Select Expense Account");
             
@@ -210,8 +227,14 @@ export const Accounting: React.FC = () => {
 
             const narr = pbPaymentMode === 'CASH' ? `Cash Bill: ${vendorName} - ${description}` : `Credit Bill: ${vendorName} - ${description}`;
 
-            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: destId, accountName: 'Expense', debit: baseAmount, credit: 0 });
-            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: creditAccount, accountName: pbPaymentMode === 'CREDIT' ? 'Vendor Payable' : 'Cash/Bank', debit: 0, credit: baseAmount });
+            // Resolve actual account names
+            const destAccount = state.accounts.find(a => a.id === destId);
+            const creditAccountObj = state.accounts.find(a => a.id === creditAccount);
+            const creditPartner = state.partners.find(p => p.id === creditAccount);
+            const destName = destAccount?.name || 'Expense';
+            const creditName = pbPaymentMode === 'CREDIT' ? (creditPartner?.name || 'Vendor Payable') : (creditAccountObj?.name || 'Cash/Bank');
+            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: destId, accountName: destName, debit: baseAmount, credit: 0 });
+            entries.push({ ...common, narration: narr, transactionType: TransactionType.PURCHASE_BILL, accountId: creditAccount, accountName: creditName, debit: 0, credit: baseAmount });
 
         } else if (vType === 'TR') {
             if (!sourceId || !destId) return alert("Select Transfer From and To");
@@ -219,8 +242,13 @@ export const Accounting: React.FC = () => {
             const fromBase = parseFloat(fromAmount) / fromRate;
             const toBase = parseFloat(toAmount) / toRate;
             const variance = toBase - fromBase;
-            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: sourceId, accountName: 'Transfer From', currency: fromCurrency, exchangeRate: fromRate, fcyAmount: parseFloat(fromAmount), debit: 0, credit: fromBase });
-            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: destId, accountName: 'Transfer To', currency: toCurrency, exchangeRate: toRate, fcyAmount: parseFloat(toAmount), debit: toBase, credit: 0 });
+            // Resolve actual account names
+            const sourceAccount = state.accounts.find(a => a.id === sourceId);
+            const destAccount = state.accounts.find(a => a.id === destId);
+            const sourceName = sourceAccount?.name || 'Transfer From';
+            const destName = destAccount?.name || 'Transfer To';
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: sourceId, accountName: sourceName, currency: fromCurrency, exchangeRate: fromRate, fcyAmount: parseFloat(fromAmount), debit: 0, credit: fromBase });
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: destId, accountName: destName, currency: toCurrency, exchangeRate: toRate, fcyAmount: parseFloat(toAmount), debit: toBase, credit: 0 });
             if (Math.abs(variance) > 0.01) {
                 const varianceAccountId = state.accounts.find(a => a.name.includes('Exchange'))?.id || '502';
                 if (variance < 0) {

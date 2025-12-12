@@ -226,8 +226,11 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                     // Customers: debit increases balance (they owe us) - positive
                     newPartnerBalance = partnerDebitSum - partnerCreditSum;
                 } else if ([PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
-                    // Suppliers/agents: credit increases liability, so balance becomes more negative
-                    newPartnerBalance = partnerCreditSum - partnerDebitSum;
+                    // Suppliers/agents: 
+                    // Debit increases positive balance (advance to supplier - asset)
+                    // Credit increases negative balance (accounts payable - liability)
+                    // Formula: debit - credit (same as customers, but negative = AP, positive = advance)
+                    newPartnerBalance = partnerDebitSum - partnerCreditSum;
                 } else {
                     // Other partners: default logic
                     newPartnerBalance = partnerDebitSum - partnerCreditSum;
@@ -288,7 +291,11 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 if ([PartnerType.CUSTOMER].includes(partner.type)) { 
                     newPartnerBalance = partner.balance + partnerDebitSum - partnerCreditSum;
                 } else { 
-                    // Suppliers: credit increases liability, so balance becomes more negative
+                    // Suppliers: 
+                    // - Credit increases liability (we owe more) = balance becomes more negative
+                    // - Debit decreases liability (we pay/advance) = balance becomes less negative (more positive)
+                    // Formula: balance - credit + debit = balance + debit - credit (same as customers)
+                    // This maintains: positive balance = advance to supplier (asset), negative balance = accounts payable (liability)
                     newPartnerBalance = partner.balance + partnerDebitSum - partnerCreditSum;
                 }
                 return { ...partner, balance: newPartnerBalance };
@@ -1177,7 +1184,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         });
 
-        addDoc(collection(db, 'partners'), partnerData)
+        // CRITICAL FIX: Save partner with balance = 0 if opening balance exists
+        // The balance will be calculated from ledger entries via POST_TRANSACTION to avoid double counting
+        // This prevents the issue where positive supplier balances become negative due to:
+        // 1. Partner saved with balance = X
+        // 2. Opening balance entry posted (adds X to balance)
+        // 3. Result: balance becomes 2X or gets inverted
+        // Solution: Save with balance = 0, let opening balance entry set the correct balance
+        const partnerDataForSave = partner.balance !== 0 
+            ? { ...partnerData, balance: 0 }
+            : partnerData;
+
+        addDoc(collection(db, 'partners'), partnerDataForSave)
             .then((docRef) => {
                 console.log('✅ Partner saved to Firebase:', docRef.id);
                 // Firebase listener will handle adding to local state
@@ -1223,34 +1241,72 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             }
                         ];
                     } else {
-                        // Suppliers, Vendors, etc. (credit balance)
+                        // Suppliers, Vendors, etc.
+                        // Negative balance = Accounts Payable (we owe them) - Credit supplier account
+                        // Positive balance = Advance to Supplier (we paid in advance) - Debit supplier account
                         const absBalance = Math.abs(partner.balance);
-                        entries = [
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
-                                debit: absBalance,
-                                credit: 0,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            },
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: docRef.id,
-                                accountName: partner.name,
-                                debit: 0,
-                                credit: absBalance,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            }
-                        ];
+                        
+                        if (partner.balance < 0) {
+                            // Negative: Accounts Payable (liability)
+                            // Credit supplier account (increases liability/negative balance)
+                            // Debit Opening Equity
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id,
+                                    accountName: partner.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        } else {
+                            // Positive: Advance to Supplier (asset)
+                            // Debit supplier account (increases positive balance/asset)
+                            // Credit Opening Equity
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id,
+                                    accountName: partner.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        }
                     }
                     postTransaction(entries);
                 }
@@ -1366,7 +1422,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Save to Firebase
         const { id, ...openingData } = openingWithFactory;
-        addDoc(collection(db, 'originalOpenings'), { ...openingData, createdAt: serverTimestamp() })
+        // Remove undefined fields (Firebase doesn't allow undefined values)
+        const cleanedData = Object.fromEntries(
+            Object.entries(openingData).filter(([_, value]) => value !== undefined)
+        );
+        addDoc(collection(db, 'originalOpenings'), { ...cleanedData, createdAt: serverTimestamp() })
             .then(() => console.log('✅ Original Opening saved to Firebase'))
             .catch((error) => console.error('❌ Error saving original opening:', error));
         

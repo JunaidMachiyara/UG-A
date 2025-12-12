@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
-import { AccountType, TransactionType } from '../types';
+import { AccountType, TransactionType, PartnerType } from '../types';
 import { 
     PieChart, BarChart, LineChart, Line, Bar, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
 } from 'recharts';
@@ -150,14 +150,16 @@ const BalanceSheet: React.FC = () => {
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
     const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
     const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
-    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + c.balance, 0);
+    // FIXED: Customer advances should be positive (they're a liability)
+    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
 
     // Split supplier/vendor/agent balances
     const supplierTypes = [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT];
     const positiveSupplierBalances = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance > 0);
     const totalAdvancesToSuppliers = positiveSupplierBalances.reduce((sum, s) => sum + s.balance, 0);
     const negativeSupplierBalances = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance < 0);
-    const totalCreditors = negativeSupplierBalances.reduce((sum, s) => sum + s.balance, 0);
+    // FIXED: Creditors (Accounts Payable) should be positive (they're a liability)
+    const totalCreditors = negativeSupplierBalances.reduce((sum, s) => sum + Math.abs(s.balance), 0);
 
     // Net Income Calculation for Equity Section
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
@@ -166,10 +168,10 @@ const BalanceSheet: React.FC = () => {
 
     // Total assets: sum of asset accounts + positive customer balance + positive supplier/agent advances
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalAdvancesToSuppliers;
-    // Total liabilities: liabilities + true sign for supplier/agent balances (Creditors) + negative customer balances (advances)
+    // FIXED: Total liabilities: liabilities (credit-normal, positive) + creditors + customer advances
     const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0) + totalCreditors + totalCustomerAdvances;
-    // Show true sign for equity
-    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
+    // FIXED: Equity should preserve negative balances (like Owner's Drawings)
+    const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0) + netIncome;
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -181,7 +183,9 @@ const BalanceSheet: React.FC = () => {
                         {assets.filter(a => a && a.balance !== undefined).map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
-                                <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
+                                    {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                </span>
                             </div>
                         ))}
                         {totalCustomersAR > 0 && (
@@ -199,7 +203,9 @@ const BalanceSheet: React.FC = () => {
                     </div>
                     <div className="border-t border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800">
                         <span>Total Assets</span>
-                        <span>{(totalAssets || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span className={totalAssets < 0 ? 'text-red-600' : ''}>
+                            {totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </span>
                     </div>
                 </div>
 
@@ -213,7 +219,9 @@ const BalanceSheet: React.FC = () => {
                                 {liabilities.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
+                                            {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                        </span>
                                     </div>
                                 ))}
                                 {totalCreditors > 0 && (
@@ -231,7 +239,9 @@ const BalanceSheet: React.FC = () => {
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Liabilities</span>
-                                <span>{(totalLiabilities || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className={totalLiabilities < 0 ? 'text-red-600' : ''}>
+                                    {totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                </span>
                             </div>
                         </div>
 
@@ -241,24 +251,44 @@ const BalanceSheet: React.FC = () => {
                                 {equity.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        {/* FIXED: Show actual balance (Owner's Drawings can be negative) */}
+                                        <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
+                                            {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                        </span>
                                     </div>
                                 ))}
                                 <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">
                                     <span className="text-emerald-700 font-medium">Net Income (Current)</span>
-                                    <span className="font-mono font-bold text-emerald-700">{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    <span className={`font-mono font-bold ${netIncome < 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+                                        {netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                    </span>
                                 </div>
                             </div>
                             <div className="border-t border-slate-100 mt-2 pt-1 flex justify-between text-sm font-bold text-slate-700">
                                 <span>Total Equity</span>
-                                <span>{(totalEquity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                <span className={totalEquity < 0 ? 'text-red-600' : ''}>
+                                    {totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                </span>
                             </div>
                         </div>
                     </div>
                     <div className="border-t-2 border-slate-200 mt-4 pt-2 flex justify-between font-bold text-slate-800 text-lg">
                         <span>Total Liabilities & Equity</span>
-                        <span>{((totalLiabilities || 0) + (totalEquity || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span className={Math.abs(totalAssets - (totalLiabilities + totalEquity)) > 0.01 ? 'text-red-600' : ''}>
+                            {((totalLiabilities || 0) + (totalEquity || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </span>
                     </div>
+                    {/* Balance Sheet Validation */}
+                    {Math.abs(totalAssets - (totalLiabilities + totalEquity)) > 0.01 && (
+                        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                            <p className="text-sm text-red-700 font-medium">
+                                ⚠️ Balance Sheet does not balance! Difference: ${Math.abs(totalAssets - (totalLiabilities + totalEquity)).toFixed(2)}
+                            </p>
+                            <p className="text-xs text-red-600 mt-1">
+                                Assets: ${totalAssets.toFixed(2)} | Liabilities + Equity: ${(totalLiabilities + totalEquity).toFixed(2)}
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

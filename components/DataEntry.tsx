@@ -6,6 +6,7 @@ import { OriginalOpening, ProductionEntry, PackingType, Purchase, Currency, Tran
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { useSetupConfigs, QuickAddModal, CrudConfig } from './Setup';
+import Papa from 'papaparse';
 import { 
     Package, 
     Truck, 
@@ -27,9 +28,10 @@ import {
     ArrowLeftRight,
     RefreshCw,
     DollarSign,
+    Upload,
+    Download,
     Anchor,
     Printer,
-    Download,
     ChevronDown,
     Search,
     Edit2,
@@ -136,6 +138,13 @@ export const DataEntry: React.FC = () => {
     const [ooBatch, setOoBatch] = useState('');
     const [ooQty, setOoQty] = useState('');
     const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
+    
+    // --- CSV Upload State for Original Opening ---
+    const [ooCsvFile, setOoCsvFile] = useState<File | null>(null);
+    const [ooCsvPreview, setOoCsvPreview] = useState<any[]>([]);
+    const [ooCsvErrors, setOoCsvErrors] = useState<string[]>([]);
+    const [showOoCsvModal, setShowOoCsvModal] = useState(false);
+    const [ooCsvProcessing, setOoCsvProcessing] = useState(false);
 
     // --- Bales Opening State ---
     const [boDate, setBoDate] = useState(new Date().toISOString().split('T')[0]);
@@ -150,6 +159,13 @@ export const DataEntry: React.FC = () => {
     const [stagedProds, setStagedProds] = useState<ProductionEntry[]>([]);
     const [showProdSummary, setShowProdSummary] = useState(false);
     const [tempSerialTracker, setTempSerialTracker] = useState<Record<string, number>>({});
+    
+    // --- CSV Upload State ---
+    const [csvFile, setCsvFile] = useState<File | null>(null);
+    const [csvPreview, setCsvPreview] = useState<any[]>([]);
+    const [csvErrors, setCsvErrors] = useState<string[]>([]);
+    const [showCsvModal, setShowCsvModal] = useState(false);
+    const [csvProcessing, setCsvProcessing] = useState(false);
 
     // --- Re-baling State ---
     const [rbDate, setRbDate] = useState(new Date().toISOString().split('T')[0]);
@@ -590,7 +606,7 @@ export const DataEntry: React.FC = () => {
             date: ooDate,
             supplierId: ooSupplier,
             originalType: ooType,
-            batchNumber: ooBatch,
+            ...(ooBatch ? { batchNumber: ooBatch } : {}),
             qtyOpened: qtyVal,
             weightOpened: finalWeight,
             costPerKg: availableStockInfo.avgCost,
@@ -625,6 +641,267 @@ export const DataEntry: React.FC = () => {
     
     const handleRemoveStagedOpening = (id: string) => {
         setStagedOriginalOpenings(stagedOriginalOpenings.filter(o => o.id !== id));
+    };
+
+    // Helper function to calculate available stock for a supplier/type/batch combination
+    const calculateAvailableStock = (supplierId: string, originalTypeId: string, batchNumber?: string) => {
+        const relevantPurchases = state.purchases.filter(p => 
+            p.supplierId === supplierId && 
+            p.originalTypeId === originalTypeId && 
+            (!batchNumber || p.batchNumber === batchNumber)
+        );
+
+        const relevantOpenings = state.originalOpenings.filter(o => 
+            o.supplierId === supplierId && 
+            o.originalType === originalTypeId &&
+            (!batchNumber || o.batchNumber === batchNumber)
+        );
+
+        const relevantDirectSales = state.salesInvoices.filter(inv => 
+            inv.status === 'Posted' && inv.items.some(item => {
+                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                return purchase && purchase.supplierId === supplierId && purchase.originalTypeId === originalTypeId && (!batchNumber || purchase.batchNumber === batchNumber);
+            })
+        );
+
+        const sold = relevantDirectSales.reduce((acc, inv) => {
+            inv.items.forEach(item => {
+                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                if (purchase && purchase.supplierId === supplierId && purchase.originalTypeId === originalTypeId && (!batchNumber || purchase.batchNumber === batchNumber)) {
+                    acc.qty += item.qty;
+                    acc.weight += item.totalKg;
+                }
+            });
+            return acc;
+        }, { qty: 0, weight: 0 });
+
+        const purchased = relevantPurchases.reduce((acc, curr) => ({
+            qty: acc.qty + curr.qtyPurchased,
+            weight: acc.weight + curr.weightPurchased,
+            cost: acc.cost + curr.totalLandedCost
+        }), { qty: 0, weight: 0, cost: 0 });
+
+        const opened = relevantOpenings.reduce((acc, curr) => ({
+            qty: acc.qty + curr.qtyOpened,
+            weight: acc.weight + curr.weightOpened
+        }), { qty: 0, weight: 0 });
+
+        const currentQty = purchased.qty - opened.qty - sold.qty;
+        const currentWeight = purchased.weight - opened.weight - sold.weight;
+        const avgCostPerKg = purchased.weight > 0 ? (purchased.cost / purchased.weight) : 0;
+
+        return { 
+            qty: currentQty, 
+            weight: currentWeight, 
+            avgCost: avgCostPerKg 
+        };
+    };
+
+    // --- CSV Upload Handlers for Original Opening ---
+    const handleOoCsvFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        
+        if (!file.name.endsWith('.csv')) {
+            alert('Please select a CSV file');
+            return;
+        }
+        
+        setOoCsvFile(file);
+        setOoCsvPreview([]);
+        setOoCsvErrors([]);
+        
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                if (results.errors.length > 0) {
+                    setOoCsvErrors(results.errors.map(e => e.message));
+                }
+                setOoCsvPreview(results.data);
+                setShowOoCsvModal(true);
+            },
+            error: (error) => {
+                alert(`Error parsing CSV: ${error.message}`);
+            }
+        });
+    };
+
+    const processOoCsvOpening = () => {
+        if (!ooDate) {
+            alert('Please select an entry date first');
+            return;
+        }
+        
+        if (ooCsvPreview.length === 0) {
+            alert('No data to process');
+            return;
+        }
+        
+        setOoCsvProcessing(true);
+        const errors: string[] = [];
+        const newOpenings: OriginalOpening[] = [];
+        
+        ooCsvPreview.forEach((row: any, index: number) => {
+            // Support multiple column name variations
+            const supplierIdentifier = (
+                row.Supplier || row.supplier || 
+                row['Supplier'] || row['supplier'] ||
+                row.SupplierName || row.supplierName ||
+                ''
+            ).trim();
+            
+            const typeIdentifier = (
+                row['Original Type'] || row['original type'] || row['Original type'] ||
+                row.OriginalType || row.originalType || row.originaltype ||
+                row.Type || row.type ||
+                row['Type'] || row['type'] ||
+                ''
+            ).trim();
+            
+            const batchStr = (
+                row.Batch || row.batch || 
+                row['Batch Number'] || row['batch number'] || row['Batch number'] ||
+                row.BatchNumber || row.batchNumber ||
+                ''
+            ).trim();
+            
+            const qtyStr = (
+                row.Qty || row.qty || 
+                row.Quantity || row.quantity || 
+                row['Quantity'] || row['quantity'] ||
+                ''
+            ).trim();
+            
+            if (!supplierIdentifier) {
+                errors.push(`Row ${index + 2}: Supplier is missing`);
+                return;
+            }
+            
+            if (!typeIdentifier) {
+                errors.push(`Row ${index + 2}: Original Type is missing`);
+                return;
+            }
+            
+            if (!qtyStr) {
+                errors.push(`Row ${index + 2}: Quantity is missing`);
+                return;
+            }
+            
+            const qty = parseFloat(qtyStr);
+            if (isNaN(qty) || qty <= 0) {
+                errors.push(`Row ${index + 2}: Invalid quantity "${qtyStr}"`);
+                return;
+            }
+            
+            // Find supplier by name or code (case-insensitive)
+            const supplier = state.partners.find(p => 
+                (p.type === PartnerType.SUPPLIER || p.type === PartnerType.SUB_SUPPLIER) && (
+                    p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
+                    p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
+                )
+            );
+            
+            if (!supplier) {
+                errors.push(`Row ${index + 2}: Supplier not found "${supplierIdentifier}"`);
+                return;
+            }
+            
+            // Check if supplier has purchases
+            const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
+            if (supplierPurchases.length === 0) {
+                errors.push(`Row ${index + 2}: No purchases found for supplier "${supplierIdentifier}"`);
+                return;
+            }
+            
+            // Find original type - must be from purchases for this supplier
+            const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
+            const originalType = state.originalTypes.find(ot => 
+                typeIdsFromPurchases.includes(ot.id) && (
+                    ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
+                    ot.name.toLowerCase().includes(typeIdentifier.toLowerCase()) ||
+                    ot.id.toLowerCase() === typeIdentifier.toLowerCase()
+                )
+            );
+            
+            if (!originalType) {
+                errors.push(`Row ${index + 2}: Original Type "${typeIdentifier}" not found for supplier "${supplierIdentifier}"`);
+                return;
+            }
+            
+            // Calculate available stock
+            const stockInfo = calculateAvailableStock(supplier.id, originalType.id, batchStr || undefined);
+            
+            if (stockInfo.qty <= 0 && stockInfo.weight <= 0) {
+                errors.push(`Row ${index + 2}: No available stock for ${supplierIdentifier} - ${originalType.name}`);
+                return;
+            }
+            
+            // Calculate weight
+            const estWeight = stockInfo.qty > 0 
+                ? (stockInfo.weight / stockInfo.qty) * qty 
+                : qty; // Fallback: treat qty as weight if no unit qty
+            
+            const finalWeight = estWeight || qty;
+            
+            const newOpening: OriginalOpening = {
+                id: Math.random().toString(36).substr(2, 9),
+                date: ooDate,
+                supplierId: supplier.id,
+                originalType: originalType.id,
+                ...(batchStr ? { batchNumber: batchStr } : {}),
+                qtyOpened: qty,
+                weightOpened: finalWeight,
+                costPerKg: stockInfo.avgCost,
+                totalValue: finalWeight * stockInfo.avgCost
+            };
+            
+            newOpenings.push(newOpening);
+        });
+        
+        setOoCsvErrors(errors);
+        
+        if (errors.length > 0 && newOpenings.length === 0) {
+            alert(`CSV processing failed:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
+            setOoCsvProcessing(false);
+            return;
+        }
+        
+        // Add successful entries to staged openings
+        setStagedOriginalOpenings([...stagedOriginalOpenings, ...newOpenings]);
+        
+        if (errors.length > 0) {
+            alert(`Processed ${newOpenings.length} openings successfully.\n\nErrors found:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
+        } else {
+            alert(`Successfully processed ${newOpenings.length} original opening entries!`);
+        }
+        
+        // Reset CSV state
+        setOoCsvFile(null);
+        setOoCsvPreview([]);
+        setShowOoCsvModal(false);
+        setOoCsvProcessing(false);
+        
+        // Reset file input
+        const fileInput = document.getElementById('oo-csv-upload-input') as HTMLInputElement;
+        if (fileInput) fileInput.value = '';
+    };
+
+    const downloadOoCsvTemplate = () => {
+        const template = [
+            ['Supplier', 'Original Type', 'Batch Number', 'Quantity'],
+            ['Supplier Name or Code', 'Type Name or Code', 'Optional', 'Qty'],
+            ['Supplier-001', 'Raw Cotton', 'BATCH-11001', '100'],
+            ['Supplier-002', 'Cotton Yarn', '', '50']
+        ];
+        const csv = template.map(row => row.join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'original_opening_template.csv';
+        a.click();
+        window.URL.revokeObjectURL(url);
     };
     
     // --- History Table Data ---
@@ -1439,6 +1716,175 @@ export const DataEntry: React.FC = () => {
         alert("Production Saved Successfully");
     };
 
+    // --- CSV Upload Handlers ---
+    const handleCsvFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        
+        if (!file.name.endsWith('.csv')) {
+            alert('Please select a CSV file');
+            return;
+        }
+        
+        setCsvFile(file);
+        setCsvPreview([]);
+        setCsvErrors([]);
+        
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                if (results.errors.length > 0) {
+                    setCsvErrors(results.errors.map(e => e.message));
+                }
+                setCsvPreview(results.data);
+                setShowCsvModal(true);
+            },
+            error: (error) => {
+                alert(`Error parsing CSV: ${error.message}`);
+            }
+        });
+    };
+
+    const processCsvProduction = () => {
+        if (!prodDate) {
+            alert('Please select a production date first');
+            return;
+        }
+        
+        if (csvPreview.length === 0) {
+            alert('No data to process');
+            return;
+        }
+        
+        setCsvProcessing(true);
+        const errors: string[] = [];
+        const newProductions: ProductionEntry[] = [];
+        const updatedSerialTracker = { ...tempSerialTracker };
+        
+        csvPreview.forEach((row: any, index: number) => {
+            // Support multiple column name variations: Item, Item Code, ItemCode, Code, ItemName, etc.
+            const itemIdentifier = (
+                row.Item || row.item || 
+                row['Item Code'] || row['item code'] || row['Item code'] || 
+                row.ItemCode || row.itemCode || row.itemcode ||
+                row.ItemName || row.itemName || row.itemname ||
+                row.Code || row.code || 
+                row['Item Name'] || row['item name'] || row['Item name'] ||
+                ''
+            ).trim();
+            // Support multiple quantity column name variations
+            const qtyStr = (
+                row.Qty || row.qty || 
+                row.Quantity || row.quantity || 
+                row['Quantity'] || row['quantity'] ||
+                ''
+            ).trim();
+            
+            if (!itemIdentifier) {
+                errors.push(`Row ${index + 2}: Item name/code is missing`);
+                return;
+            }
+            
+            if (!qtyStr) {
+                errors.push(`Row ${index + 2}: Quantity is missing`);
+                return;
+            }
+            
+            const qty = parseFloat(qtyStr);
+            if (isNaN(qty) || qty <= 0) {
+                errors.push(`Row ${index + 2}: Invalid quantity "${qtyStr}"`);
+                return;
+            }
+            
+            // Find item by code or name (case-insensitive)
+            const item = state.items.find(i => 
+                i.category !== 'Raw Material' && (
+                    i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
+                    i.name.toLowerCase() === itemIdentifier.toLowerCase() ||
+                    i.code.toLowerCase().includes(itemIdentifier.toLowerCase()) ||
+                    i.name.toLowerCase().includes(itemIdentifier.toLowerCase())
+                )
+            );
+            
+            if (!item) {
+                errors.push(`Row ${index + 2}: Item not found "${itemIdentifier}"`);
+                return;
+            }
+            
+            let serialStart: number | undefined;
+            let serialEnd: number | undefined;
+            
+            // Apply Serial Logic for Bale, Sack, Box, Bag
+            if (item.packingType !== PackingType.KG) {
+                const startNum = updatedSerialTracker[item.id] || getNextSerialNumber(item.id);
+                serialStart = startNum;
+                serialEnd = startNum + qty - 1;
+                updatedSerialTracker[item.id] = (serialEnd || 0) + 1;
+            }
+            
+            const newEntry: ProductionEntry = {
+                id: Math.random().toString(36).substr(2, 9),
+                date: prodDate,
+                itemId: item.id,
+                itemName: item.name,
+                packingType: item.packingType,
+                qtyProduced: qty,
+                weightProduced: qty * item.weightPerUnit,
+                serialStart,
+                serialEnd,
+                factoryId: state.currentFactory?.id || ''
+            };
+            
+            newProductions.push(newEntry);
+        });
+        
+        setCsvErrors(errors);
+        setTempSerialTracker(updatedSerialTracker);
+        
+        if (errors.length > 0 && newProductions.length === 0) {
+            alert(`CSV processing failed:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
+            setCsvProcessing(false);
+            return;
+        }
+        
+        // Add successful entries to staged productions
+        setStagedProds([...stagedProds, ...newProductions]);
+        
+        if (errors.length > 0) {
+            alert(`Processed ${newProductions.length} items successfully.\n\nErrors found:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
+        } else {
+            alert(`Successfully processed ${newProductions.length} production entries!`);
+        }
+        
+        // Reset CSV state
+        setCsvFile(null);
+        setCsvPreview([]);
+        setShowCsvModal(false);
+        setCsvProcessing(false);
+        
+        // Reset file input
+        const fileInput = document.getElementById('csv-upload-input') as HTMLInputElement;
+        if (fileInput) fileInput.value = '';
+    };
+
+    const downloadCsvTemplate = () => {
+        const template = [
+            ['Item Code', 'Quantity'],
+            ['Item-1001', '10'],
+            ['Item-1002', '20'],
+            ['Item-1003', '15']
+        ];
+        const csv = template.map(row => row.join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'production_template.csv';
+        a.click();
+        window.URL.revokeObjectURL(url);
+    };
+
     // --- Re-baling Logic ---
     const handleAddConsume = () => {
         if (!rbConsumeId || !rbConsumeQty) return;
@@ -1736,12 +2182,53 @@ export const DataEntry: React.FC = () => {
                                 {ooTab === 'supplier' ? (
                                     <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
                                         <div className="md:col-span-7 space-y-6">
+                                            <div className="grid grid-cols-2 gap-6">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-slate-600 mb-1">Entry Date</label>
+                                                    <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={ooDate} onChange={e => { setOoDate(e.target.value); setStagedOriginalOpenings([]); }} required />
+                                                </div>
+                                            </div>
+                                            
+                                            {/* CSV Upload Section */}
+                                            <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-dashed border-green-300 rounded-xl p-6">
+                                                <div className="flex items-center gap-3 mb-4">
+                                                    <Upload className="text-green-600" size={24} />
+                                                    <div>
+                                                        <h3 className="font-bold text-slate-800 text-sm">Bulk Upload (CSV)</h3>
+                                                        <p className="text-xs text-slate-500">Upload daily original openings for multiple suppliers/types at once</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2 mb-3">
+                                                    <label className="flex-1 cursor-pointer">
+                                                        <input
+                                                            id="oo-csv-upload-input"
+                                                            type="file"
+                                                            accept=".csv"
+                                                            onChange={handleOoCsvFileSelect}
+                                                            className="hidden"
+                                                        />
+                                                        <div className="bg-white border-2 border-green-400 text-green-700 hover:bg-green-50 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm">
+                                                            <Upload size={16} /> Choose CSV File
+                                                        </div>
+                                                    </label>
+                                                    <button
+                                                        onClick={downloadOoCsvTemplate}
+                                                        className="bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                                                        title="Download CSV Template"
+                                                    >
+                                                        <Download size={16} /> Template
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-slate-600">CSV Format: <span className="font-mono bg-white px-2 py-1 rounded border border-slate-200">Supplier, Original Type, Batch Number, Quantity</span></p>
+                                                <p className="text-xs text-slate-500 mt-1">Batch Number is optional. Supplier and Original Type must match existing purchases.</p>
+                                            </div>
+                                            
+                                            <div className="border-t border-slate-200 pt-4">
+                                                <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Or Add Manually</p>
+                                            </div>
+                                            
                                             <form onSubmit={handleOpeningSubmit} className="space-y-6">
                                                 <div className="grid grid-cols-2 gap-6">
-                                                    <div>
-                                                        <label className="block text-sm font-medium text-slate-600 mb-1">Entry Date</label>
-                                                        <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={ooDate} onChange={e => setOoDate(e.target.value)} required />
-                                                    </div>
                                                     <div>
                                                         <label className="block text-sm font-medium text-slate-600 mb-1">Supplier</label>
                                                         <EntitySelector
@@ -3031,6 +3518,44 @@ export const DataEntry: React.FC = () => {
                             <div className="animate-in fade-in duration-300 grid grid-cols-1 md:grid-cols-12 gap-8">
                                     <div className="md:col-span-7 space-y-6">
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Production Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500" value={prodDate} onChange={e => { setProdDate(e.target.value); setStagedProds([]); }} required /></div>
+                                        
+                                        {/* CSV Upload Section */}
+                                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6">
+                                            <div className="flex items-center gap-3 mb-4">
+                                                <Upload className="text-blue-600" size={24} />
+                                                <div>
+                                                    <h3 className="font-bold text-slate-800 text-sm">Bulk Upload (CSV)</h3>
+                                                    <p className="text-xs text-slate-500">Upload daily production for multiple items at once</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2 mb-3">
+                                                <label className="flex-1 cursor-pointer">
+                                                    <input
+                                                        id="csv-upload-input"
+                                                        type="file"
+                                                        accept=".csv"
+                                                        onChange={handleCsvFileSelect}
+                                                        className="hidden"
+                                                    />
+                                                    <div className="bg-white border-2 border-blue-400 text-blue-700 hover:bg-blue-50 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm">
+                                                        <Upload size={16} /> Choose CSV File
+                                                    </div>
+                                                </label>
+                                                <button
+                                                    onClick={downloadCsvTemplate}
+                                                    className="bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                                                    title="Download CSV Template"
+                                                >
+                                                    <Download size={16} /> Template
+                                                </button>
+                                            </div>
+                                            <p className="text-xs text-slate-600">CSV Format: <span className="font-mono bg-white px-2 py-1 rounded border border-slate-200">Item, Qty</span> (Item can be name or code)</p>
+                                        </div>
+                                        
+                                        <div className="border-t border-slate-200 pt-4">
+                                            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Or Add Manually</p>
+                                        </div>
+                                        
                                         <div>
                                             <label className="block text-sm font-medium text-slate-600 mb-1">Select Item</label>
                                             <EntitySelector
@@ -3158,6 +3683,161 @@ export const DataEntry: React.FC = () => {
                     <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95 duration-200">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><CheckCircle className="text-emerald-500" /> Confirm Production</h3><button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button></div>
                         <div className="p-6"><p className="text-sm text-slate-500 mb-4">Please review the staged items before saving. Compare with yesterday's output to ensure consistency.</p><table className="w-full text-sm text-left mb-6"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-3">Item</th><th className="px-4 py-3 text-right">Qty (Today)</th><th className="px-4 py-3 text-right">Yesterday</th><th className="px-4 py-3 text-right">Variance</th></tr></thead><tbody className="divide-y divide-slate-100">{stagedProds.map(p => { const yesterdayQty = getYesterdayProduction(p.itemId); const variance = p.qtyProduced - yesterdayQty; return ( <tr key={p.id}><td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td><td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td><td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td><td className={`px-4 py-3 text-right ${variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'}`}>{variance > 0 ? '+' : ''}{variance}</td></tr> ); })}</tbody></table><div className="flex justify-end gap-3"><button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">Cancel</button><button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">Save & Continue</button></div></div>
+                    </div>
+                </div>
+            )}
+
+            {/* CSV Preview Modal */}
+            {showCsvModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <FileText className="text-blue-500" /> CSV Preview - Production Date: {prodDate}
+                            </h3>
+                            <button onClick={() => { setShowCsvModal(false); setCsvPreview([]); setCsvErrors([]); }} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6">
+                            {csvErrors.length > 0 && (
+                                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <AlertCircle className="text-red-600" size={20} />
+                                        <h4 className="font-bold text-red-800">Errors Found ({csvErrors.length})</h4>
+                                    </div>
+                                    <div className="max-h-32 overflow-y-auto text-sm text-red-700">
+                                        {csvErrors.slice(0, 10).map((error, idx) => (
+                                            <div key={idx} className="mb-1">• {error}</div>
+                                        ))}
+                                        {csvErrors.length > 10 && <div className="text-red-600 font-medium">... and {csvErrors.length - 10} more errors</div>}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mb-4">
+                                <p className="text-sm text-slate-600 mb-2">
+                                    Found <strong>{csvPreview.length}</strong> rows. Items will be matched by name or code.
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                    Only Finished Goods (non-Raw Material) items will be processed.
+                                </p>
+                            </div>
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                <div className="max-h-96 overflow-y-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-slate-50 sticky top-0">
+                                            <tr>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Row</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Item (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Qty (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Matched Item</th>
+                                                <th className="px-4 py-2 text-center border-b border-slate-200">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {csvPreview.map((row: any, index: number) => {
+                                                // Support multiple column name variations (same as processing logic)
+                                                const itemIdentifier = (
+                                                    row.Item || row.item || 
+                                                    row['Item Code'] || row['item code'] || row['Item code'] || 
+                                                    row.ItemCode || row.itemCode || row.itemcode ||
+                                                    row.ItemName || row.itemName || row.itemname ||
+                                                    row.Code || row.code || 
+                                                    row['Item Name'] || row['item name'] || row['Item name'] ||
+                                                    ''
+                                                ).trim();
+                                                const qtyStr = (
+                                                    row.Qty || row.qty || 
+                                                    row.Quantity || row.quantity || 
+                                                    row['Quantity'] || row['quantity'] ||
+                                                    ''
+                                                ).trim();
+                                                const item = state.items.find(i => 
+                                                    i.category !== 'Raw Material' && (
+                                                        i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
+                                                        i.name.toLowerCase() === itemIdentifier.toLowerCase() ||
+                                                        i.code.toLowerCase().includes(itemIdentifier.toLowerCase()) ||
+                                                        i.name.toLowerCase().includes(itemIdentifier.toLowerCase())
+                                                    )
+                                                );
+                                                const isValid = item && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
+                                                
+                                                return (
+                                                    <tr key={index} className={isValid ? 'bg-emerald-50/30' : 'bg-red-50/30'}>
+                                                        <td className="px-4 py-2 font-mono text-xs text-slate-500">{index + 1}</td>
+                                                        <td className="px-4 py-2 font-medium">{itemIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
+                                                        <td className="px-4 py-2">{qtyStr || <span className="text-red-600 italic">Missing</span>}</td>
+                                                        <td className="px-4 py-2">
+                                                            {item ? (
+                                                                <span className="text-emerald-700 font-medium">{item.code} - {item.name}</span>
+                                                            ) : (
+                                                                <span className="text-red-600 italic">Not found</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-2 text-center">
+                                                            {isValid ? (
+                                                                <CheckCircle className="text-emerald-600 mx-auto" size={18} />
+                                                            ) : (
+                                                                <AlertCircle className="text-red-600 mx-auto" size={18} />
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                            <button
+                                onClick={() => { setShowCsvModal(false); setCsvPreview([]); setCsvErrors([]); }}
+                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={processCsvProduction}
+                                disabled={csvProcessing || csvPreview.length === 0}
+                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                {csvProcessing ? (
+                                    <>
+                                        <RefreshCw className="animate-spin" size={16} />
+                                        Processing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload size={16} />
+                                        Process & Add to List ({csvPreview.filter((row: any) => {
+                                            // Support multiple column name variations
+                                            const itemIdentifier = (
+                                                row.Item || row.item || 
+                                                row['Item Code'] || row['item code'] || row['Item code'] || 
+                                                row.ItemCode || row.itemCode || row.itemcode ||
+                                                row.ItemName || row.itemName || row.itemname ||
+                                                row.Code || row.code || 
+                                                row['Item Name'] || row['item name'] || row['Item name'] ||
+                                                ''
+                                            ).trim();
+                                            const qtyStr = (
+                                                row.Qty || row.qty || 
+                                                row.Quantity || row.quantity || 
+                                                row['Quantity'] || row['quantity'] ||
+                                                ''
+                                            ).trim();
+                                            const item = state.items.find(i => 
+                                                i.category !== 'Raw Material' && (
+                                                    i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
+                                                    i.name.toLowerCase() === itemIdentifier.toLowerCase()
+                                                )
+                                            );
+                                            return item && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
+                                        }).length} items)
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -3345,7 +4025,202 @@ export const DataEntry: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* CSV Preview Modal for Original Opening */}
+            {showOoCsvModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <FileText className="text-green-500" /> CSV Preview - Entry Date: {ooDate}
+                            </h3>
+                            <button onClick={() => { setShowOoCsvModal(false); setOoCsvPreview([]); setOoCsvErrors([]); }} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6">
+                            {ooCsvErrors.length > 0 && (
+                                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <AlertCircle className="text-red-600" size={20} />
+                                        <h4 className="font-bold text-red-800">Errors Found ({ooCsvErrors.length})</h4>
+                                    </div>
+                                    <div className="max-h-32 overflow-y-auto text-sm text-red-700">
+                                        {ooCsvErrors.slice(0, 10).map((error, idx) => (
+                                            <div key={idx} className="mb-1">• {error}</div>
+                                        ))}
+                                        {ooCsvErrors.length > 10 && <div className="text-red-600 font-medium">... and {ooCsvErrors.length - 10} more errors</div>}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mb-4">
+                                <p className="text-sm text-slate-600 mb-2">
+                                    Found <strong>{ooCsvPreview.length}</strong> rows. Suppliers and Original Types will be matched by name.
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                    Only suppliers with existing purchases and their Original Types will be processed.
+                                </p>
+                            </div>
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                <div className="max-h-96 overflow-y-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-slate-50 sticky top-0">
+                                            <tr>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Row</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Supplier (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Original Type (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Batch (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Qty (from CSV)</th>
+                                                <th className="px-4 py-2 text-left border-b border-slate-200">Matched</th>
+                                                <th className="px-4 py-2 text-center border-b border-slate-200">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {ooCsvPreview.map((row: any, index: number) => {
+                                                const supplierIdentifier = (
+                                                    row.Supplier || row.supplier || 
+                                                    row['Supplier'] || row['supplier'] ||
+                                                    row.SupplierName || row.supplierName ||
+                                                    ''
+                                                ).trim();
+                                                const typeIdentifier = (
+                                                    row['Original Type'] || row['original type'] || row['Original type'] ||
+                                                    row.OriginalType || row.originalType || row.originaltype ||
+                                                    row.Type || row.type ||
+                                                    ''
+                                                ).trim();
+                                                const batchStr = (
+                                                    row.Batch || row.batch || 
+                                                    row['Batch Number'] || row['batch number'] || row['Batch number'] ||
+                                                    row.BatchNumber || row.batchNumber ||
+                                                    ''
+                                                ).trim();
+                                                const qtyStr = (
+                                                    row.Qty || row.qty || 
+                                                    row.Quantity || row.quantity || 
+                                                    ''
+                                                ).trim();
+                                                
+                                                const supplier = state.partners.find(p => 
+                                                    [PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER].includes(p.type) && (
+                                                        p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
+                                                        p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
+                                                    )
+                                                );
+                                                
+                                                let originalType = null;
+                                                if (supplier) {
+                                                    const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
+                                                    const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
+                                                    originalType = state.originalTypes.find(ot => 
+                                                        typeIdsFromPurchases.includes(ot.id) && (
+                                                            ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
+                                                            ot.name.toLowerCase().includes(typeIdentifier.toLowerCase()) ||
+                                                            ot.id.toLowerCase() === typeIdentifier.toLowerCase()
+                                                        )
+                                                    );
+                                                }
+                                                
+                                                const isValid = supplier && originalType && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
+                                                
+                                                return (
+                                                    <tr key={index} className={isValid ? 'bg-emerald-50/30' : 'bg-red-50/30'}>
+                                                        <td className="px-4 py-2 font-mono text-xs text-slate-500">{index + 1}</td>
+                                                        <td className="px-4 py-2 font-medium">{supplierIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
+                                                        <td className="px-4 py-2">{typeIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
+                                                        <td className="px-4 py-2">{batchStr || <span className="text-slate-400 italic">-</span>}</td>
+                                                        <td className="px-4 py-2">{qtyStr || <span className="text-red-600 italic">Missing</span>}</td>
+                                                        <td className="px-4 py-2">
+                                                            {supplier && originalType ? (
+                                                                <span className="text-emerald-700 font-medium text-xs">{supplier.name} - {originalType.name}</span>
+                                                            ) : (
+                                                                <span className="text-red-600 italic text-xs">
+                                                                    {!supplier ? 'Supplier not found' : 'Type not found for supplier'}
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-2 text-center">
+                                                            {isValid ? (
+                                                                <CheckCircle className="text-emerald-600 mx-auto" size={18} />
+                                                            ) : (
+                                                                <AlertCircle className="text-red-600 mx-auto" size={18} />
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                            <button
+                                onClick={() => { setShowOoCsvModal(false); setOoCsvPreview([]); setOoCsvErrors([]); }}
+                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={processOoCsvOpening}
+                                disabled={ooCsvProcessing || ooCsvPreview.length === 0}
+                                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                {ooCsvProcessing ? (
+                                    <>
+                                        <RefreshCw className="animate-spin" size={16} />
+                                        Processing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload size={16} />
+                                        Process & Add to List ({ooCsvPreview.filter((row: any) => {
+                                            const supplierIdentifier = (
+                                                row.Supplier || row.supplier || 
+                                                row['Supplier'] || row['supplier'] ||
+                                                row.SupplierName || row.supplierName ||
+                                                ''
+                                            ).trim();
+                                            const typeIdentifier = (
+                                                row['Original Type'] || row['original type'] || row['Original type'] ||
+                                                row.OriginalType || row.originalType ||
+                                                row.Type || row.type ||
+                                                ''
+                                            ).trim();
+                                            const qtyStr = (
+                                                row.Qty || row.qty || 
+                                                row.Quantity || row.quantity || 
+                                                ''
+                                            ).trim();
+                                            
+                                            const supplier = state.partners.find(p => 
+                                                [PartnerType.SUB_SUPPLIER, PartnerType.SUPPLIER].includes(p.type) && (
+                                                    p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
+                                                    p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
+                                                )
+                                            );
+                                            
+                                            let originalType = null;
+                                            if (supplier) {
+                                                const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
+                                                const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
+                                                originalType = state.originalTypes.find(ot => 
+                                                    typeIdsFromPurchases.includes(ot.id) && (
+                                                        ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
+                                                        ot.name.toLowerCase().includes(typeIdentifier.toLowerCase())
+                                                    )
+                                                );
+                                            }
+                                            
+                                            return supplier && originalType && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
+                                        }).length} items)
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
-            
