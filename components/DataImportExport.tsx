@@ -3,7 +3,8 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
 import Papa from 'papaparse';
-// Removed unused Firebase batch imports - now using proper add functions
+import { collection, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../services/firebase';
 
 type ImportableEntity = 
     | 'items' 
@@ -137,20 +138,103 @@ export const DataImportExport: React.FC = () => {
                 return;
             }
 
-            // Use proper add functions instead of direct Firebase writes
-            for (let index = 0; index < parsedData.length; index++) {
-                const row = parsedData[index];
-                try {
-                    // Basic validation - name is required, id can be auto-generated
+            // Special handling for large item imports - use batch writes
+            if (selectedEntity === 'items' && parsedData.length > 100) {
+                // Batch import for large item lists (1500+ items)
+                const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
+                const validItems: any[] = [];
+                
+                // Validate and prepare all items first
+                for (let index = 0; index < parsedData.length; index++) {
+                    const row = parsedData[index];
                     if (!row.name) {
                         errors.push(`Row ${index + 2}: Missing required field 'name'`);
                         continue;
                     }
-
-                    // Entity-specific validation and transformation
+                    
+                    const openingStock = parseFloat(row.openingStock) || 0;
+                    const item = {
+                        id: row.id || `ITEM-${Date.now()}-${index}`,
+                        code: row.code || row.id || `ITEM-${Date.now()}-${index}`,
+                        name: row.name,
+                        category: row.category || '',
+                        section: row.section || '',
+                        packingType: row.packingType || 'Kg',
+                        weightPerUnit: parseFloat(row.weightPerUnit) || 0,
+                        avgCost: parseFloat(row.avgCost) || 0,
+                        salePrice: parseFloat(row.salePrice) || 0,
+                        stockQty: parseFloat(row.stockQty) || 0,
+                        openingStock: openingStock,
+                        nextSerial: openingStock + 1,
+                        factoryId: currentFactory?.id || ''
+                    };
+                    validItems.push(item);
+                }
+                
+                // Process in batches with delays to avoid rate limiting
+                for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchItems = validItems.slice(i, i + BATCH_SIZE);
+                    
+                    for (const item of batchItems) {
+                        // Prepare for batch write - use item's ID as document ID if provided
+                        const { id, ...itemData } = item;
+                        const itemRef = id 
+                            ? doc(db, 'items', id)  // Use item's ID as document ID
+                            : doc(collection(db, 'items'));  // Auto-generate if no ID
+                        batch.set(itemRef, {
+                            ...itemData,
+                            createdAt: serverTimestamp()
+                        });
+                    }
+                    
+                    // Commit batch with error handling
                     try {
-                        switch (selectedEntity) {
+                        await batch.commit();
+                        
+                        // After successful batch commit, add to local state and handle opening stock ledger entries
+                        for (const item of batchItems) {
+                            // Use addItem with skipFirebase=true to update local state and handle opening stock
+                            // Firebase already saved via batch, so skip duplicate save
+                            addItem(item, item.openingStock, true);
+                        }
+                        
+                        successCount += batchItems.length;
+                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validItems.length / BATCH_SIZE)} saved: ${batchItems.length} items to Firebase`);
+                        
+                        // Small delay between batches to avoid rate limiting
+                        if (i + BATCH_SIZE < validItems.length) {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                    } catch (batchError: any) {
+                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchItems.length + 1}) failed: ${batchError.message}`);
+                    }
+                }
+            }
+            
+            if (selectedEntity !== 'items' || parsedData.length <= 100) {
+                // Use proper add functions for smaller imports or other entities
+                for (let index = 0; index < parsedData.length; index++) {
+                    const row = parsedData[index];
+                    try {
+                        // Basic validation - name is required, id can be auto-generated
+                        if (!row.name) {
+                            errors.push(`Row ${index + 2}: Missing required field 'name'`);
+                            continue;
+                        }
+
+                        // Entity-specific validation and transformation
+                        try {
+                            switch (selectedEntity) {
                             case 'items': {
+                                // For large imports (>100 items), use batch processing
+                                if (parsedData.length > 100) {
+                                    // This will be handled in the batch section above
+                                    // Skip individual processing
+                                    break;
+                                }
+                                
                                 const openingStock = parseFloat(row.openingStock) || 0;
                                 const item = {
                                     id: row.id,
@@ -462,11 +546,12 @@ export const DataImportExport: React.FC = () => {
                             default:
                                 errors.push(`Row ${index + 2}: Unknown entity type ${selectedEntity}`);
                         }
-                    } catch (entityErr) {
-                        errors.push(`Row ${index + 2}: ${entityErr instanceof Error ? entityErr.message : 'Unknown error'}`);
+                        } catch (entityErr) {
+                            errors.push(`Row ${index + 2}: ${entityErr instanceof Error ? entityErr.message : 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        errors.push(`Row ${index + 2}: ${err instanceof Error ? err.message : 'Unknown error'}`);
                     }
-                } catch (err) {
-                    errors.push(`Row ${index + 2}: ${err instanceof Error ? err.message : 'Unknown error'}`);
                 }
             }
 

@@ -461,7 +461,7 @@ interface DataContextType {
     postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => void;
     deleteTransaction: (transactionId: string, reason?: string, user?: string) => void;
     addPartner: (partner: Partner) => void;
-    addItem: (item: Item, openingStock?: number) => void;
+    addItem: (item: Item, openingStock?: number, skipFirebase?: boolean) => void;
     addAccount: (account: Account) => Promise<void>;
     addDivision: (division: Division) => void;
     addSubDivision: (subDivision: SubDivision) => void;
@@ -1349,8 +1349,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 alert('Failed to save partner: ' + error.message);
             });
     };
-    const addItem = (item: Item, openingStock: number = 0) => {
-                // Post ledger entries for opening stock if present
+    const addItem = (item: Item, openingStock: number = 0, skipFirebase: boolean = false) => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded && !skipFirebase) {
+            console.warn('⚠️ Firebase not loaded, item not saved to database');
+            dispatch({ type: 'ADD_ITEM', payload: { ...item, stockQty: openingStock, nextSerial: openingStock + 1 } });
+            return;
+        }
+        
+        // Post ledger entries for opening stock if present
         if (openingStock > 0 && item.avgCost > 0) {
             const prevYear = new Date().getFullYear() - 1;
             const date = `${prevYear}-12-31`;
@@ -1398,11 +1405,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         dispatch({ type: 'ADD_ITEM', payload: itemWithStock });
         
-        // Save to Firebase (remove id field)
-        const { id: _, ...itemData } = itemWithStock;
-        addDoc(collection(db, 'items'), { ...itemData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Item saved to Firebase'))
-            .catch((error) => console.error('❌ Error saving item:', error));
+        // Save to Firebase (remove id field) - skip if already saved via batch
+        if (!skipFirebase) {
+            const { id: _, ...itemData } = itemWithStock;
+            addDoc(collection(db, 'items'), { ...itemData, createdAt: serverTimestamp() })
+                .then(() => console.log('✅ Item saved to Firebase'))
+                .catch((error) => console.error('❌ Error saving item:', error));
+        }
            // Do NOT post duplicate ledger entries for opening stock here
     };
 
