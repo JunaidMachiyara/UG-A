@@ -1,12 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Factory } from '../types';
+import { Factory, UserRole } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Building2, Plus, Edit2, Save, X, CheckCircle, XCircle } from 'lucide-react';
 import { collection, addDoc, updateDoc, doc, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
 export const FactoryManagement: React.FC = () => {
-    const { refreshFactories } = useAuth();
+    const { refreshFactories, currentUser } = useAuth();
+    
+    // Security: Only Super Admin can access this page
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+        return (
+            <div className="flex flex-col items-center justify-center h-96 text-red-600">
+                <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+                <p>Only Super Administrators can access Factory Management.</p>
+            </div>
+        );
+    }
     const [factories, setFactories] = useState<Factory[]>([]);
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);

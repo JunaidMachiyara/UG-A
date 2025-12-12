@@ -340,6 +340,7 @@ const HRModule: React.FC = () => {
         title: 'Employee Register',
         entityKey: 'employees',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name', render: (r) => <div className="font-medium text-slate-800">{r.name}</div> },
             { header: 'Passport', key: 'passportNumber' },
             { header: 'Role', key: 'role', render: (r) => r.role || '-' },
@@ -347,6 +348,29 @@ const HRModule: React.FC = () => {
             { header: 'Status', key: 'status', render: (r) => <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{r.status || 'Active'}</span> },
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Employee ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., EMP-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^EMP-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'EMP';
+                    const existingIds = allData
+                        .map((e: any) => {
+                            const match = e.id?.match(/^EMP-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Full Name', type: 'text', required: true },
             { name: 'passportNumber', label: 'Passport Number', type: 'text', required: true },
             { name: 'role', label: 'Designation', type: 'text', required: false },
@@ -409,8 +433,6 @@ const HRModule: React.FC = () => {
 };
 
 const DataImporter: React.FC = () => {
-    const { cleanupOrphanedLedger } = useData();
-    
     return (
         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 mb-6 text-white shadow-lg">
             <div className="flex items-center gap-4">
@@ -422,16 +444,6 @@ const DataImporter: React.FC = () => {
                     <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import data or cleanup orphaned records.</p>
                 </div>
                 <div className="ml-auto flex gap-2">
-                    <button 
-                        onClick={() => {
-                            if (confirm('This will delete all ledger entries for purchases/invoices that no longer exist. Continue?')) {
-                                cleanupOrphanedLedger();
-                            }
-                        }}
-                        className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
-                    >
-                        <Trash2 size={16} /> Cleanup Ledger
-                    </button>
                     <button className="bg-white text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors">
                         <Upload size={16} /> Upload CSV
                     </button>
@@ -464,6 +476,7 @@ export const useSetupConfigs = () => {
         title: 'Business Partners',
         entityKey: 'partners',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type', render: (r) => <span className="text-xs font-mono bg-slate-100 px-1 rounded">{r.type}</span> },
             { header: 'Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || '-' },
@@ -472,6 +485,49 @@ export const useSetupConfigs = () => {
         ],
         fields: [
             { name: 'type', label: 'Partner Type', type: 'select', options: Object.values(PartnerType), required: true },
+            { 
+                name: 'id', 
+                label: 'Partner ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated based on type (e.g., SUP-1001, CUS-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    // Auto-generate ID based on partner type if not provided
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^(SUP|CUS|SUB|VEN|CLA|FFW|COM|PTN)-\d+$/)) {
+                        // User provided ID but not in standard format, allow manual override
+                        return formData.id;
+                    }
+                    
+                    if (!formData.type) return ''; // No type selected yet
+                    
+                    // Get prefix based on partner type
+                    let prefix = 'PTN'; // Default prefix
+                    switch(formData.type) {
+                        case PartnerType.SUPPLIER: prefix = 'SUP'; break;
+                        case PartnerType.CUSTOMER: prefix = 'CUS'; break;
+                        case PartnerType.SUB_SUPPLIER: prefix = 'SUB'; break;
+                        case PartnerType.VENDOR: prefix = 'VEN'; break;
+                        case PartnerType.CLEARING_AGENT: prefix = 'CLA'; break;
+                        case PartnerType.FREIGHT_FORWARDER: prefix = 'FFW'; break;
+                        case PartnerType.COMMISSION_AGENT: prefix = 'COM'; break;
+                    }
+                    
+                    // Find existing partners of same type to get next number
+                    const sameTypePartners = allData.filter((p: any) => p.type === formData.type);
+                    const existingIds = sameTypePartners
+                        .map((p: any) => {
+                            // Extract number from IDs like SUP-1001, CUS-1002, etc.
+                            const match = p.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Company Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
@@ -557,10 +613,34 @@ export const useSetupConfigs = () => {
         title: 'Divisions (Business Units)',
         entityKey: 'divisions',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location/HQ', key: 'location' }
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Division ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., DIV-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^DIV-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'DIV';
+                    const existingIds = allData
+                        .map((d: any) => {
+                            const match = d.id?.match(/^DIV-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Division Name', type: 'text', required: true },
             { name: 'location', label: 'Location/HQ', type: 'text', required: false }
         ],
@@ -572,10 +652,34 @@ export const useSetupConfigs = () => {
         title: 'Sub-Divisions',
         entityKey: 'subDivisions',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || r.divisionId }
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Sub-Division ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., SDIV-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^SDIV-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'SDIV';
+                    const existingIds = allData
+                        .map((sd: any) => {
+                            const match = sd.id?.match(/^SDIV-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Sub-Division Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
@@ -592,7 +696,10 @@ export const useSetupConfigs = () => {
     const logoConfig: CrudConfig = {
         title: 'Brand Logos',
         entityKey: 'logos',
-        columns: [ { header: 'Brand Name', key: 'name' } ],
+        columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Brand Name', key: 'name' }
+        ],
         fields: [ { name: 'name', label: 'Brand Name', type: 'text', required: true } ],
         onSave: (data) => addLogo(data),
         onDelete: (id) => deleteEntity('logos', id)
@@ -602,6 +709,7 @@ export const useSetupConfigs = () => {
         title: 'Inventory Items (Finished Goods)',
         entityKey: 'items',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Category', key: 'category' },
@@ -647,10 +755,34 @@ export const useSetupConfigs = () => {
         title: 'Warehouses',
         entityKey: 'warehouses',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location', key: 'location' }
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Warehouse ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., WH-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^WH-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'WH';
+                    const existingIds = allData
+                        .map((w: any) => {
+                            const match = w.id?.match(/^WH-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Warehouse Name', type: 'text', required: true },
             { name: 'location', label: 'Location/Address', type: 'text', required: false },
         ],
@@ -661,7 +793,10 @@ export const useSetupConfigs = () => {
     const categoryConfig: CrudConfig = {
         title: 'Product Categories',
         entityKey: 'categories',
-        columns: [{ header: 'Name', key: 'name' }],
+        columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Name', key: 'name' }
+        ],
         fields: [{ name: 'name', label: 'Category Name', type: 'text', required: true }],
         onSave: (data) => addCategory(data),
         onDelete: (id) => deleteEntity('categories', id)
@@ -670,7 +805,10 @@ export const useSetupConfigs = () => {
     const sectionConfig: CrudConfig = {
         title: 'Factory Sections',
         entityKey: 'sections',
-        columns: [{ header: 'Name', key: 'name' }],
+        columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Name', key: 'name' }
+        ],
         fields: [{ name: 'name', label: 'Section Name', type: 'text', required: true }],
         onSave: (data) => addSection(data),
         onDelete: (id) => deleteEntity('sections', id)
@@ -680,11 +818,35 @@ export const useSetupConfigs = () => {
         title: 'Original Types',
         entityKey: 'originalTypes',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Packing', key: 'packingType' },
             { header: 'Size (Kg)', key: 'packingSize' }
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Original Type ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., ORT-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^ORT-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'ORT';
+                    const existingIds = allData
+                        .map((ot: any) => {
+                            const match = ot.id?.match(/^ORT-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { name: 'name', label: 'Type Name (e.g. KSA Mix)', type: 'text', required: true },
             { name: 'packingType', label: 'Packing', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'packingSize', label: 'Standard Weight (Kg)', type: 'number', required: true }
@@ -697,10 +859,34 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
         fields: [
+            { 
+                name: 'id', 
+                label: 'Original Product ID', 
+                type: 'text', 
+                required: false,
+                placeholder: 'Auto-generated (e.g., ORP-1001)',
+                readOnly: true,
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^ORP-\d+$/)) {
+                        return formData.id;
+                    }
+                    const prefix = 'ORP';
+                    const existingIds = allData
+                        .map((op: any) => {
+                            const match = op.id?.match(/^ORP-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter(n => n > 0)
+                        .sort((a, b) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
             { 
                 name: 'originalTypeId', 
                 label: 'Original Type', 
@@ -825,7 +1011,7 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
                     {showForm && (
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Currency Code *</label>
                             <input
@@ -988,6 +1174,7 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
         title: 'Chart of Accounts',
         entityKey: 'accounts',
         columns: [
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type' },
@@ -1112,6 +1299,7 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                     <table className="w-full">
                         <thead className="bg-slate-50">
                             <tr>
+                                <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">ID</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Code</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Name</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Type</th>
@@ -1128,6 +1316,7 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                                 )
                                 .map((account) => (
                                 <tr key={account.id} className="hover:bg-slate-50">
+                                    <td className="px-4 py-2 font-mono text-xs text-slate-500">{account.id}</td>
                                     <td className="px-4 py-2 font-mono text-xs">{account.code}</td>
                                     <td className="px-4 py-2 text-sm">{account.name}</td>
                                     <td className="px-4 py-2 text-sm">{account.type}</td>
@@ -1185,7 +1374,7 @@ export const SetupModule: React.FC = () => {
         <div className="max-w-7xl mx-auto space-y-8">
             <DataImporter />
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 lg:gap-8">
                 <div className="space-y-6">
                     <div className="flex items-center gap-2 mb-2">
                         <Users className="text-slate-400" size={20} />

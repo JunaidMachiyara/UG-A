@@ -2,10 +2,11 @@
 
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { Layout } from './components/Layout';
 import { Login } from './components/Login';
+import { PermissionModule, UserRole } from './types';
 import { Dashboard } from './components/Dashboard';
 import { Accounting } from './components/Accounting';
 import { DataEntry } from './components/DataEntry';
@@ -86,36 +87,162 @@ const Placeholder = ({ title }: { title: string }) => (
     </div>
 );
 
+// Protected Route Component
+const ProtectedRoute: React.FC<{ 
+  module?: PermissionModule; 
+  action?: 'view' | 'create' | 'edit' | 'delete';
+  requireRole?: UserRole;
+  children: React.ReactNode;
+}> = ({ module, action = 'view', requireRole, children }) => {
+  const { hasPermission, currentUser } = useAuth();
+  
+  // Role-based access
+  if (requireRole && currentUser?.role !== requireRole) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-red-600">
+        <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+        <p>You don't have permission to access this page.</p>
+        <button onClick={() => window.history.back()} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg">
+          Go Back
+        </button>
+      </div>
+    );
+  }
+  
+  // Permission-based access
+  if (module && !hasPermission(module, action)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-red-600">
+        <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+        <p>You don't have permission to access this page.</p>
+        <button onClick={() => window.history.back()} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg">
+          Go Back
+        </button>
+      </div>
+    );
+  }
+  
+  return <>{children}</>;
+};
+
 // Protected Route Wrapper
 const ProtectedRoutes: React.FC = () => {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/accounting" element={<Accounting />} />
-        <Route path="/entry" element={<DataEntry />} />
-        <Route path="/production" element={<DataEntry />} />
-        <Route path="/offloading" element={<ContainerOffloading />} />
-        <Route path="/posting" element={<PostingModule />} />
+        <Route path="/" element={
+          <ProtectedRoute module={PermissionModule.DASHBOARD}>
+            <Dashboard />
+          </ProtectedRoute>
+        } />
+        <Route path="/accounting" element={
+          <ProtectedRoute module={PermissionModule.ACCOUNTING}>
+            <Accounting />
+          </ProtectedRoute>
+        } />
+        <Route path="/entry" element={
+          <ProtectedRoute module={PermissionModule.DATA_ENTRY}>
+            <DataEntry />
+          </ProtectedRoute>
+        } />
+        <Route path="/production" element={
+          <ProtectedRoute module={PermissionModule.PRODUCTION}>
+            <DataEntry />
+          </ProtectedRoute>
+        } />
+        <Route path="/offloading" element={
+          <ProtectedRoute module={PermissionModule.OFFLOADING}>
+            <ContainerOffloading />
+          </ProtectedRoute>
+        } />
+        <Route path="/posting" element={
+          <ProtectedRoute module={PermissionModule.POSTING}>
+            <PostingModule />
+          </ProtectedRoute>
+        } />
         
-        <Route path="/logistics" element={<LogisticsModule />} />
-        <Route path="/customs" element={<CustomsModule />} />
-        <Route path="/hr" element={<HRModule />} />
-        <Route path="/chat" element={<ChatModule />} />
-        <Route path="/setup" element={<SetupModule />} />
+        <Route path="/logistics" element={
+          <ProtectedRoute module={PermissionModule.LOGISTICS}>
+            <LogisticsModule />
+          </ProtectedRoute>
+        } />
+        <Route path="/customs" element={
+          <ProtectedRoute module={PermissionModule.CUSTOMS}>
+            <CustomsModule />
+          </ProtectedRoute>
+        } />
+        <Route path="/hr" element={
+          <ProtectedRoute module={PermissionModule.HR}>
+            <HRModule />
+          </ProtectedRoute>
+        } />
+        <Route path="/chat" element={
+          <ProtectedRoute module={PermissionModule.CHAT}>
+            <ChatModule />
+          </ProtectedRoute>
+        } />
+        <Route path="/setup" element={
+          <ProtectedRoute module={PermissionModule.SETUP}>
+            <SetupModule />
+          </ProtectedRoute>
+        } />
         
-        <Route path="/reports" element={<ReportsModuleV2 />} />
-        <Route path="/reports/original-stock" element={<OriginalStockReport />} />
-        <Route path="/reports/item-performance" element={<ItemPerformanceReport />} />
-        <Route path="/reports/order-fulfillment" element={<OrderFulfillmentDashboard />} />
+        <Route path="/reports" element={
+          <ProtectedRoute module={PermissionModule.REPORTS}>
+            <ReportsModuleV2 />
+          </ProtectedRoute>
+        } />
+        <Route path="/reports/original-stock" element={
+          <ProtectedRoute module={PermissionModule.REPORTS}>
+            <OriginalStockReport />
+          </ProtectedRoute>
+        } />
+        <Route path="/reports/item-performance" element={
+          <ProtectedRoute module={PermissionModule.REPORTS}>
+            <ItemPerformanceReport />
+          </ProtectedRoute>
+        } />
+        <Route path="/reports/order-fulfillment" element={
+          <ProtectedRoute module={PermissionModule.REPORTS}>
+            <OrderFulfillmentDashboard />
+          </ProtectedRoute>
+        } />
         
-        <Route path="/admin" element={<AdminModule />} />
-        <Route path="/admin/factories" element={<FactoryManagement />} />
-        <Route path="/admin/users" element={<UserManagement />} />
-        <Route path="/admin/migration" element={<FactoryDataMigration />} />
-        <Route path="/db-setup" element={<DatabaseSetup />} />
-        <Route path="/import-export" element={<DataImportExport />} />
-        <Route path="/csv-validator" element={<CSVValidator />} />
+        <Route path="/admin" element={
+          <ProtectedRoute module={PermissionModule.ADMIN}>
+            <AdminModule />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/factories" element={
+          <ProtectedRoute requireRole={UserRole.SUPER_ADMIN}>
+            <FactoryManagement />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/users" element={
+          <ProtectedRoute requireRole={UserRole.SUPER_ADMIN}>
+            <UserManagement />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/migration" element={
+          <ProtectedRoute requireRole={UserRole.SUPER_ADMIN}>
+            <FactoryDataMigration />
+          </ProtectedRoute>
+        } />
+        <Route path="/db-setup" element={
+          <ProtectedRoute requireRole={UserRole.SUPER_ADMIN}>
+            <DatabaseSetup />
+          </ProtectedRoute>
+        } />
+        <Route path="/import-export" element={
+          <ProtectedRoute module={PermissionModule.SETUP}>
+            <DataImportExport />
+          </ProtectedRoute>
+        } />
+        <Route path="/csv-validator" element={
+          <ProtectedRoute module={PermissionModule.SETUP}>
+            <CSVValidator />
+          </ProtectedRoute>
+        } />
         
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -167,8 +294,6 @@ const AppRouter: React.FC = () => {
   );
 };
 
-// Import useAuth after AuthProvider is defined
-import { useAuth } from './context/AuthContext';
 
 export default App;
 

@@ -357,101 +357,10 @@ export const AdminModule: React.FC = () => {
                 </div>
             </div>
 
-            {/* Reset Options */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Transaction Reset */}
-                <div className="bg-white rounded-lg border-2 border-orange-200 overflow-hidden">
-                    <div className="bg-orange-50 px-6 py-4 border-b border-orange-200">
-                        <div className="flex items-center gap-3">
-                            <Trash2 className="text-orange-600" size={24} />
-                            <div>
-                                <h3 className="font-bold text-orange-900">Transaction Reset</h3>
-                                <p className="text-xs text-orange-700">Keeps setup data intact</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="p-6">
-                        <div className="mb-4">
-                            <h4 className="font-semibold text-slate-800 mb-2">This will DELETE:</h4>
-                            <ul className="text-sm text-slate-600 space-y-1 ml-4">
-                                <li>• All Ledger Entries (Journal, Payments, etc.)</li>
-                                <li>• All Sales & Purchase Invoices</li>
-                                <li>• All Production Records</li>
-                                <li>• All Stock Movement Records</li>
-                                <li>• All Order History</li>
-                                <li>• All Attendance & Payroll Records</li>
-                            </ul>
-                        </div>
-                        <div className="mb-4">
-                            <h4 className="font-semibold text-emerald-700 mb-2">This will KEEP:</h4>
-                            <ul className="text-sm text-emerald-600 space-y-1 ml-4">
-                                <li>✓ Chart of Accounts (Setup)</li>
-                                <li>✓ Items & Products (Setup)</li>
-                                <li>✓ Customers & Suppliers (Setup)</li>
-                                <li>✓ Categories & Divisions (Setup)</li>
-                                <li>✓ Employees & Vehicles (Setup)</li>
-                            </ul>
-                        </div>
-                        <button
-                            onClick={() => handleResetRequest('transactions')}
-                            className="w-full px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-bold flex items-center justify-center gap-2"
-                        >
-                            <Trash2 size={20} />
-                            Reset Transactions Only
-                        </button>
-                    </div>
-                </div>
-
-                {/* Complete Reset */}
-                <div className="bg-white rounded-lg border-2 border-red-300 overflow-hidden">
-                    <div className="bg-red-50 px-6 py-4 border-b border-red-200">
-                        <div className="flex items-center gap-3">
-                            <AlertTriangle className="text-red-600" size={24} />
-                            <div>
-                                <h3 className="font-bold text-red-900">Complete Hard Reset</h3>
-                                <p className="text-xs text-red-700">⚠️ Nuclear option - Deletes EVERYTHING</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="p-6">
-                        <div className="mb-4">
-                            <h4 className="font-semibold text-red-800 mb-2">This will DELETE EVERYTHING:</h4>
-                            <ul className="text-sm text-red-600 space-y-1 ml-4">
-                                <li>• All Transactions (as above)</li>
-                                <li className="font-bold">• All Items & Products</li>
-                                <li className="font-bold">• All Customers & Suppliers</li>
-                                <li className="font-bold">• Chart of Accounts</li>
-                                <li className="font-bold">• All Categories & Sections</li>
-                                <li className="font-bold">• All Setup Data</li>
-                            </ul>
-                        </div>
-                        <div className="bg-red-100 border border-red-300 rounded-lg p-3 mb-4">
-                            <p className="text-xs text-red-800 font-semibold">
-                                ⚠️ This returns database to factory state. Use only if starting completely fresh.
-                            </p>
-                        </div>
-                        <button
-                            onClick={() => handleResetRequest('complete')}
-                            className="w-full px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold flex items-center justify-center gap-2"
-                        >
-                            <AlertTriangle size={20} />
-                            Complete Hard Reset
-                        </button>
-                        <button
-                            onClick={() => handleResetRequest('factory')}
-                            className="w-full mt-3 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold flex items-center justify-center gap-2"
-                        >
-                            <AlertTriangle size={20} />
-                            Factory Hard Reset (Current Only)
-                        </button>
-                    </div>
-                </div>
-            </div>
-
             {/* Confirmation Modal */}
             {showConfirmModal && (
-                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full animate-in zoom-in-95">
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-none sm:rounded-xl shadow-2xl max-w-lg w-full h-full sm:h-auto sm:max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
                         <div className={`px-6 py-4 border-b ${
                             resetType === 'complete' 
                                 ? 'bg-red-50 border-red-200' 

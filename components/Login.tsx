@@ -33,9 +33,23 @@ export const Login: React.FC = () => {
                 {/* Header */}
                 <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-8 text-white">
                     <div className="flex items-center justify-center mb-4">
-                        <div className="bg-white/20 p-4 rounded-full backdrop-blur-sm">
-                            <LogIn size={48} />
-                        </div>
+                        <img 
+                            src="/logo.jpg" 
+                            alt="Usman Global Logo" 
+                            className="h-20 w-20 object-contain rounded-lg bg-white/10 p-2"
+                            onError={(e) => {
+                                // Fallback if image doesn't load - show icon instead
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                const parent = target.parentElement;
+                                if (parent && !parent.querySelector('.fallback-icon')) {
+                                    const icon = document.createElement('div');
+                                    icon.className = 'fallback-icon bg-white/20 p-4 rounded-full backdrop-blur-sm';
+                                    icon.innerHTML = '<svg class="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>';
+                                    parent.appendChild(icon);
+                                }
+                            }}
+                        />
                     </div>
                     <h1 className="text-3xl font-bold text-center">Usman Global</h1>
                     <p className="text-center text-indigo-100 mt-2">Inventory & ERP System</p>

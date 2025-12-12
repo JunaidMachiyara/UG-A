@@ -3,9 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
 import Papa from 'papaparse';
-import { collection, writeBatch, doc } from 'firebase/firestore';
-import { db } from '../services/firebase';
-import { getAccountId } from '../services/accountMap';
+// Removed unused Firebase batch imports - now using proper add functions
 
 type ImportableEntity = 
     | 'items' 
@@ -30,36 +28,62 @@ const CSV_TEMPLATES = {
     ],
     partners: [
         ['id', 'name', 'type', 'country', 'defaultCurrency', 'balance', 'divisionId', 'subDivisionId'],
-        ['partner-001', 'ABC Textiles', 'CUSTOMER', 'USA', 'USD', '5000', 'div-1', 'subdiv-1']
+        ['', 'ABC Textiles', 'CUSTOMER', 'USA', 'USD', '5000', 'div-1', 'subdiv-1'],
+        ['', 'XYZ Suppliers', 'SUPPLIER', 'UAE', 'AED', '0', 'div-1', '']
     ],
     accounts: [
         ['id', 'name', 'type', 'balance', 'description'],
         ['acc-001', 'Office Rent', 'EXPENSE', '0', 'Monthly office rent expenses']
     ],
     originalTypes: [
-        ['id', 'name', 'description'],
-        ['ot-001', 'Raw Cotton', 'Unprocessed cotton material']
+        ['id', 'name', 'packingType', 'packingSize'],
+        ['ot-001', 'Raw Cotton', 'Bale', '45']
+    ],
+    originalProducts: [
+        ['id', 'name', 'originalTypeId'],
+        ['op-001', 'Mixed Rags', 'ot-001']
     ],
     categories: [
-        ['id', 'name', 'description'],
-        ['cat-001', 'Raw Materials', 'Unprocessed materials']
+        ['id', 'name'],
+        ['cat-001', 'Raw Materials']
     ],
     sections: [
-        ['id', 'name', 'description'],
-        ['sec-001', 'Section A', 'Primary section']
+        ['id', 'name'],
+        ['sec-001', 'Section A']
     ],
     divisions: [
-        ['id', 'name', 'description'],
-        ['div-001', 'Sales Division', 'Main sales department']
+        ['id', 'name', 'location'],
+        ['div-001', 'Sales Division', 'Dubai HQ']
     ],
     subDivisions: [
-        ['id', 'name', 'divisionId', 'description'],
-        ['subdiv-001', 'Export Sales', 'div-001', 'International sales']
+        ['id', 'name', 'divisionId'],
+        ['subdiv-001', 'Export Sales', 'div-001']
+    ],
+    logos: [
+        ['id', 'name'],
+        ['logo-001', 'Usman Global']
+    ],
+    warehouses: [
+        ['id', 'name', 'location'],
+        ['wh-001', 'Main Warehouse', 'Dubai']
     ]
 };
 
 export const DataImportExport: React.FC = () => {
-    const { state, addItem, addPartner, addAccount } = useData();
+    const { 
+        state, 
+        addItem, 
+        addPartner, 
+        addAccount,
+        addDivision,
+        addSubDivision,
+        addLogo,
+        addWarehouse,
+        addOriginalType,
+        addOriginalProduct,
+        addCategory,
+        addSection
+    } = useData();
     const { currentFactory } = useAuth();
     const [selectedEntity, setSelectedEntity] = useState<ImportableEntity>('items');
     const [parsedData, setParsedData] = useState<any[]>([]);
@@ -107,103 +131,346 @@ export const DataImportExport: React.FC = () => {
         let successCount = 0;
 
         try {
-            const batch = writeBatch(db);
-            const collectionName = selectedEntity;
-
             if (!currentFactory) {
                 alert('No factory selected. Please select a factory first.');
                 setImporting(false);
                 return;
             }
 
-            parsedData.forEach((row: any, index: number) => {
+            // Use proper add functions instead of direct Firebase writes
+            for (let index = 0; index < parsedData.length; index++) {
+                const row = parsedData[index];
                 try {
-                    // Basic validation
-                    if (!row.id || !row.name) {
-                        errors.push(`Row ${index + 1}: Missing required fields (id, name)`);
-                        return;
+                    // Basic validation - name is required, id can be auto-generated
+                    if (!row.name) {
+                        errors.push(`Row ${index + 2}: Missing required field 'name'`);
+                        continue;
                     }
 
-                    // Entity-specific transformations
-                    let document: any = { ...row };
-                    if (selectedEntity === 'items') {
-                        document = {
-                            ...row,
-                            weightPerUnit: parseFloat(row.weightPerUnit) || 0,
-                            avgCost: parseFloat(row.avgCost) || 0,
-                            salePrice: parseFloat(row.salePrice) || 0,
-                            stockQty: parseFloat(row.stockQty) || 0,
-                            openingStock: parseFloat(row.openingStock) || 0,
-                            factoryId: currentFactory.id // Always add factoryId for items
-                        };
-                        // --- Ledger entry for opening stock ---
-                        if (document.openingStock > 0 && document.avgCost > 0) {
-                            const stockValue = document.openingStock * document.avgCost;
-                            const prevYear = new Date().getFullYear() - 1;
-                            const date = `${prevYear}-12-31`;
-                            // Use centralized account mapping
-                            const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
-                            const capitalId = getAccountId('301'); // Capital
-                            const entries = [
-                                {
-                                    date,
-                                    transactionId: `OB-STK-${document.id}`,
-                                    transactionType: 'OPENING_BALANCE',
-                                    accountId: finishedGoodsId,
-                                    accountName: 'Inventory - Finished Goods',
-                                    currency: 'USD',
-                                    exchangeRate: 1,
-                                    fcyAmount: stockValue,
-                                    debit: stockValue,
-                                    credit: 0,
-                                    narration: `Opening Stock - ${document.name}`,
-                                    factoryId: currentFactory.id
-                                },
-                                {
-                                    date,
-                                    transactionId: `OB-STK-${document.id}`,
-                                    transactionType: 'OPENING_BALANCE',
-                                    accountId: capitalId,
-                                    accountName: 'Capital',
-                                    currency: 'USD',
-                                    exchangeRate: 1,
-                                    fcyAmount: stockValue,
-                                    debit: 0,
-                                    credit: stockValue,
-                                    narration: `Opening Stock - ${document.name}`,
-                                    factoryId: currentFactory.id
+                    // Entity-specific validation and transformation
+                    try {
+                        switch (selectedEntity) {
+                            case 'items': {
+                                const openingStock = parseFloat(row.openingStock) || 0;
+                                const item = {
+                                    id: row.id,
+                                    code: row.code || row.id,
+                                    name: row.name,
+                                    category: row.category || '',
+                                    section: row.section || '',
+                                    packingType: row.packingType || 'Kg',
+                                    weightPerUnit: parseFloat(row.weightPerUnit) || 0,
+                                    avgCost: parseFloat(row.avgCost) || 0,
+                                    salePrice: parseFloat(row.salePrice) || 0,
+                                    stockQty: parseFloat(row.stockQty) || 0,
+                                    openingStock: openingStock,
+                                    nextSerial: 1
+                                };
+                                addItem(item, openingStock);
+                                successCount++;
+                                break;
+                            }
+                            case 'partners': {
+                                // Type is required
+                                if (!row.type) {
+                                    errors.push(`Row ${index + 2}: Partner missing required field 'type'`);
+                                    continue;
                                 }
-                            ];
-                            // Use addItem to trigger ledger logic if available
-                            if (typeof addItem === 'function') {
-                                addItem(document, document.openingStock);
+                                
+                                // Auto-generate ID if not provided
+                                let partnerId = row.id;
+                                if (!partnerId || partnerId.trim() === '') {
+                                    // Get prefix based on partner type
+                                    let prefix = 'PTN'; // Default prefix
+                                    switch(row.type) {
+                                        case 'SUPPLIER': prefix = 'SUP'; break;
+                                        case 'CUSTOMER': prefix = 'CUS'; break;
+                                        case 'SUB SUPPLIER': prefix = 'SUB'; break;
+                                        case 'VENDOR': prefix = 'VEN'; break;
+                                        case 'CLEARING AGENT': prefix = 'CLA'; break;
+                                        case 'FREIGHT FORWARDER': prefix = 'FFW'; break;
+                                        case 'COMMISSION AGENT': prefix = 'COM'; break;
+                                    }
+                                    
+                                    // Find existing partners of same type to get next number
+                                    const sameTypePartners = state.partners.filter((p: any) => p.type === row.type);
+                                    const existingIds = sameTypePartners
+                                        .map((p: any) => {
+                                            // Extract number from IDs like SUP-1001, CUS-1002, etc.
+                                            const match = p.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    
+                                    // Also check already processed rows in this import
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.type === row.type && r.id)
+                                        .map((r: any) => {
+                                            const match = r.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    partnerId = `${prefix}-${nextNumber}`;
+                                }
+                                
+                                const partner = {
+                                    id: partnerId,
+                                    name: row.name,
+                                    type: row.type,
+                                    balance: 0, // Will be set via opening balance if provided
+                                    defaultCurrency: row.defaultCurrency || 'USD',
+                                    contact: row.contact || '',
+                                    country: row.country || '',
+                                    phone: row.phone || '',
+                                    email: row.email || '',
+                                    divisionId: row.divisionId || undefined,
+                                    subDivisionId: row.subDivisionId || undefined,
+                                    creditLimit: row.creditLimit ? parseFloat(row.creditLimit) : undefined,
+                                    taxId: row.taxId || undefined,
+                                    commissionRate: row.commissionRate ? parseFloat(row.commissionRate) : undefined,
+                                    parentSupplier: row.parentSupplier || undefined,
+                                    licenseNumber: row.licenseNumber || undefined,
+                                    scacCode: row.scacCode || undefined
+                                };
+                                addPartner(partner);
+                                // Handle opening balance if provided
+                                if (row.balance && parseFloat(row.balance) !== 0) {
+                                    // Opening balance will be handled by addPartner function
+                                }
+                                successCount++;
+                                break;
                             }
-                            // Optionally, postTransaction directly if available
-                            if (typeof window !== 'undefined' && window.postTransaction) {
-                                window.postTransaction(entries);
+                            case 'accounts': {
+                                const account = {
+                                    id: row.id,
+                                    code: row.code || row.id,
+                                    name: row.name,
+                                    type: row.type,
+                                    balance: parseFloat(row.balance) || 0,
+                                    description: row.description || '',
+                                    currency: row.currency || 'USD'
+                                };
+                                await addAccount(account);
+                                successCount++;
+                                break;
                             }
+                            case 'divisions': {
+                                // Auto-generate ID if not provided
+                                let divisionId = row.id;
+                                if (!divisionId || divisionId.trim() === '') {
+                                    const prefix = 'DIV';
+                                    const existingIds = state.divisions
+                                        .map((d: any) => {
+                                            const match = d.id?.match(/^DIV-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.id && r.id.match(/^DIV-(\d+)$/))
+                                        .map((r: any) => {
+                                            const match = r.id.match(/^DIV-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    divisionId = `${prefix}-${nextNumber}`;
+                                }
+                                // Location is optional (can be blank)
+                                const division = {
+                                    id: divisionId,
+                                    name: row.name,
+                                    location: row.location || ''
+                                };
+                                addDivision(division);
+                                successCount++;
+                                break;
+                            }
+                            case 'subDivisions': {
+                                if (!row.divisionId) {
+                                    errors.push(`Row ${index + 2}: SubDivision missing required field 'divisionId'`);
+                                    continue;
+                                }
+                                // Auto-generate ID if not provided
+                                let subDivisionId = row.id;
+                                if (!subDivisionId || subDivisionId.trim() === '') {
+                                    const prefix = 'SDIV';
+                                    const existingIds = state.subDivisions
+                                        .map((sd: any) => {
+                                            const match = sd.id?.match(/^SDIV-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.id && r.id.match(/^SDIV-(\d+)$/))
+                                        .map((r: any) => {
+                                            const match = r.id.match(/^SDIV-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    subDivisionId = `${prefix}-${nextNumber}`;
+                                }
+                                const subDivision = {
+                                    id: subDivisionId,
+                                    name: row.name,
+                                    divisionId: row.divisionId
+                                };
+                                addSubDivision(subDivision);
+                                successCount++;
+                                break;
+                            }
+                            case 'originalTypes': {
+                                if (!row.packingType || !row.packingSize) {
+                                    errors.push(`Row ${index + 2}: OriginalType missing required fields (packingType, packingSize)`);
+                                    continue;
+                                }
+                                // Auto-generate ID if not provided
+                                let originalTypeId = row.id;
+                                if (!originalTypeId || originalTypeId.trim() === '') {
+                                    const prefix = 'ORT';
+                                    const existingIds = state.originalTypes
+                                        .map((ot: any) => {
+                                            const match = ot.id?.match(/^ORT-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.id && r.id.match(/^ORT-(\d+)$/))
+                                        .map((r: any) => {
+                                            const match = r.id.match(/^ORT-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    originalTypeId = `${prefix}-${nextNumber}`;
+                                }
+                                const originalType = {
+                                    id: originalTypeId,
+                                    name: row.name,
+                                    packingType: row.packingType,
+                                    packingSize: parseFloat(row.packingSize) || 0
+                                };
+                                addOriginalType(originalType);
+                                successCount++;
+                                break;
+                            }
+                            case 'originalProducts': {
+                                if (!row.originalTypeId) {
+                                    errors.push(`Row ${index + 2}: OriginalProduct missing required field 'originalTypeId'`);
+                                    continue;
+                                }
+                                // Auto-generate ID if not provided
+                                let originalProductId = row.id;
+                                if (!originalProductId || originalProductId.trim() === '') {
+                                    const prefix = 'ORP';
+                                    const existingIds = state.originalProducts
+                                        .map((op: any) => {
+                                            const match = op.id?.match(/^ORP-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.id && r.id.match(/^ORP-(\d+)$/))
+                                        .map((r: any) => {
+                                            const match = r.id.match(/^ORP-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    originalProductId = `${prefix}-${nextNumber}`;
+                                }
+                                const originalProduct = {
+                                    id: originalProductId,
+                                    name: row.name,
+                                    originalTypeId: row.originalTypeId
+                                };
+                                addOriginalProduct(originalProduct);
+                                successCount++;
+                                break;
+                            }
+                            case 'categories': {
+                                const category = {
+                                    id: row.id,
+                                    name: row.name
+                                };
+                                addCategory(category);
+                                successCount++;
+                                break;
+                            }
+                            case 'sections': {
+                                const section = {
+                                    id: row.id,
+                                    name: row.name
+                                };
+                                addSection(section);
+                                successCount++;
+                                break;
+                            }
+                            case 'logos': {
+                                const logo = {
+                                    id: row.id,
+                                    name: row.name
+                                };
+                                addLogo(logo);
+                                successCount++;
+                                break;
+                            }
+                            case 'warehouses': {
+                                // Auto-generate ID if not provided
+                                let warehouseId = row.id;
+                                if (!warehouseId || warehouseId.trim() === '') {
+                                    const prefix = 'WH';
+                                    const existingIds = state.warehouses
+                                        .map((w: any) => {
+                                            const match = w.id?.match(/^WH-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0)
+                                        .sort((a, b) => b - a);
+                                    const processedIds = parsedData.slice(0, index)
+                                        .filter((r: any) => r.id && r.id.match(/^WH-(\d+)$/))
+                                        .map((r: any) => {
+                                            const match = r.id.match(/^WH-(\d+)$/);
+                                            return match ? parseInt(match[1]) : 0;
+                                        })
+                                        .filter(n => n > 0);
+                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
+                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
+                                    warehouseId = `${prefix}-${nextNumber}`;
+                                }
+                                const warehouse = {
+                                    id: warehouseId,
+                                    name: row.name,
+                                    location: row.location || undefined
+                                };
+                                addWarehouse(warehouse);
+                                successCount++;
+                                break;
+                            }
+                            default:
+                                errors.push(`Row ${index + 2}: Unknown entity type ${selectedEntity}`);
                         }
-                    } else {
-                        document.factoryId = currentFactory.id;
-                        if (selectedEntity === 'partners') {
-                            document.balance = parseFloat(row.balance) || 0;
-                        } else if (selectedEntity === 'accounts') {
-                            document.balance = parseFloat(row.balance) || 0;
-                        }
+                    } catch (entityErr) {
+                        errors.push(`Row ${index + 2}: ${entityErr instanceof Error ? entityErr.message : 'Unknown error'}`);
                     }
-
-                    const docRef = doc(db, collectionName, row.id);
-                    batch.set(docRef, document);
-                    successCount++;
                 } catch (err) {
-                    errors.push(`Row ${index + 1}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                    errors.push(`Row ${index + 2}: ${err instanceof Error ? err.message : 'Unknown error'}`);
                 }
-            });
-
-            if (successCount > 0) {
-                await batch.commit();
-                console.log(`✅ Successfully imported ${successCount} ${selectedEntity}`);
             }
+
+            console.log(`✅ Successfully imported ${successCount} ${selectedEntity}`);
 
             setImportResult({
                 success: successCount,
@@ -257,10 +524,66 @@ export const DataImportExport: React.FC = () => {
             case 'accounts':
                 data = state.accounts.map(a => ({
                     id: a.id,
+                    code: a.code,
                     name: a.name,
                     type: a.type,
                     balance: a.balance,
-                    description: a.description || ''
+                    description: a.description || '',
+                    currency: a.currency || 'USD'
+                }));
+                break;
+            case 'divisions':
+                data = state.divisions.map(d => ({
+                    id: d.id,
+                    name: d.name,
+                    location: d.location || ''
+                }));
+                break;
+            case 'subDivisions':
+                data = state.subDivisions.map(sd => ({
+                    id: sd.id,
+                    name: sd.name,
+                    divisionId: sd.divisionId
+                }));
+                break;
+            case 'originalTypes':
+                data = state.originalTypes.map(ot => ({
+                    id: ot.id,
+                    name: ot.name,
+                    packingType: ot.packingType,
+                    packingSize: ot.packingSize
+                }));
+                break;
+            case 'originalProducts':
+                data = state.originalProducts.map(op => ({
+                    id: op.id,
+                    name: op.name,
+                    originalTypeId: op.originalTypeId
+                }));
+                break;
+            case 'categories':
+                data = state.categories.map(c => ({
+                    id: c.id,
+                    name: c.name
+                }));
+                break;
+            case 'sections':
+                data = state.sections.map(s => ({
+                    id: s.id,
+                    name: s.name
+                }));
+                break;
+            case 'logos':
+                data = state.logos.map(l => ({
+                    id: l.id,
+                    name: l.name
+                }));
+                break;
+            case 'warehouses':
+                data = state.warehouses.map(w => ({
+                    id: w.id,
+                    name: w.name,
+                    location: w.location || ''
                 }));
                 break;
             default:
@@ -348,6 +671,14 @@ export const DataImportExport: React.FC = () => {
                             selectedEntity === 'items' ? state.items.length :
                             selectedEntity === 'partners' ? state.partners.length :
                             selectedEntity === 'accounts' ? state.accounts.length :
+                            selectedEntity === 'divisions' ? state.divisions.length :
+                            selectedEntity === 'subDivisions' ? state.subDivisions.length :
+                            selectedEntity === 'originalTypes' ? state.originalTypes.length :
+                            selectedEntity === 'originalProducts' ? state.originalProducts.length :
+                            selectedEntity === 'categories' ? state.categories.length :
+                            selectedEntity === 'sections' ? state.sections.length :
+                            selectedEntity === 'logos' ? state.logos.length :
+                            selectedEntity === 'warehouses' ? state.warehouses.length :
                             '0'
                         } records) to CSV
                     </p>

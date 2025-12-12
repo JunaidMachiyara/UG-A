@@ -2011,14 +2011,14 @@ export const DataEntry: React.FC = () => {
     return (
         <div className="space-y-6">
             {/* Top Level Navigation Tabs */}
-            <div className="flex gap-4 mb-4 print:hidden">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 mb-4 print:hidden">
                 {[ { id: 'purchase', label: 'Purchases', icon: ShoppingCart }, { id: 'production', label: 'Production', icon: Factory }, { id: 'sales', label: 'Sales', icon: Truck } ].map((m) => (
                     <button
                         key={m.id}
                         onClick={() => { setActiveModule(m.id as ModuleType); setActiveSubModule(getSubModules(m.id as ModuleType)[0].id); }}
-                        className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all flex-1 justify-center border ${ activeModule === m.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border-slate-200' }`}
+                        className={`flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition-all flex-1 border text-sm sm:text-base ${ activeModule === m.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border-slate-200' }`}
                     >
-                        <m.icon size={20} /> {m.label}
+                        <m.icon size={18} className="sm:w-5 sm:h-5" /> <span className="hidden xs:inline">{m.label}</span>
                     </button>
                 ))}
             </div>
@@ -2036,7 +2036,7 @@ export const DataEntry: React.FC = () => {
                 ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
                 <div className="lg:col-span-12">
                     <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm min-h-[500px]">
                         <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4 print:hidden">
@@ -4028,8 +4028,8 @@ export const DataEntry: React.FC = () => {
 
             {/* CSV Preview Modal for Original Opening */}
             {showOoCsvModal && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-none sm:rounded-xl shadow-2xl max-w-4xl w-full h-full sm:h-auto sm:max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center">
                             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                                 <FileText className="text-green-500" /> CSV Preview - Entry Date: {ooDate}

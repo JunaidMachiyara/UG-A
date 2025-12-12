@@ -792,8 +792,8 @@ export const Accounting: React.FC = () => {
 
             {/* Auth Modal */}
             {authModalOpen && (
-                <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl p-6 w-96 animate-in zoom-in-95">
+                <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl p-4 sm:p-6 w-full max-w-sm animate-in zoom-in-95">
                         <div className="flex justify-between items-start mb-4">
                             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                                 <ShieldAlert className="text-red-600" /> Supervisor Access

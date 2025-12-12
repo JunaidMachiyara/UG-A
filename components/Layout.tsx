@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload, CheckSquare, LogOut, Building2, ChevronDown } from 'lucide-react';
+import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload, CheckSquare, LogOut, Building2, ChevronDown, Menu, X } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { UserRole, PermissionModule } from '../types';
@@ -29,6 +29,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     const { state, isFirestoreLoaded, firestoreStatus, firestoreError } = useData();
     const { currentUser, currentFactory, factories, logout, switchFactory, hasPermission } = useAuth();
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(false);
     
     // Calculate global unread chat messages
     const unreadCount = state.chatMessages.filter(m => !m.readBy.includes(CURRENT_USER.id)).length;
@@ -69,11 +70,40 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
     return (
         <div className="flex h-screen bg-slate-50 overflow-hidden">
+            {/* Mobile Overlay */}
+            {sidebarOpen && (
+                <div 
+                    className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                    onClick={() => setSidebarOpen(false)}
+                />
+            )}
+            
             {/* Sidebar */}
-            <aside className="w-64 bg-white border-r border-slate-200 flex flex-col">
-                <div className="p-6">
-                    <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-emerald-600 bg-clip-text text-transparent tracking-tight">Usman Global</h1>
-                    <p className="text-xs text-slate-500 mt-1">Inventory & ERP System</p>
+            <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out ${
+                sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+            }`}>
+                <div className="p-6 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <img 
+                            src="/logo.jpg" 
+                            alt="Usman Global Logo" 
+                            className="h-12 w-12 object-contain flex-shrink-0 rounded"
+                            onError={(e) => {
+                                // Fallback if image doesn't load - hide image
+                                (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                        />
+                        <div>
+                            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-emerald-600 bg-clip-text text-transparent tracking-tight">Usman Global</h1>
+                            <p className="text-xs text-slate-500 mt-0.5">Inventory & ERP System</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => setSidebarOpen(false)}
+                        className="lg:hidden p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                    >
+                        <X size={20} />
+                    </button>
                 </div>
                 <nav className="flex-1 px-3 py-2 overflow-y-auto">
                     <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-2">Main</div>
@@ -204,25 +234,33 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
             {/* Main Content */}
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
-                    <div className="flex items-center gap-4">
-                        <h2 className="text-lg font-semibold text-slate-800">Overview</h2>
+                <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 shadow-sm">
+                    <div className="flex items-center gap-2 md:gap-4">
+                        <button
+                            onClick={() => setSidebarOpen(true)}
+                            className="lg:hidden p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                        >
+                            <Menu size={20} />
+                        </button>
+                        <h2 className="text-base md:text-lg font-semibold text-slate-800">Overview</h2>
                         {currentFactory && (
-                            <div className="flex items-center gap-2 px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm font-medium">
-                                <Building2 size={16} />
-                                {currentFactory.code}
+                            <div className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs md:text-sm font-medium">
+                                <Building2 size={14} className="md:w-4 md:h-4" />
+                                <span className="hidden md:inline">{currentFactory.code}</span>
                             </div>
                         )}
                     </div>
-                    <div className="flex items-center gap-4">
-                        {getStatusIndicator()}
-                        <div className="h-4 w-px bg-slate-300"></div>
-                        <span className="text-sm text-slate-500">Cash: <span className="text-emerald-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Cash'))?.balance || 0).toLocaleString()}</span></span>
-                        <div className="h-4 w-px bg-slate-300"></div>
-                         <span className="text-sm text-slate-500">Bank: <span className="text-blue-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Bank'))?.balance || 0).toLocaleString()}</span></span>
+                    <div className="flex items-center gap-2 md:gap-4">
+                        <div className="hidden md:block">{getStatusIndicator()}</div>
+                        <div className="hidden lg:flex items-center gap-4">
+                            <div className="h-4 w-px bg-slate-300"></div>
+                            <span className="text-xs md:text-sm text-slate-500">Cash: <span className="text-emerald-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Cash'))?.balance || 0).toLocaleString()}</span></span>
+                            <div className="h-4 w-px bg-slate-300"></div>
+                            <span className="text-xs md:text-sm text-slate-500">Bank: <span className="text-blue-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Bank'))?.balance || 0).toLocaleString()}</span></span>
+                        </div>
                     </div>
                 </header>
-                <div className="flex-1 overflow-auto p-8">
+                <div className="flex-1 overflow-auto p-4 md:p-6 lg:p-8">
                     {children}
                 </div>
             </main>

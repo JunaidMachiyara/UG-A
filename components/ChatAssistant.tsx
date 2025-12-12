@@ -64,7 +64,7 @@ export const ChatAssistant: React.FC = () => {
 
             {/* Chat Window */}
             {isOpen && (
-                <div className="fixed bottom-6 right-6 w-96 h-[500px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col z-50 overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300">
+                <div className="fixed inset-0 sm:bottom-6 sm:right-6 sm:w-96 sm:h-[500px] w-full h-full sm:rounded-xl bg-white shadow-2xl border border-slate-200 flex flex-col z-50 overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300">
                     <div className="bg-slate-50 p-4 border-b border-slate-200 flex justify-between items-center">
                         <div className="flex items-center gap-2">
                             <Bot className="text-emerald-600" size={20} />

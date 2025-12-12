@@ -7,6 +7,16 @@ import { db } from '../services/firebase';
 
 export const UserManagement: React.FC = () => {
     const { currentUser } = useAuth();
+    
+    // Security: Only Super Admin can access this page
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+        return (
+            <div className="flex flex-col items-center justify-center h-96 text-red-600">
+                <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+                <p>Only Super Administrators can access User Management.</p>
+            </div>
+        );
+    }
     const [users, setUsers] = useState<User[]>([]);
     const [factories, setFactories] = useState<Factory[]>([]);
     const [showForm, setShowForm] = useState(false);

@@ -1008,6 +1008,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     
     const deleteTransaction = async (transactionId: string, reason?: string, user?: string) => {
+        // Get entries to archive before deletion
+        const entriesToArchive = state.ledger.filter(e => e.transactionId === transactionId);
+        
+        if (entriesToArchive.length === 0) {
+            console.warn(`⚠️ No ledger entries found for transaction ${transactionId}`);
+            return;
+        }
+        
+        // Create archive entry
+        const totalValue = entriesToArchive.reduce((sum, e) => sum + (e.debit > 0 ? e.debit : 0), 0);
+        const archiveEntry: ArchivedTransaction = {
+            id: generateId(),
+            originalTransactionId: transactionId,
+            deletedAt: new Date().toISOString(),
+            deletedBy: user || 'Unknown',
+            reason: reason || 'Deletion',
+            entries: entriesToArchive,
+            totalValue
+        };
+        
+        // Save archive to Firebase BEFORE deleting
+        try {
+            const archiveData = {
+                ...archiveEntry,
+                factoryId: currentFactory?.id || '',
+                createdAt: serverTimestamp()
+            };
+            await addDoc(collection(db, 'archive'), archiveData);
+            console.log(`📦 Archived transaction ${transactionId} to Firebase`);
+        } catch (error) {
+            console.error(`❌ Error archiving transaction ${transactionId}:`, error);
+        }
+        
         // Delete from state
         dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
         
@@ -2221,23 +2254,59 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             deleteTransaction(transactionId, `${type} deleted`, CURRENT_USER?.name || 'System');
         }
         
-        dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
-        // Delete from Firebase
-        deleteDoc(doc(db, type, id))
-            .then(() => {
-                console.log(`✅ Deleted ${type}/${id} from Firebase`);
-                // Auto-refresh to update balances for financial transactions
-                if (type === 'purchases' || type === 'salesInvoices' || 
-                    type === 'paymentVouchers' || type === 'receiptVouchers' || 
-                    type === 'expenseVouchers' || type === 'journalVouchers') {
-                    console.log('🔄 Refreshing page to update Balance Sheet...');
-                    setTimeout(() => window.location.reload(), 500);
-                }
-            })
-            .catch((error) => {
-                console.error(`❌ Error deleting ${type}/${id}:`, error);
-                console.error('Full error:', error);
-            });
+        // Archive invoices and purchases instead of deleting them
+        if (type === 'salesInvoices' || type === 'purchases') {
+            const entity = type === 'salesInvoices' 
+                ? state.salesInvoices.find((inv: any) => inv.id === id)
+                : state.purchases.find((pur: any) => pur.id === id);
+            
+            if (entity) {
+                // Archive the document
+                const archiveData = {
+                    ...entity,
+                    archivedAt: serverTimestamp(),
+                    archivedBy: CURRENT_USER?.name || 'System',
+                    originalId: id,
+                    originalType: type
+                };
+                
+                addDoc(collection(db, 'archive'), archiveData)
+                    .then(() => {
+                        console.log(`📦 Archived ${type}/${id} to Firebase archive`);
+                        // Then delete from original collection
+                        deleteDoc(doc(db, type, id))
+                            .then(() => {
+                                console.log(`✅ Deleted ${type}/${id} from Firebase (archived)`);
+                                dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+                                // Auto-refresh to update balances
+                                console.log('🔄 Refreshing page to update Balance Sheet...');
+                                setTimeout(() => window.location.reload(), 500);
+                            })
+                            .catch((error) => {
+                                console.error(`❌ Error deleting ${type}/${id}:`, error);
+                            });
+                    })
+                    .catch((error) => {
+                        console.error(`❌ Error archiving ${type}/${id}:`, error);
+                        // Still delete from state even if archive fails
+                        dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+                    });
+            } else {
+                // Entity not found, just delete from state
+                dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+            }
+        } else {
+            // For other entities, delete normally (no archive needed)
+            dispatch({ type: 'DELETE_ENTITY', payload: { type, id } });
+            // Delete from Firebase
+            deleteDoc(doc(db, type, id))
+                .then(() => {
+                    console.log(`✅ Deleted ${type}/${id} from Firebase`);
+                })
+                .catch((error) => {
+                    console.error(`❌ Error deleting ${type}/${id}:`, error);
+                });
+        }
     };
     const updateStock = (itemId: string, qtyChange: number) => dispatch({ type: 'UPDATE_STOCK', payload: { itemId, qtyChange } });
     const addPlannerEntry = (entry: PlannerEntry) => dispatch({ type: 'ADD_PLANNER_ENTRY', payload: entry });

@@ -106,8 +106,8 @@ export const HRModule: React.FC = () => {
                 </div>
 
                 {isModalOpen && (
-                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-0 sm:p-4">
+                        <div className="bg-white rounded-none sm:rounded-xl shadow-2xl w-full h-full sm:h-auto sm:max-w-4xl sm:max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
                             <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50">
                                 <h3 className="text-lg font-bold text-slate-800">{editId ? 'Edit Employee' : 'New Employee'}</h3>
                                 <button onClick={() => setIsModalOpen(false)}><X size={20} className="text-slate-400" /></button>
