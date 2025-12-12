@@ -1,8 +1,9 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ComposedChart, Treemap, Funnel, FunnelChart, LabelList } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
 import { AccountType } from '../types';
 
@@ -58,6 +59,37 @@ const AnimatedPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent,
         >
             {`${(percent * 100).toFixed(0)}%`}
         </text>
+    );
+};
+
+// Mobile Stat Card Component
+const MobileStatCard = ({ title, value, icon: Icon, accentColor }: { title: string, value: string, icon: any, accentColor: 'blue' | 'green' | 'orange' | 'red' | 'yellow' | 'purple' }) => {
+    const colorClasses = {
+        blue: 'border-l-blue-500 bg-blue-50',
+        green: 'border-l-green-500 bg-green-50',
+        orange: 'border-l-orange-500 bg-orange-50',
+        red: 'border-l-red-500 bg-red-50',
+        yellow: 'border-l-yellow-500 bg-yellow-50',
+        purple: 'border-l-purple-500 bg-purple-50'
+    };
+    
+    const iconColors = {
+        blue: 'text-blue-600',
+        green: 'text-green-600',
+        orange: 'text-orange-600',
+        red: 'text-red-600',
+        yellow: 'text-yellow-600',
+        purple: 'text-purple-600'
+    };
+    
+    return (
+        <div className={`bg-white p-4 rounded-lg border-l-4 ${colorClasses[accentColor]} shadow-sm`}>
+            <div className="flex items-center gap-3 mb-2">
+                <Icon size={20} className={iconColors[accentColor]} />
+                <p className="text-xs font-semibold text-slate-600">{title}</p>
+            </div>
+            <p className="text-xl font-bold text-slate-900">{value}</p>
+        </div>
     );
 };
 
@@ -194,6 +226,7 @@ const YieldWidget = () => {
 
 export const Dashboard: React.FC = () => {
     const { state } = useData();
+    const navigate = useNavigate();
     const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('7days');
     const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.25);
 
@@ -437,10 +470,43 @@ export const Dashboard: React.FC = () => {
 
     const COLORS = [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.accent, CHART_COLORS.danger, '#f59e0b'];
 
+    // Calculate key metrics for mobile dashboard
+    const dashboardMetrics = useMemo(() => {
+        const totalCustomers = state.partners.filter(p => p.type === 'CUSTOMER').length;
+        const totalSuppliers = state.partners.filter(p => p.type === 'SUPPLIER').length;
+        const totalItems = state.items.length;
+        const unpostedInvoices = state.salesInvoices.filter(inv => inv.status === 'Unposted').length;
+        
+        // Calculate Raw Material Stock (items with category 'Raw Material' or similar)
+        const rawMaterialStock = state.items
+            .filter(i => i.category?.toLowerCase().includes('raw') || i.name?.toLowerCase().includes('raw'))
+            .reduce((sum, i) => sum + ((i.stockQty || 0) * (i.weightPerUnit || 1)), 0);
+        
+        // Calculate Finished Goods Stock (all other items)
+        const finishedGoodsStock = state.items
+            .filter(i => !i.category?.toLowerCase().includes('raw') && !i.name?.toLowerCase().includes('raw'))
+            .reduce((sum, i) => sum + ((i.stockQty || 0) * (i.weightPerUnit || 1)), 0);
+        
+        return {
+            totalCustomers,
+            totalSuppliers,
+            totalItems,
+            unpostedInvoices,
+            rawMaterialStock,
+            finishedGoodsStock
+        };
+    }, [state.partners, state.items, state.salesInvoices]);
+
     return (
         <div className="space-y-6 pb-8">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-8 shadow-2xl">
+            {/* Mobile-Optimized Header */}
+            <div className="lg:hidden">
+                <h1 className="text-2xl font-bold text-slate-900 mb-2">Dashboard Overview</h1>
+                <p className="text-slate-600 text-sm">Welcome back! Here's a snapshot of your business.</p>
+            </div>
+            
+            {/* Desktop Header */}
+            <div className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-8 shadow-2xl">
                 <div className="flex justify-between items-center">
                     <div>
                         <h1 className="text-3xl font-bold text-white mb-2">Business Intelligence Dashboard</h1>
@@ -450,6 +516,79 @@ export const Dashboard: React.FC = () => {
                         <div className="text-sm font-medium opacity-80">Today</div>
                         <div className="text-xl font-bold">{new Date().toLocaleDateString()}</div>
                     </div>
+                </div>
+            </div>
+
+            {/* Mobile KPI Cards - 2 Column Grid */}
+            <div className="lg:hidden grid grid-cols-2 gap-4">
+                <MobileStatCard 
+                    title="Total Customers"
+                    value={dashboardMetrics.totalCustomers.toString()}
+                    icon={Users}
+                    accentColor="blue"
+                />
+                <MobileStatCard 
+                    title="Total Suppliers"
+                    value={dashboardMetrics.totalSuppliers.toString()}
+                    icon={ShoppingCart}
+                    accentColor="green"
+                />
+                <MobileStatCard 
+                    title="Total Items"
+                    value={dashboardMetrics.totalItems.toString()}
+                    icon={Package}
+                    accentColor="orange"
+                />
+                <MobileStatCard 
+                    title="Unposted Invoices"
+                    value={dashboardMetrics.unpostedInvoices.toString()}
+                    icon={FileText}
+                    accentColor="red"
+                />
+                <MobileStatCard 
+                    title="Raw Material Stock"
+                    value={dashboardMetrics.rawMaterialStock >= 1000000 
+                        ? `${(dashboardMetrics.rawMaterialStock / 1000000).toFixed(1)}M kg`
+                        : dashboardMetrics.rawMaterialStock >= 1000
+                        ? `${(dashboardMetrics.rawMaterialStock / 1000).toFixed(1)}k kg`
+                        : `${dashboardMetrics.rawMaterialStock.toFixed(1)} kg`}
+                    icon={Layers}
+                    accentColor="yellow"
+                />
+                <MobileStatCard 
+                    title="Finished Goods Stock"
+                    value={dashboardMetrics.finishedGoodsStock >= 1000000 
+                        ? `${(dashboardMetrics.finishedGoodsStock / 1000000).toFixed(1)}M kg`
+                        : dashboardMetrics.finishedGoodsStock >= 1000
+                        ? `${(dashboardMetrics.finishedGoodsStock / 1000).toFixed(1)}k kg`
+                        : `${dashboardMetrics.finishedGoodsStock.toFixed(1)} kg`}
+                    icon={Container}
+                    accentColor="purple"
+                />
+            </div>
+
+            {/* Quick Actions - Mobile */}
+            <div className="lg:hidden space-y-3">
+                <h2 className="text-lg font-bold text-slate-800">Quick Actions</h2>
+                <div className="grid grid-cols-1 gap-3">
+                    <button 
+                        onClick={() => navigate('/data-entry?module=sales&sub=sales-invoice')}
+                        className="flex items-center gap-3 p-4 bg-blue-600 text-white rounded-xl font-semibold shadow-lg hover:bg-blue-700 transition-colors"
+                    >
+                        <FileText size={20} /> + New Sales Invoice
+                    </button>
+                    <button 
+                        onClick={() => navigate('/data-entry?module=production&sub=finished-goods')}
+                        className="flex items-center gap-3 p-4 bg-emerald-600 text-white rounded-xl font-semibold shadow-lg hover:bg-emerald-700 transition-colors"
+                    >
+                        <Factory size={20} /> + New Production Entry
+                    </button>
+                    <button 
+                        onClick={() => navigate('/data-entry?module=purchase&sub=original-purchase')}
+                        className="flex items-center gap-3 p-4 bg-orange-600 text-white rounded-xl font-semibold shadow-lg hover:bg-orange-700 transition-colors"
+                    >
+                        <ShoppingCart size={20} /> New Purchase
+                    </button>
                 </div>
             </div>
 
@@ -492,8 +631,8 @@ export const Dashboard: React.FC = () => {
                 />
             </div>
 
-            {/* KPI Cards Row 2 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Desktop KPI Cards Row 2 */}
+            <div className="hidden lg:grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatCard 
                     title="Total Revenue" 
                     value={`$${metrics.revenue.toLocaleString()}`} 

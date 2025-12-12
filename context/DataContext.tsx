@@ -463,6 +463,7 @@ interface DataContextType {
     addPartner: (partner: Partner) => void;
     addItem: (item: Item, openingStock?: number, skipFirebase?: boolean) => void;
     addAccount: (account: Account) => Promise<void>;
+    updateAccount: (id: string, account: Account) => Promise<void>;
     addDivision: (division: Division) => void;
     addSubDivision: (subDivision: SubDivision) => void;
     addLogo: (logo: Logo) => void;
@@ -2178,6 +2179,199 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             throw error;
         }
     };
+
+    const updateAccount = async (id: string, account: Account): Promise<void> => {
+        // Get the old account balance before updating
+        const oldAccount = state.accounts.find(a => a.id === id);
+        const oldBalance = oldAccount?.balance || 0;
+        const newBalance = account.balance || 0;
+        const balanceDifference = newBalance - oldBalance;
+        
+        const accountWithFactory = {
+            ...account,
+            factoryId: currentFactory?.id || ''
+        };
+        
+        // Update in state
+        dispatch({ type: 'UPDATE_ENTITY', payload: { type: 'accounts', id, data: accountWithFactory } });
+        
+        // Update in Firebase
+        try {
+            await updateDoc(doc(db, 'accounts', id), accountWithFactory);
+            console.log(`✅ Updated account ${id} in Firebase`);
+            
+            // If balance changed, create ledger entries to balance the equation
+            if (Math.abs(balanceDifference) > 0.01) {
+                const prevYear = new Date().getFullYear() - 1;
+                const date = `${prevYear}-12-31`;
+                const currency = account.currency || 'USD';
+                const exchangeRates = getExchangeRates(state.currencies);
+                const rate = exchangeRates[currency] || 1;
+                const fcyAmt = Math.abs(balanceDifference) * rate;
+                
+                // Find Capital or Opening Equity account
+                const capitalId = getAccountId('301') || state.accounts.find(a => a.name.includes('Capital') || a.name.includes('Opening Equity'))?.id;
+                
+                if (!capitalId) {
+                    console.warn('⚠️ Could not find Capital/Equity account for balance adjustment');
+                    return;
+                }
+                
+                const capitalAccount = state.accounts.find(a => a.id === capitalId);
+                const capitalAccountName = capitalAccount?.name || 'Capital';
+                
+                // Determine if this is an asset or liability/equity account
+                const isAssetOrExpense = [AccountType.ASSET, AccountType.EXPENSE].includes(account.type);
+                
+                let entries: Omit<LedgerEntry, 'id'>[] = [];
+                
+                if (isAssetOrExpense) {
+                    // For Asset accounts: Debit increases, Credit decreases
+                    if (balanceDifference > 0) {
+                        // Balance increased: Debit asset, Credit equity
+                        entries = [
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: account.name,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: balanceDifference,
+                                credit: 0,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalId,
+                                accountName: capitalAccountName,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: 0,
+                                credit: balanceDifference,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
+                        // Balance decreased: Credit asset, Debit equity
+                        entries = [
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: account.name,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: 0,
+                                credit: Math.abs(balanceDifference),
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalId,
+                                accountName: capitalAccountName,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: Math.abs(balanceDifference),
+                                credit: 0,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    }
+                } else {
+                    // For Liability/Equity accounts: Credit increases, Debit decreases
+                    if (balanceDifference > 0) {
+                        // Balance increased: Credit liability/equity, Debit equity (contra)
+                        entries = [
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: account.name,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: 0,
+                                credit: balanceDifference,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalId,
+                                accountName: capitalAccountName,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: balanceDifference,
+                                credit: 0,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
+                        // Balance decreased: Debit liability/equity, Credit equity
+                        entries = [
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: account.name,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: Math.abs(balanceDifference),
+                                credit: 0,
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                date,
+                                transactionId: `OB-ADJ-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalId,
+                                accountName: capitalAccountName,
+                                currency,
+                                exchangeRate: rate,
+                                fcyAmount: fcyAmt,
+                                debit: 0,
+                                credit: Math.abs(balanceDifference),
+                                narration: `Opening Balance Adjustment - ${account.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    }
+                }
+                
+                // Post the ledger entries
+                if (entries.length > 0) {
+                    postTransaction(entries);
+                    console.log(`✅ Posted opening balance adjustment entries for account ${id}`);
+                }
+            }
+        } catch (error: any) {
+            console.error(`❌ Error updating account:`, error);
+            throw error;
+        }
+    };
     const addDivision = (division: Division) => {
         const divisionWithFactory = { ...division, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_DIVISION', payload: divisionWithFactory });
@@ -2412,6 +2606,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addItem,
             updateItem,
             addAccount,
+            updateAccount,
             addDivision,
             addSubDivision,
             addLogo,

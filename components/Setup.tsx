@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
 import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
@@ -41,6 +41,7 @@ export interface CrudConfig {
     fields: FieldDef[];
     onSave: (data: any) => void;
     onDelete: (id: string) => void;
+    onUpdate?: (id: string, data: any) => void;
 }
 
 // --- Generic Form Component (Exported for Reuse) ---
@@ -71,6 +72,24 @@ export const GenericForm: React.FC<{
         return initialData;
     });
 
+    // Update form data when initialOverrides changes (for editing)
+    useEffect(() => {
+        if (initialOverrides) {
+            const updatedData: any = {};
+            config.fields.forEach(field => {
+                if (field.defaultValue !== undefined) {
+                    if (typeof field.defaultValue === 'function') {
+                        updatedData[field.name] = field.defaultValue(data);
+                    } else {
+                        updatedData[field.name] = field.defaultValue;
+                    }
+                }
+            });
+            Object.assign(updatedData, initialOverrides);
+            setFormData(updatedData);
+        }
+    }, [initialOverrides, config, data]);
+
     const handleChange = (fieldName: string, value: any) => {
         let updatedData = { ...formData, [fieldName]: value };
 
@@ -84,7 +103,7 @@ export const GenericForm: React.FC<{
         setFormData(updatedData);
     };
 
-    const handleSave = (e: React.FormEvent) => {
+    const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
         // Basic validation for visible fields only
         for (const field of config.fields) {
@@ -109,11 +128,26 @@ export const GenericForm: React.FC<{
         
         // If editing (has id in formData), call onUpdate, otherwise call onSave
         if (formData.id && config.onUpdate) {
-            config.onUpdate(formData.id, formData);
+            try {
+                console.log('Updating account:', formData.id, formData);
+                await config.onUpdate(formData.id, formData);
+                console.log('Account updated successfully');
+                onSuccess();
+            } catch (error: any) {
+                console.error('Error updating:', error);
+                alert(`Failed to update: ${error.message || 'Unknown error'}`);
+            }
         } else {
-            config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
+            try {
+                console.log('Saving new account:', formData);
+                await config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
+                console.log('Account saved successfully');
+                onSuccess();
+            } catch (error: any) {
+                console.error('Error saving:', error);
+                alert(`Failed to save: ${error.message || 'Unknown error'}`);
+            }
         }
-        onSuccess();
     };
 
     return (
@@ -898,7 +932,7 @@ export const useSetupConfigs = () => {
 const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
     const { addCurrency, updateCurrency, deleteEntity } = useData();
     const [showForm, setShowForm] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(true); // Expanded by default for better visibility
+    const [isExpanded, setIsExpanded] = useState(false); // Collapsed by default
     const [editingCurrency, setEditingCurrency] = useState<any>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [formData, setFormData] = useState({
@@ -1105,9 +1139,10 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
 // --- Chart of Accounts Manager with Bulk Import ---
 const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
-    const { addAccount, deleteEntity } = useData();
+    const { addAccount, updateAccount, deleteEntity } = useData();
     const [isImporting, setIsImporting] = useState(false);
     const [showForm, setShowForm] = useState(false);
+    const [editingAccount, setEditingAccount] = useState<any>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
 
@@ -1203,6 +1238,7 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
             { name: 'balance', label: 'Opening Balance', type: 'number', defaultValue: 0 }
         ],
         onSave: (data) => addAccount(data),
+        onUpdate: (id, data) => updateAccount(id, data),
         onDelete: (id) => deleteEntity('accounts', id)
     };
 
@@ -1263,13 +1299,20 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 </div>
             )}
 
-            {showForm && (
+            {(showForm || editingAccount) && (
                 <div className="mb-4 border-t pt-4">
                     <GenericForm 
                         config={accountConfig} 
                         data={data} 
-                        onCancel={() => setShowForm(false)} 
-                        onSuccess={() => setShowForm(false)} 
+                        onCancel={() => {
+                            setShowForm(false);
+                            setEditingAccount(null);
+                        }} 
+                        onSuccess={() => {
+                            setShowForm(false);
+                            setEditingAccount(null);
+                        }}
+                        initialOverrides={editingAccount || undefined}
                     />
                 </div>
             )}
@@ -1279,7 +1322,6 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                     <table className="w-full">
                         <thead className="bg-slate-50">
                             <tr>
-                                <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">ID</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Code</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Name</th>
                                 <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Type</th>
@@ -1296,18 +1338,27 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                                 )
                                 .map((account) => (
                                 <tr key={account.id} className="hover:bg-slate-50">
-                                    <td className="px-4 py-2 font-mono text-xs text-slate-500">{account.id}</td>
                                     <td className="px-4 py-2 font-mono text-xs">{account.code}</td>
                                     <td className="px-4 py-2 text-sm">{account.name}</td>
                                     <td className="px-4 py-2 text-sm">{account.type}</td>
                                     <td className="px-4 py-2 text-sm text-right">${account.balance || 0}</td>
                                     <td className="px-4 py-2 text-right">
-                                        <button
-                                            onClick={() => deleteEntity('accounts', account.id)}
-                                            className="text-red-600 hover:text-red-800"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
+                                        <div className="flex items-center justify-end gap-2">
+                                            <button
+                                                onClick={() => setEditingAccount(account)}
+                                                className="text-blue-600 hover:text-blue-800"
+                                                title="Edit Account"
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            <button
+                                                onClick={() => deleteEntity('accounts', account.id)}
+                                                className="text-red-600 hover:text-red-800"
+                                                title="Delete Account"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
