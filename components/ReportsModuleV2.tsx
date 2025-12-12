@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
 import { EntitySelector } from './EntitySelector';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 // --- Helper Functions for Planners ---
 function getNextPeriodDates(periodType: PlannerPeriodType, currentDate: Date): { currentPeriod: string, nextPeriodStartDate: Date, lastPeriodStartDate: Date, lastPeriodEndDate: Date } {
@@ -1420,38 +1420,52 @@ const AuditLogReport: React.FC = () => {
 // --- MAIN MODULE SHELL ---
 
 export const ReportsModuleV2: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP'>('BI');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tabFromUrl = searchParams.get('tab') as 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | null;
+    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP'>(tabFromUrl || 'BI');
+    
+    // Update URL when tab changes
+    useEffect(() => {
+        if (tabFromUrl && tabFromUrl !== activeTab) {
+            setActiveTab(tabFromUrl);
+        }
+    }, [tabFromUrl]);
+    
+    const handleTabChange = (tab: 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP') => {
+        setActiveTab(tab);
+        setSearchParams({ tab });
+    };
 
     return (
         <div className="flex flex-col h-[calc(100vh-80px)] bg-slate-50">
-            {/* Quick Links Section */}
-            <div className="bg-gradient-to-r from-blue-600 to-emerald-600 px-8 py-4 shrink-0">
-                <div className="flex items-center justify-between">
-                    <h3 className="text-white font-bold text-sm uppercase tracking-wide">📊 Specialized Reports</h3>
-                    <div className="flex gap-3">
+            {/* Quick Links Section - Responsive */}
+            <div className="bg-gradient-to-r from-blue-600 to-emerald-600 px-4 lg:px-8 py-3 lg:py-4 shrink-0">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                    <h3 className="text-white font-bold text-xs lg:text-sm uppercase tracking-wide">📊 Specialized Reports</h3>
+                    <div className="flex flex-col sm:flex-row gap-2 lg:gap-3">
                         <Link 
                             to="/reports/order-fulfillment" 
-                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-purple-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                            className="flex items-center justify-center gap-1.5 lg:gap-2 px-3 lg:px-4 py-1.5 lg:py-2 bg-white/90 hover:bg-white text-purple-700 rounded-lg text-xs lg:text-sm font-semibold transition-all shadow-sm"
                         >
-                            <Truck size={16} />
-                            Order Fulfillment
-                            <ExternalLink size={14} />
+                            <Truck size={14} className="lg:w-4 lg:h-4" />
+                            <span className="whitespace-nowrap">Order Fulfillment</span>
+                            <ExternalLink size={12} className="lg:w-3.5 lg:h-3.5" />
                         </Link>
                         <Link 
                             to="/reports/original-stock" 
-                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-blue-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                            className="flex items-center justify-center gap-1.5 lg:gap-2 px-3 lg:px-4 py-1.5 lg:py-2 bg-white/90 hover:bg-white text-blue-700 rounded-lg text-xs lg:text-sm font-semibold transition-all shadow-sm"
                         >
-                            <Package size={16} />
-                            Original Stock
-                            <ExternalLink size={14} />
+                            <Package size={14} className="lg:w-4 lg:h-4" />
+                            <span className="whitespace-nowrap">Original Stock</span>
+                            <ExternalLink size={12} className="lg:w-3.5 lg:h-3.5" />
                         </Link>
                         <Link 
                             to="/reports/item-performance" 
-                            className="flex items-center gap-2 px-4 py-2 bg-white/90 hover:bg-white text-emerald-700 rounded-lg text-sm font-semibold transition-all shadow-sm"
+                            className="flex items-center justify-center gap-1.5 lg:gap-2 px-3 lg:px-4 py-1.5 lg:py-2 bg-white/90 hover:bg-white text-emerald-700 rounded-lg text-xs lg:text-sm font-semibold transition-all shadow-sm"
                         >
-                            <TrendingUp size={16} />
-                            Item Performance
-                            <ExternalLink size={14} />
+                            <TrendingUp size={14} className="lg:w-4 lg:h-4" />
+                            <span className="whitespace-nowrap">Item Performance</span>
+                            <ExternalLink size={12} className="lg:w-3.5 lg:h-3.5" />
                         </Link>
                     </div>
                 </div>
@@ -1466,7 +1480,7 @@ export const ReportsModuleV2: React.FC = () => {
                     { id: 'PROD', label: 'Production Yield', icon: Factory },
                     { id: 'EXP', label: 'Smart Explorer', icon: Search },
                 ].map(tab => (
-                    <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex items-center gap-2 py-4 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}><tab.icon size={18} />{tab.label}</button>
+                    <button key={tab.id} onClick={() => handleTabChange(tab.id as any)} className={`flex items-center gap-2 py-4 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}><tab.icon size={18} />{tab.label}</button>
                 ))}
             </div>
             <div className="flex-1 overflow-auto p-8">

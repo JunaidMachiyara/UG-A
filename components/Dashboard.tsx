@@ -2,10 +2,11 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ComposedChart, Treemap, Funnel, FunnelChart, LabelList } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText, Building2, ChevronDown } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
-import { AccountType } from '../types';
+import { AccountType, UserRole } from '../types';
 
 // Animation variants for stagger effect
 const fadeInUp = {
@@ -63,7 +64,7 @@ const AnimatedPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent,
 };
 
 // Mobile Stat Card Component
-const MobileStatCard = ({ title, value, icon: Icon, accentColor }: { title: string, value: string, icon: any, accentColor: 'blue' | 'green' | 'orange' | 'red' | 'yellow' | 'purple' }) => {
+const MobileStatCard = ({ title, value, icon: Icon, accentColor, onClick }: { title: string, value: string, icon: any, accentColor: 'blue' | 'green' | 'orange' | 'red' | 'yellow' | 'purple', onClick?: () => void }) => {
     const colorClasses = {
         blue: 'border-l-blue-500 bg-blue-50',
         green: 'border-l-green-500 bg-green-50',
@@ -83,7 +84,12 @@ const MobileStatCard = ({ title, value, icon: Icon, accentColor }: { title: stri
     };
     
     return (
-        <div className={`bg-white p-4 rounded-lg border-l-4 ${colorClasses[accentColor]} shadow-sm`}>
+        <div 
+            onClick={onClick}
+            className={`bg-white p-4 rounded-lg border-l-4 ${colorClasses[accentColor]} shadow-sm transition-all duration-200 ${
+                onClick ? 'cursor-pointer hover:shadow-md hover:scale-[1.02] active:scale-[0.98]' : ''
+            }`}
+        >
             <div className="flex items-center gap-3 mb-2">
                 <Icon size={20} className={iconColors[accentColor]} />
                 <p className="text-xs font-semibold text-slate-600">{title}</p>
@@ -226,9 +232,11 @@ const YieldWidget = () => {
 
 export const Dashboard: React.FC = () => {
     const { state } = useData();
+    const { currentUser, currentFactory, factories, switchFactory } = useAuth();
     const navigate = useNavigate();
     const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('7days');
     const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.25);
+    const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
 
     // Production Yield Analysis Data
     const productionYieldData = useMemo(() => {
@@ -501,8 +509,56 @@ export const Dashboard: React.FC = () => {
         <div className="space-y-6 pb-8">
             {/* Mobile-Optimized Header */}
             <div className="lg:hidden">
-                <h1 className="text-2xl font-bold text-slate-900 mb-2">Dashboard Overview</h1>
-                <p className="text-slate-600 text-sm">Welcome back! Here's a snapshot of your business.</p>
+                <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="flex-1">
+                        <h1 className="text-2xl font-bold text-slate-900 mb-2">Dashboard Overview</h1>
+                        <p className="text-slate-600 text-sm">Welcome back! Here's a snapshot of your business.</p>
+                    </div>
+                    {/* Factory Selector - Mobile Only */}
+                    {currentFactory && (
+                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2.5 shrink-0 min-w-[140px]">
+                            <div className="flex items-center gap-1.5 mb-1">
+                                <Building2 size={14} className="text-indigo-600" />
+                                <span className="text-[10px] font-semibold text-indigo-900">Current Factory</span>
+                            </div>
+                            <div className="text-xs font-bold text-indigo-700 truncate mb-0.5">{currentFactory.name}</div>
+                            <div className="text-[10px] text-indigo-600 truncate">{currentFactory.location}</div>
+                            
+                            {/* Factory Switcher for Super Admin */}
+                            {currentUser?.role === UserRole.SUPER_ADMIN && factories.length > 1 && (
+                                <div className="relative mt-2">
+                                    <button
+                                        onClick={() => setShowFactorySwitcher(!showFactorySwitcher)}
+                                        className="w-full text-[10px] bg-white border border-indigo-300 rounded px-2 py-1 text-indigo-700 hover:bg-indigo-50 flex items-center justify-between"
+                                    >
+                                        <span>Switch Factory</span>
+                                        <ChevronDown size={12} />
+                                    </button>
+                                    {showFactorySwitcher && (
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-indigo-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+                                            {factories
+                                                .filter(f => f.id !== currentFactory.id)
+                                                .map(factory => (
+                                                    <button
+                                                        key={factory.id}
+                                                        onClick={() => {
+                                                            switchFactory(factory.id);
+                                                            setShowFactorySwitcher(false);
+                                                        }}
+                                                        className="w-full text-left px-2 py-1.5 text-[10px] hover:bg-indigo-50 first:rounded-t-lg last:rounded-b-lg"
+                                                    >
+                                                        <div className="font-semibold text-indigo-900 truncate">{factory.name}</div>
+                                                        <div className="text-indigo-600 truncate">{factory.location}</div>
+                                                    </button>
+                                                ))
+                                            }
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </div>
             
             {/* Desktop Header */}
@@ -526,24 +582,28 @@ export const Dashboard: React.FC = () => {
                     value={dashboardMetrics.totalCustomers.toString()}
                     icon={Users}
                     accentColor="blue"
+                    onClick={() => navigate('/setup')}
                 />
                 <MobileStatCard 
                     title="Total Suppliers"
                     value={dashboardMetrics.totalSuppliers.toString()}
                     icon={ShoppingCart}
                     accentColor="green"
+                    onClick={() => navigate('/setup')}
                 />
                 <MobileStatCard 
                     title="Total Items"
                     value={dashboardMetrics.totalItems.toString()}
                     icon={Package}
                     accentColor="orange"
+                    onClick={() => navigate('/setup')}
                 />
                 <MobileStatCard 
                     title="Unposted Invoices"
                     value={dashboardMetrics.unpostedInvoices.toString()}
                     icon={FileText}
                     accentColor="red"
+                    onClick={() => navigate('/posting')}
                 />
                 <MobileStatCard 
                     title="Raw Material Stock"
@@ -554,6 +614,7 @@ export const Dashboard: React.FC = () => {
                         : `${dashboardMetrics.rawMaterialStock.toFixed(1)} kg`}
                     icon={Layers}
                     accentColor="yellow"
+                    onClick={() => navigate('/reports')}
                 />
                 <MobileStatCard 
                     title="Finished Goods Stock"
@@ -564,6 +625,7 @@ export const Dashboard: React.FC = () => {
                         : `${dashboardMetrics.finishedGoodsStock.toFixed(1)} kg`}
                     icon={Container}
                     accentColor="purple"
+                    onClick={() => navigate('/reports')}
                 />
             </div>
 
@@ -572,22 +634,29 @@ export const Dashboard: React.FC = () => {
                 <h2 className="text-lg font-bold text-slate-800">Quick Actions</h2>
                 <div className="grid grid-cols-1 gap-3">
                     <button 
-                        onClick={() => navigate('/data-entry?module=sales&sub=sales-invoice')}
-                        className="flex items-center gap-3 p-4 bg-blue-600 text-white rounded-xl font-semibold shadow-lg hover:bg-blue-700 transition-colors"
-                    >
-                        <FileText size={20} /> + New Sales Invoice
-                    </button>
-                    <button 
-                        onClick={() => navigate('/data-entry?module=production&sub=finished-goods')}
+                        onClick={() => navigate('/reports?tab=PROD')}
                         className="flex items-center gap-3 p-4 bg-emerald-600 text-white rounded-xl font-semibold shadow-lg hover:bg-emerald-700 transition-colors"
                     >
-                        <Factory size={20} /> + New Production Entry
+                        <Factory size={20} /> + Production Analysis
                     </button>
                     <button 
-                        onClick={() => navigate('/data-entry?module=purchase&sub=original-purchase')}
+                        onClick={() => navigate('/reports/item-performance')}
+                        className="flex items-center gap-3 p-4 bg-blue-600 text-white rounded-xl font-semibold shadow-lg hover:bg-blue-700 transition-colors"
+                    >
+                        <TrendingUp size={20} /> Item Performance
+                    </button>
+                    <button 
+                        onClick={() => navigate('/reports')}
+                        className="flex items-center gap-3 p-4 bg-purple-600 text-white rounded-xl font-semibold shadow-lg hover:bg-purple-700 transition-colors opacity-75"
+                        disabled
+                    >
+                        <FileText size={20} /> Sales
+                    </button>
+                    <button 
+                        onClick={() => navigate('/reports/order-fulfillment')}
                         className="flex items-center gap-3 p-4 bg-orange-600 text-white rounded-xl font-semibold shadow-lg hover:bg-orange-700 transition-colors"
                     >
-                        <ShoppingCart size={20} /> New Purchase
+                        <ShoppingCart size={20} /> Orders
                     </button>
                 </div>
             </div>

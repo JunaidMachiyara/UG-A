@@ -79,7 +79,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             )}
             
             {/* Sidebar */}
-            <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out ${
+            <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out overflow-hidden ${
                 sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
             }`}>
                 <div className="p-6 flex items-center justify-between">
@@ -105,7 +105,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         <X size={20} />
                     </button>
                 </div>
-                <nav className="flex-1 px-3 py-2 overflow-y-auto">
+                <nav className="flex-1 px-3 py-2 overflow-y-auto min-h-0">
                     <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-2">Main</div>
                     {hasPermission(PermissionModule.DASHBOARD, 'view') && (
                         <SidebarItem to="/" icon={LayoutDashboard} label="Dashboard" />
@@ -164,29 +164,29 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         </>
                     )}
                 </nav>
-                <div className="p-4 border-t border-slate-200 space-y-3">
-                    {/* Factory Indicator */}
+                <div className="p-2 lg:p-4 border-t border-slate-200 shrink-0">
+                    {/* Factory Indicator - Hidden on Mobile (moved to Dashboard) */}
                     {currentFactory && (
-                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                                <Building2 size={16} className="text-indigo-600" />
-                                <span className="text-xs font-semibold text-indigo-900">Current Factory</span>
+                        <div className="hidden lg:block bg-indigo-50 border border-indigo-200 rounded-lg p-2 lg:p-3">
+                            <div className="flex items-center gap-1.5 lg:gap-2 mb-0.5 lg:mb-1">
+                                <Building2 size={12} className="lg:w-4 lg:h-4 text-indigo-600" />
+                                <span className="text-[10px] lg:text-xs font-semibold text-indigo-900">Current Factory</span>
                             </div>
-                            <div className="text-sm font-bold text-indigo-700">{currentFactory.name}</div>
-                            <div className="text-xs text-indigo-600">{currentFactory.location}</div>
+                            <div className="text-xs lg:text-sm font-bold text-indigo-700 truncate">{currentFactory.name}</div>
+                            <div className="text-[10px] lg:text-xs text-indigo-600 truncate">{currentFactory.location}</div>
                             
-                            {/* Factory Switcher for Super Admin */}
+                            {/* Factory Switcher for Super Admin - Compact on Mobile */}
                             {currentUser?.role === UserRole.SUPER_ADMIN && factories.length > 1 && (
-                                <div className="relative mt-2">
+                                <div className="relative mt-1.5 lg:mt-2">
                                     <button
                                         onClick={() => setShowFactorySwitcher(!showFactorySwitcher)}
-                                        className="w-full text-xs bg-white border border-indigo-300 rounded px-2 py-1.5 text-indigo-700 hover:bg-indigo-50 flex items-center justify-between"
+                                        className="w-full text-[10px] lg:text-xs bg-white border border-indigo-300 rounded px-1.5 lg:px-2 py-1 lg:py-1.5 text-indigo-700 hover:bg-indigo-50 flex items-center justify-between"
                                     >
                                         <span>Switch Factory</span>
-                                        <ChevronDown size={14} />
+                                        <ChevronDown size={12} className="lg:w-3.5 lg:h-3.5" />
                                     </button>
                                     {showFactorySwitcher && (
-                                        <div className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-indigo-200 rounded-lg shadow-lg z-50">
+                                        <div className="absolute bottom-full left-0 right-0 mb-1 lg:mb-2 bg-white border border-indigo-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
                                             {factories
                                                 .filter(f => f.id !== currentFactory.id)
                                                 .map(factory => (
@@ -196,10 +196,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                                             switchFactory(factory.id);
                                                             setShowFactorySwitcher(false);
                                                         }}
-                                                        className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 first:rounded-t-lg last:rounded-b-lg"
+                                                        className="w-full text-left px-2 lg:px-3 py-1.5 lg:py-2 text-[10px] lg:text-xs hover:bg-indigo-50 first:rounded-t-lg last:rounded-b-lg"
                                                     >
-                                                        <div className="font-semibold text-indigo-900">{factory.name}</div>
-                                                        <div className="text-indigo-600">{factory.location}</div>
+                                                        <div className="font-semibold text-indigo-900 truncate">{factory.name}</div>
+                                                        <div className="text-indigo-600 truncate">{factory.location}</div>
                                                     </button>
                                                 ))
                                             }
