@@ -17,7 +17,8 @@ type ImportableEntity =
     | 'categories' 
     | 'sections'
     | 'divisions'
-    | 'subDivisions';
+    | 'subDivisions'
+    | 'purchases';
 
 interface ImportResult {
     success: number;
@@ -70,6 +71,11 @@ const CSV_TEMPLATES = {
     warehouses: [
         ['id', 'name', 'location'],
         ['wh-001', 'Main Warehouse', 'Dubai']
+    ],
+    purchases: [
+        ['supplierId', 'subSupplierId', 'originalTypeId', 'weightPurchased', 'costPerKgFCY', 'totalCostFCY', 'batchNumber', 'containerNumber', 'divisionId', 'subDivisionId', 'status', 'receivedWeight'],
+        ['SUP-1001', '', 'OT-001', '10000', '2.50', '25000', 'BATCH-001', 'CONT-12345', 'DIV-001', 'SUBDIV-001', 'Arrived', '9950'],
+        ['SUP-1002', 'SUB-1001', 'OT-002', '5000', '3.00', '15000', '', '', 'DIV-001', '', 'In Transit', '']
     ]
 };
 
@@ -87,6 +93,8 @@ export const DataImportExport: React.FC = () => {
         addOriginalProduct,
         addCategory,
         addSection,
+        addPurchase,
+        saveLogisticsEntry,
         postTransaction
     } = useData();
     const { currentFactory } = useAuth();
@@ -568,6 +576,262 @@ export const DataImportExport: React.FC = () => {
                 }
             }
             
+            // Handle purchases with batch writes (for CSV imports of existing stock)
+            if (selectedEntity === 'purchases' && parsedData.length > 0) {
+                const BATCH_SIZE = 500;
+                const validPurchases: any[] = [];
+                
+                // Use current date as upload date
+                const uploadDate = new Date().toISOString().split('T')[0];
+                
+                // Track batch and container numbers for auto-generation
+                let batchCounter = 1;
+                let containerCounter = 1;
+                
+                // Get existing batch numbers to find next available
+                const existingBatches = state.purchases.map(p => p.batchNumber).filter(b => b);
+                const existingBatchNumbers = existingBatches
+                    .map(b => {
+                        const match = b.match(/^BATCH-(\d+)$/i);
+                        return match ? parseInt(match[1]) : 0;
+                    })
+                    .filter(n => n > 0)
+                    .sort((a, b) => b - a);
+                if (existingBatchNumbers.length > 0) {
+                    batchCounter = existingBatchNumbers[0] + 1;
+                }
+                
+                const existingContainers = state.purchases.map(p => p.containerNumber).filter(c => c);
+                const existingContainerNumbers = existingContainers
+                    .map(c => {
+                        const match = c.match(/^CONT-(\d+)$/i);
+                        return match ? parseInt(match[1]) : 0;
+                    })
+                    .filter(n => n > 0)
+                    .sort((a, b) => b - a);
+                if (existingContainerNumbers.length > 0) {
+                    containerCounter = existingContainerNumbers[0] + 1;
+                }
+                
+                console.log(`📊 Starting import of ${parsedData.length} purchases (Original Stock)`);
+                console.log(`📅 Using upload date: ${uploadDate}`);
+                
+                // Validate and prepare all purchases first
+                for (let index = 0; index < parsedData.length; index++) {
+                    const row = parsedData[index];
+                    
+                    // Required fields validation
+                    if (!row.supplierId) {
+                        errors.push(`Row ${index + 2}: Missing required field 'supplierId'`);
+                        continue;
+                    }
+                    if (!row.originalTypeId) {
+                        errors.push(`Row ${index + 2}: Missing required field 'originalTypeId'`);
+                        continue;
+                    }
+                    if (!row.weightPurchased || parseFloat(row.weightPurchased) <= 0) {
+                        errors.push(`Row ${index + 2}: Missing or invalid 'weightPurchased'`);
+                        continue;
+                    }
+                    if (!row.costPerKgFCY || parseFloat(row.costPerKgFCY) <= 0) {
+                        errors.push(`Row ${index + 2}: Missing or invalid 'costPerKgFCY'`);
+                        continue;
+                    }
+                    
+                    // Validate supplier exists
+                    const supplierId = row.supplierId.trim();
+                    const supplier = state.partners.find(p => p.id === supplierId);
+                    if (!supplier) {
+                        errors.push(`Row ${index + 2}: Supplier with ID "${supplierId}" not found. Please create supplier first.`);
+                        continue;
+                    }
+                    
+                    // Validate original type exists
+                    const originalTypeId = row.originalTypeId.trim();
+                    const originalTypeObj = state.originalTypes.find(t => t.id === originalTypeId);
+                    if (!originalTypeObj) {
+                        errors.push(`Row ${index + 2}: Original Type with ID "${originalTypeId}" not found. Please create original type first.`);
+                        continue;
+                    }
+                    const originalTypeName = originalTypeObj.name;
+                    
+                    // Validate subSupplier if provided (optional)
+                    let subSupplierId = row.subSupplierId?.trim();
+                    if (subSupplierId) {
+                        const subSupplier = state.partners.find(p => p.id === subSupplierId);
+                        if (!subSupplier) {
+                            errors.push(`Row ${index + 2}: Sub Supplier with ID "${subSupplierId}" not found. Please create sub supplier first or leave blank.`);
+                            continue;
+                        }
+                    }
+                    
+                    // Parse numeric fields
+                    const weightPurchased = parseFloat(row.weightPurchased);
+                    const costPerKgFCY = parseFloat(row.costPerKgFCY);
+                    const totalCostFCY = parseFloat(row.totalCostFCY) || (weightPurchased * costPerKgFCY);
+                    
+                    // Calculate qtyPurchased from weightPurchased and originalType packingSize
+                    const packingSize = originalTypeObj?.packingSize || 1;
+                    const qtyPurchased = weightPurchased / packingSize;
+                    
+                    // Auto-generate batchNumber if not provided
+                    let batchNumber = row.batchNumber?.trim();
+                    if (!batchNumber) {
+                        batchNumber = `BATCH-${String(batchCounter).padStart(3, '0')}`;
+                        batchCounter++;
+                    }
+                    
+                    // Auto-generate containerNumber if not provided
+                    let containerNumber = row.containerNumber?.trim();
+                    if (!containerNumber) {
+                        containerNumber = `CONT-${String(containerCounter).padStart(3, '0')}`;
+                        containerCounter++;
+                    }
+                    
+                    // Status - default to "Arrived" if not provided
+                    const status = (row.status?.trim() || 'Arrived') as 'In Transit' | 'Arrived' | 'Cleared';
+                    if (!['In Transit', 'Arrived', 'Cleared'].includes(status)) {
+                        errors.push(`Row ${index + 2}: Invalid status "${row.status}". Must be: In Transit, Arrived, or Cleared`);
+                        continue;
+                    }
+                    
+                    // Optional fields
+                    const divisionId = row.divisionId?.trim() || undefined;
+                    const subDivisionId = row.subDivisionId?.trim() || undefined;
+                    
+                    // receivedWeight (offloading weight) - only for Arrived/Cleared containers
+                    // - If status is "Arrived" or "Cleared" and receivedWeight is blank, use weightPurchased (assume no shortage)
+                    // - If status is "In Transit", receivedWeight should be blank (not received yet)
+                    let receivedWeight = 0;
+                    if ((status === 'Arrived' || status === 'Cleared') && row.receivedWeight) {
+                        receivedWeight = parseFloat(row.receivedWeight);
+                    } else if ((status === 'Arrived' || status === 'Cleared') && !row.receivedWeight) {
+                        // If Arrived/Cleared and no receivedWeight provided, assume same as invoice (no shortage)
+                        receivedWeight = weightPurchased;
+                    }
+                    // For "In Transit", receivedWeight stays 0 (will be provided on offloading)
+                    
+                    // Calculate landed cost (costPerKgFCY is the cost up to now)
+                    // For CSV imports, costPerKgFCY is the landed cost per kg
+                    const landedCostPerKg = costPerKgFCY;
+                    const totalLandedCost = weightPurchased * landedCostPerKg;
+                    
+                    const purchase: any = {
+                        id: row.id || `PUR-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
+                        batchNumber: batchNumber,
+                        status: status,
+                        date: uploadDate, // Use upload date
+                        supplierId: supplierId,
+                        subSuppliers: subSupplierId ? [subSupplierId] : undefined,
+                        originalTypeId: originalTypeId,
+                        originalType: originalTypeName,
+                        containerNumber: containerNumber || undefined,
+                        divisionId: divisionId,
+                        subDivisionId: subDivisionId,
+                        weightPurchased: weightPurchased,
+                        qtyPurchased: qtyPurchased,
+                        currency: 'USD' as any,
+                        exchangeRate: 1, // Always USD
+                        costPerKgFCY: costPerKgFCY,
+                        totalCostFCY: totalCostFCY,
+                        additionalCosts: [], // No additional costs for CSV imports
+                        totalLandedCost: totalLandedCost,
+                        landedCostPerKg: landedCostPerKg,
+                        items: [], // Single-type purchase for now
+                        factoryId: currentFactory?.id || ''
+                    };
+                    
+                    // Store logistics data for Arrived/Cleared containers (receivedWeight for offloading)
+                    if (receivedWeight > 0 && containerNumber) {
+                        (purchase as any).csvLogisticsData = {
+                            receivedWeight: receivedWeight,
+                            invoicedWeight: weightPurchased,
+                            shortageKg: weightPurchased - receivedWeight
+                        };
+                    }
+                    
+                    validPurchases.push(purchase);
+                }
+                
+                console.log(`✅ Prepared ${validPurchases.length} valid purchases for import (from ${parsedData.length} CSV rows)`);
+                
+                // Process in batches
+                for (let i = 0; i < validPurchases.length; i += BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchPurchases = validPurchases.slice(i, i + BATCH_SIZE);
+                    
+                    for (const purchase of batchPurchases) {
+                        const { id, csvLogisticsData, ...purchaseData } = purchase;
+                        const purchaseRef = doc(db, 'purchases', id);
+                        
+                        // Remove undefined values
+                        const cleanedData: any = {};
+                        Object.keys(purchaseData).forEach(key => {
+                            if (purchaseData[key] !== undefined) {
+                                cleanedData[key] = purchaseData[key];
+                            }
+                        });
+                        
+                        batch.set(purchaseRef, {
+                            ...cleanedData,
+                            createdAt: serverTimestamp(),
+                            updatedAt: serverTimestamp()
+                        });
+                    }
+                    
+                    try {
+                        await batch.commit();
+                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPurchases.length / BATCH_SIZE)} committed: ${batchPurchases.length} purchases saved to Firebase`);
+                        
+                        // Wait for Firebase listener to load purchases
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        // Create LogisticsEntry records for Arrived/Cleared containers (offloading data)
+                        // This tracks receivedWeight vs invoicedWeight (purchase weight)
+                        for (const purchase of batchPurchases) {
+                            if ((purchase as any).csvLogisticsData && purchase.containerNumber) {
+                                const logisticsData = (purchase as any).csvLogisticsData;
+                                try {
+                                    const logisticsEntry: any = {
+                                        id: `LOG-${purchase.id}-${Date.now()}`,
+                                        purchaseId: purchase.id,
+                                        purchaseType: 'ORIGINAL' as const,
+                                        containerNumber: purchase.containerNumber,
+                                        status: purchase.status,
+                                        arrivalDate: purchase.status === 'Arrived' || purchase.status === 'Cleared' ? purchase.date : undefined,
+                                        invoicedWeight: logisticsData.invoicedWeight,
+                                        receivedWeight: logisticsData.receivedWeight,
+                                        shortageKg: logisticsData.shortageKg
+                                    };
+                                    
+                                    // Use saveLogisticsEntry to save offloading data
+                                    saveLogisticsEntry(logisticsEntry);
+                                    console.log(`✅ Created LogisticsEntry for purchase ${purchase.batchNumber} (Invoice: ${logisticsData.invoicedWeight}kg, Received: ${logisticsData.receivedWeight}kg, Shortage: ${logisticsData.shortageKg}kg)`);
+                                } catch (error: any) {
+                                    console.error(`❌ Error creating LogisticsEntry for purchase ${purchase.batchNumber}:`, error);
+                                    errors.push(`Failed to create LogisticsEntry for batch ${purchase.batchNumber}: ${error.message}`);
+                                }
+                                
+                                // Small delay every 10 entries
+                                if (batchPurchases.indexOf(purchase) % 10 === 9) {
+                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                }
+                            }
+                        }
+                        
+                        successCount += batchPurchases.length;
+                        
+                        // Small delay between batches
+                        if (i + BATCH_SIZE < validPurchases.length) {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                    } catch (batchError: any) {
+                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchPurchases.length + 1}) failed: ${batchError.message}`);
+                    }
+                }
+            }
+            
             // Handle items/partners with batch writes (even for small batches)
             // This prevents duplicates - items/partners are processed here, NOT in the individual path below
             if ((selectedEntity === 'items' && parsedData.length <= 100) ||
@@ -695,9 +959,9 @@ export const DataImportExport: React.FC = () => {
                 }
             }
             
-            // Handle other entities (NOT items/partners - those are handled above with batch writes)
-            // Items and partners are already processed via batch writes above, so skip them here
-            if (selectedEntity !== 'items' && selectedEntity !== 'partners') {
+            // Handle other entities (NOT items/partners/purchases - those are handled above with batch writes)
+            // Items, partners, and purchases are already processed via batch writes above, so skip them here
+            if (selectedEntity !== 'items' && selectedEntity !== 'partners' && selectedEntity !== 'purchases') {
                 // Use proper add functions for other entities
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
@@ -714,6 +978,16 @@ export const DataImportExport: React.FC = () => {
                             case 'items': {
                                 // Items are handled via batch writes above - should never reach here
                                 console.warn('⚠️ Items should be processed via batch writes, not individual addItem');
+                                break;
+                            }
+                            case 'partners': {
+                                // Partners are handled via batch writes above - should never reach here
+                                console.warn('⚠️ Partners should be processed via batch writes, not individual addPartner');
+                                break;
+                            }
+                            case 'purchases': {
+                                // Purchases are handled via batch writes above - should never reach here
+                                console.warn('⚠️ Purchases should be processed via batch writes, not individual addPurchase');
                                 break;
                             }
                             case 'partners': {
@@ -889,18 +1163,18 @@ export const DataImportExport: React.FC = () => {
                                 // Auto-generate ID if not provided
                                 let originalTypeId = row.id;
                                 if (!originalTypeId || originalTypeId.trim() === '') {
-                                    const prefix = 'ORT';
+                                    const prefix = 'OT';
                                     const existingIds = state.originalTypes
                                         .map((ot: any) => {
-                                            const match = ot.id?.match(/^ORT-(\d+)$/);
+                                            const match = ot.id?.match(/^OT-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0)
                                         .sort((a, b) => b - a);
                                     const processedIds = parsedData.slice(0, index)
-                                        .filter((r: any) => r.id && r.id.match(/^ORT-(\d+)$/))
+                                        .filter((r: any) => r.id && r.id.match(/^OT-(\d+)$/))
                                         .map((r: any) => {
-                                            const match = r.id.match(/^ORT-(\d+)$/);
+                                            const match = r.id.match(/^OT-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0);
@@ -909,12 +1183,12 @@ export const DataImportExport: React.FC = () => {
                                     originalTypeId = `${prefix}-${nextNumber}`;
                                 }
                                 const originalType = {
-                                    id: originalTypeId,
+                                    id: originalTypeId.trim(),
                                     name: row.name,
                                     packingType: row.packingType,
                                     packingSize: parseFloat(row.packingSize) || 0
                                 };
-                                addOriginalType(originalType);
+                                await addOriginalType(originalType);
                                 successCount++;
                                 break;
                             }
@@ -1150,6 +1424,29 @@ export const DataImportExport: React.FC = () => {
                     location: w.location || ''
                 }));
                 break;
+            case 'purchases':
+                data = state.purchases.map(p => {
+                    // Find LogisticsEntry for this purchase to get receivedWeight
+                    const logistics = state.logisticsEntries.find(le => 
+                        le.purchaseId === p.id && 
+                        le.purchaseType === 'ORIGINAL'
+                    );
+                    return {
+                        supplierId: p.supplierId,
+                        subSupplierId: p.subSuppliers && p.subSuppliers.length > 0 ? p.subSuppliers[0] : '',
+                        originalTypeId: p.originalTypeId,
+                        weightPurchased: p.weightPurchased,
+                        costPerKgFCY: p.costPerKgFCY,
+                        totalCostFCY: p.totalCostFCY,
+                        batchNumber: p.batchNumber || '',
+                        containerNumber: p.containerNumber || '',
+                        divisionId: p.divisionId || '',
+                        subDivisionId: p.subDivisionId || '',
+                        status: p.status,
+                        receivedWeight: logistics?.receivedWeight || (p.status === 'Arrived' || p.status === 'Cleared' ? p.weightPurchased : '')
+                    };
+                });
+                break;
             default:
                 alert('Export not implemented for this entity yet');
                 return;
@@ -1234,6 +1531,7 @@ export const DataImportExport: React.FC = () => {
                         Export current <strong>{selectedEntity}</strong> data ({
                             selectedEntity === 'items' ? state.items.length :
                             selectedEntity === 'partners' ? state.partners.length :
+                            selectedEntity === 'purchases' ? state.purchases.length :
                             selectedEntity === 'accounts' ? state.accounts.length :
                             selectedEntity === 'divisions' ? state.divisions.length :
                             selectedEntity === 'subDivisions' ? state.subDivisions.length :
@@ -1243,6 +1541,7 @@ export const DataImportExport: React.FC = () => {
                             selectedEntity === 'sections' ? state.sections.length :
                             selectedEntity === 'logos' ? state.logos.length :
                             selectedEntity === 'warehouses' ? state.warehouses.length :
+                            selectedEntity === 'purchases' ? state.purchases.length :
                             '0'
                         } records) to CSV
                     </p>

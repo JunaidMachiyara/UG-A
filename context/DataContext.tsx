@@ -3,7 +3,7 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect, u
 import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
 import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs, writeBatch, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { getAccountId } from '../services/accountMap';
 
@@ -553,7 +553,7 @@ interface DataContextType {
     addVehicleFine: (vehicleId: string, type: string, amount: number, employeeId: string) => Promise<void>;
     sendMessage: (msg: ChatMessage) => void;
     markChatRead: (chatId: string) => void;
-    addOriginalType: (type: OriginalType) => void;
+    addOriginalType: (type: OriginalType) => Promise<void>;
     addOriginalProduct: (prod: OriginalProduct) => void;
     addCategory: (cat: Category) => void;
     addSection: (sec: Section) => void;
@@ -1148,7 +1148,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log(`✅ Deleted all ledger entries for transaction ${transactionId}`);
     };
     
-    const addPurchase = async (purchase: Purchase) => {
+    const addPurchase = async (purchase: Purchase, skipPartnerLedger: boolean = false) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, purchase not saved to database');
@@ -1200,6 +1200,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 console.error('❌ Error saving purchase to Firebase:', error);
                 alert('Failed to save purchase: ' + error.message);
             });
+
+        // Skip ledger entries if requested (for CSV imports of existing stock)
+        if (skipPartnerLedger) {
+            console.log('⏭️ Skipping partner ledger entries for purchase (CSV import mode)');
+            return;
+        }
 
         // Create journal entries
         const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
@@ -1294,7 +1300,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             factoryId: currentFactory?.id || ''
         };
 
-        // Remove id and prepare data for Firebase
+        // Use provided ID or generate one
+        let partnerId = partner.id;
+        if (!partnerId || partnerId.trim() === '') {
+            // Auto-generate ID if not provided
+            const prefix = partner.type === PartnerType.SUPPLIER ? 'SUP' :
+                          partner.type === PartnerType.CUSTOMER ? 'CUS' :
+                          partner.type === PartnerType.SUB_SUPPLIER ? 'SUB' :
+                          partner.type === PartnerType.VENDOR ? 'VEN' :
+                          partner.type === PartnerType.CLEARING_AGENT ? 'CLA' :
+                          partner.type === PartnerType.FREIGHT_FORWARDER ? 'FFW' :
+                          partner.type === PartnerType.COMMISSION_AGENT ? 'COM' : 'PTN';
+            
+            const sameTypePartners = state.partners.filter(p => p.type === partner.type);
+            const existingIds = sameTypePartners
+                .map(p => {
+                    const match = p.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => n > 0)
+                .sort((a, b) => b - a);
+            
+            const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+            partnerId = `${prefix}-${nextNumber}`;
+        } else {
+            partnerId = partnerId.trim();
+            // Check if ID already exists
+            const existingPartner = state.partners.find(p => p.id === partnerId);
+            if (existingPartner) {
+                alert(`Partner ID "${partnerId}" already exists. Please use a different ID.`);
+                return;
+            }
+            
+            // Also check in Firebase to be safe
+            try {
+                const partnerDoc = await getDoc(doc(db, 'partners', partnerId));
+                if (partnerDoc.exists()) {
+                    alert(`Partner ID "${partnerId}" already exists in database. Please use a different ID.`);
+                    return;
+                }
+            } catch (error) {
+                console.error('Error checking partner ID:', error);
+            }
+        }
+
+        // Remove id from data (we'll use it as document ID)
         const { id, ...partnerDataToSave } = partnerWithFactory;
         const partnerData = {
             ...partnerDataToSave,
@@ -1320,9 +1370,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             ? { ...partnerData, balance: 0 }
             : partnerData;
 
-        addDoc(collection(db, 'partners'), partnerDataForSave)
-            .then(async (docRef) => {
-                console.log('✅ Partner saved to Firebase:', docRef.id);
+        // Use setDoc with the provided/generated ID as document ID
+        setDoc(doc(db, 'partners', partnerId), partnerDataForSave)
+            .then(async () => {
+                console.log('✅ Partner saved to Firebase with ID:', partnerId);
                 // Firebase listener will handle adding to local state
 
                 // Handle opening balance if needed
@@ -1343,9 +1394,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             {
                                 ...commonProps,
                                 date,
-                                transactionId: `OB-${docRef.id}`,
+                                transactionId: `OB-${partnerId}`,
                                 transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: docRef.id,
+                                accountId: partnerId,
                                 accountName: partner.name,
                                 debit: partner.balance,
                                 credit: 0,
@@ -1355,7 +1406,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             {
                                 ...commonProps,
                                 date,
-                                transactionId: `OB-${docRef.id}`,
+                                transactionId: `OB-${partnerId}`,
                                 transactionType: TransactionType.OPENING_BALANCE,
                                 accountId: openingEquityId,
                                 accountName: 'Opening Equity',
@@ -1379,7 +1430,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 {
                                     ...commonProps,
                                     date,
-                                    transactionId: `OB-${docRef.id}`,
+                                    transactionId: `OB-${partnerId}`,
                                     transactionType: TransactionType.OPENING_BALANCE,
                                     accountId: openingEquityId,
                                     accountName: 'Opening Equity',
@@ -1391,9 +1442,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 {
                                     ...commonProps,
                                     date,
-                                    transactionId: `OB-${docRef.id}`,
+                                    transactionId: `OB-${partnerId}`,
                                     transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: docRef.id,
+                                    accountId: partnerId,
                                     accountName: partner.name,
                                     debit: 0,
                                     credit: absBalance,
@@ -1409,7 +1460,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 {
                                     ...commonProps,
                                     date,
-                                    transactionId: `OB-${docRef.id}`,
+                                    transactionId: `OB-${partnerId}`,
                                     transactionType: TransactionType.OPENING_BALANCE,
                                     accountId: openingEquityId,
                                     accountName: 'Opening Equity',
@@ -1421,9 +1472,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 {
                                     ...commonProps,
                                     date,
-                                    transactionId: `OB-${docRef.id}`,
+                                    transactionId: `OB-${partnerId}`,
                                     transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: docRef.id,
+                                    accountId: partnerId,
                                     accountName: partner.name,
                                     debit: absBalance,
                                     credit: 0,
@@ -2209,13 +2260,76 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     const sendMessage = (msg: ChatMessage) => dispatch({ type: 'SEND_MESSAGE', payload: msg });
     const markChatRead = (chatId: string) => dispatch({ type: 'MARK_CHAT_READ', payload: { chatId, userId: CURRENT_USER.id } });
-    const addOriginalType = (type: OriginalType) => {
+    const addOriginalType = async (type: OriginalType) => {
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, original type not saved to database');
+            dispatch({ type: 'ADD_ORIGINAL_TYPE', payload: { ...type, factoryId: currentFactory?.id || '' } });
+            return;
+        }
+
         const typeWithFactory = { ...type, factoryId: currentFactory?.id || '' };
-        dispatch({ type: 'ADD_ORIGINAL_TYPE', payload: typeWithFactory });
-        const { id: _, ...typeData } = typeWithFactory;
-        addDoc(collection(db, 'originalTypes'), { ...typeData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ OriginalType saved'))
-            .catch((error) => console.error('❌ Error saving originalType:', error));
+        
+        // Use provided ID or generate one
+        let originalTypeId = type.id;
+        if (!originalTypeId || originalTypeId.trim() === '') {
+            // Auto-generate ID if not provided
+            const prefix = 'OT';
+            const existingIds = state.originalTypes
+                .map(ot => {
+                    const match = ot.id?.match(/^OT-(\d+)$/);
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => n > 0)
+                .sort((a, b) => b - a);
+            
+            const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+            originalTypeId = `${prefix}-${nextNumber}`;
+        } else {
+            originalTypeId = originalTypeId.trim();
+            // Check if ID already exists
+            const existingType = state.originalTypes.find(ot => ot.id === originalTypeId);
+            if (existingType) {
+                alert(`Original Type ID "${originalTypeId}" already exists. Please use a different ID.`);
+                return;
+            }
+            
+            // Also check in Firebase to be safe
+            try {
+                const typeDoc = await getDoc(doc(db, 'originalTypes', originalTypeId));
+                if (typeDoc.exists()) {
+                    alert(`Original Type ID "${originalTypeId}" already exists in database. Please use a different ID.`);
+                    return;
+                }
+            } catch (error) {
+                console.error('Error checking original type ID:', error);
+            }
+        }
+
+        // Remove id from data (we'll use it as document ID)
+        const { id, ...typeDataToSave } = typeWithFactory;
+        const typeData = {
+            ...typeDataToSave,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        Object.keys(typeData).forEach(key => {
+            if ((typeData as any)[key] === undefined) {
+                (typeData as any)[key] = null;
+            }
+        });
+
+        // Use setDoc with the provided/generated ID as document ID
+        setDoc(doc(db, 'originalTypes', originalTypeId), typeData)
+            .then(() => {
+                console.log('✅ OriginalType saved to Firebase with ID:', originalTypeId);
+                // Firebase listener will handle adding to local state
+            })
+            .catch((error) => {
+                console.error('❌ Error saving originalType:', error);
+                alert('Failed to save original type: ' + error.message);
+            });
     };
     const addOriginalProduct = (prod: OriginalProduct) => {
         const prodWithFactory = { ...prod, factoryId: currentFactory?.id || '' };

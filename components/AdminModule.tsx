@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { UserRole, TransactionType, LedgerEntry, PartnerType } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload } from 'lucide-react';
-import { collection, writeBatch, doc, getDocs, query, where } from 'firebase/firestore';
+import { collection, writeBatch, doc, getDocs, query, where, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { getExchangeRates } from '../context/DataContext';
 import Papa from 'papaparse';
@@ -25,6 +25,8 @@ export const AdminModule: React.FC = () => {
     const [balanceFixResult, setBalanceFixResult] = useState<{ success: boolean; message: string; fixed: number } | null>(null);
     const [csvFile, setCsvFile] = useState<File | null>(null);
     const [csvData, setCsvData] = useState<any[]>([]);
+    const [fixingOriginalTypes, setFixingOriginalTypes] = useState(false);
+    const [originalTypeFixResult, setOriginalTypeFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
 
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
@@ -857,6 +859,326 @@ export const AdminModule: React.FC = () => {
                             {balanceFixResult.success && (
                                 <p className="text-xs text-emerald-600 mt-2">
                                     Page will refresh automatically in 3 seconds to update balances...
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Fix Original Type IDs Section */}
+            <div className="bg-white border-2 border-purple-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-100 p-3 rounded-lg">
+                        <RefreshCw className="text-purple-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Original Type IDs</h3>
+                        <p className="text-sm text-slate-600">Rename all Original Types to use OT-1001, OT-1002 format instead of random IDs</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-purple-900 mb-2">
+                            Current Original Types: {state.originalTypes.length}
+                        </p>
+                        <p className="text-xs text-purple-700">
+                            This will rename all Original Types to use sequential IDs (OT-1001, OT-1002, etc.) and update all references in:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Purchases (originalTypeId)</li>
+                                <li>Original Openings (originalType)</li>
+                                <li>Original Products (originalTypeId)</li>
+                            </ul>
+                        </p>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <p className="text-sm text-amber-800">
+                            <strong>⚠️ Warning:</strong> This operation will:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Create new Original Type documents with new IDs</li>
+                                <li>Update all references in related collections</li>
+                                <li>Delete old Original Type documents</li>
+                            </ul>
+                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            const pin = prompt('Enter Supervisor PIN to proceed:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            if (!confirm(`This will rename ${state.originalTypes.length} Original Types. Continue?`)) {
+                                return;
+                            }
+
+                            setFixingOriginalTypes(true);
+                            setOriginalTypeFixResult(null);
+
+                            try {
+                                const errors: string[] = [];
+                                let updated = 0;
+                                const idMapping: Record<string, string> = {}; // oldId -> newId
+
+                                // Step 1: Generate new IDs for all Original Types
+                                const originalTypesToRename = state.originalTypes
+                                    .filter(ot => !ot.id.match(/^OT-\d+$/)) // Only rename those not already in OT-XXXX format
+                                    .sort((a, b) => a.name.localeCompare(b.name)); // Sort by name for consistent ordering
+
+                                const existingOtIds = state.originalTypes
+                                    .filter(ot => ot.id.match(/^OT-\d+$/))
+                                    .map(ot => {
+                                        const match = ot.id.match(/^OT-(\d+)$/);
+                                        return match ? parseInt(match[1]) : 0;
+                                    })
+                                    .filter(n => n > 0)
+                                    .sort((a, b) => b - a);
+
+                                let nextNumber = existingOtIds.length > 0 ? existingOtIds[0] + 1 : 1001;
+
+                                originalTypesToRename.forEach(ot => {
+                                    const newId = `OT-${nextNumber}`;
+                                    idMapping[ot.id] = newId;
+                                    nextNumber++;
+                                });
+
+                                console.log(`📋 ID Mapping:`, idMapping);
+                                console.log(`📊 Will rename ${originalTypesToRename.length} Original Types`);
+
+                                // Step 2: Create new documents with new IDs
+                                const batch = writeBatch(db);
+                                let batchCount = 0;
+                                const BATCH_SIZE = 500;
+
+                                for (const oldType of originalTypesToRename) {
+                                    const newId = idMapping[oldType.id];
+                                    if (!newId) continue;
+
+                                    const { id, ...typeData } = oldType;
+                                    const newTypeRef = doc(db, 'originalTypes', newId);
+                                    batch.set(newTypeRef, {
+                                        ...typeData,
+                                        createdAt: typeData.createdAt || new Date(),
+                                        updatedAt: new Date()
+                                    });
+
+                                    batchCount++;
+                                    if (batchCount >= BATCH_SIZE) {
+                                        await batch.commit();
+                                        console.log(`✅ Committed batch: ${batchCount} new Original Types created`);
+                                        batchCount = 0;
+                                    }
+                                }
+
+                                if (batchCount > 0) {
+                                    await batch.commit();
+                                    console.log(`✅ Committed final batch: ${batchCount} new Original Types created`);
+                                }
+
+                                // Step 3: Update all references in purchases
+                                console.log('🔄 Updating purchases...');
+                                const purchasesQuery = query(
+                                    collection(db, 'purchases'),
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
+                                const purchasesSnapshot = await getDocs(purchasesQuery);
+                                const purchaseBatch = writeBatch(db);
+                                let purchaseUpdates = 0;
+
+                                purchasesSnapshot.docs.forEach(docSnapshot => {
+                                    const purchase = docSnapshot.data();
+                                    let needsUpdate = false;
+                                    const updates: any = {};
+
+                                    // Update originalTypeId
+                                    if (purchase.originalTypeId && idMapping[purchase.originalTypeId]) {
+                                        updates.originalTypeId = idMapping[purchase.originalTypeId];
+                                        needsUpdate = true;
+                                    }
+
+                                    // Update items array
+                                    if (purchase.items && Array.isArray(purchase.items)) {
+                                        const updatedItems = purchase.items.map((item: any) => {
+                                            if (item.originalTypeId && idMapping[item.originalTypeId]) {
+                                                return { ...item, originalTypeId: idMapping[item.originalTypeId] };
+                                            }
+                                            return item;
+                                        });
+                                        if (JSON.stringify(updatedItems) !== JSON.stringify(purchase.items)) {
+                                            updates.items = updatedItems;
+                                            needsUpdate = true;
+                                        }
+                                    }
+
+                                    if (needsUpdate) {
+                                        purchaseBatch.update(docSnapshot.ref, updates);
+                                        purchaseUpdates++;
+                                    }
+                                });
+
+                                if (purchaseUpdates > 0) {
+                                    await purchaseBatch.commit();
+                                    console.log(`✅ Updated ${purchaseUpdates} purchases`);
+                                }
+
+                                // Step 4: Update all references in originalOpenings
+                                console.log('🔄 Updating originalOpenings...');
+                                const openingsQuery = query(
+                                    collection(db, 'originalOpenings'),
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
+                                const openingsSnapshot = await getDocs(openingsQuery);
+                                const openingsBatch = writeBatch(db);
+                                let openingUpdates = 0;
+
+                                openingsSnapshot.docs.forEach(docSnapshot => {
+                                    const opening = docSnapshot.data();
+                                    if (opening.originalType && idMapping[opening.originalType]) {
+                                        openingsBatch.update(docSnapshot.ref, {
+                                            originalType: idMapping[opening.originalType]
+                                        });
+                                        openingUpdates++;
+                                    }
+                                });
+
+                                if (openingUpdates > 0) {
+                                    await openingsBatch.commit();
+                                    console.log(`✅ Updated ${openingUpdates} originalOpenings`);
+                                }
+
+                                // Step 5: Update all references in originalProducts
+                                console.log('🔄 Updating originalProducts...');
+                                const productsQuery = query(
+                                    collection(db, 'originalProducts'),
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
+                                const productsSnapshot = await getDocs(productsQuery);
+                                const productsBatch = writeBatch(db);
+                                let productUpdates = 0;
+
+                                productsSnapshot.docs.forEach(docSnapshot => {
+                                    const product = docSnapshot.data();
+                                    if (product.originalTypeId && idMapping[product.originalTypeId]) {
+                                        productsBatch.update(docSnapshot.ref, {
+                                            originalTypeId: idMapping[product.originalTypeId]
+                                        });
+                                        productUpdates++;
+                                    }
+                                });
+
+                                if (productUpdates > 0) {
+                                    await productsBatch.commit();
+                                    console.log(`✅ Updated ${productUpdates} originalProducts`);
+                                }
+
+                                // Step 6: Delete old Original Type documents
+                                console.log('🗑️ Deleting old Original Type documents...');
+                                const deleteBatch = writeBatch(db);
+                                let deleteCount = 0;
+
+                                for (const oldType of originalTypesToRename) {
+                                    const oldTypeRef = doc(db, 'originalTypes', oldType.id);
+                                    deleteBatch.delete(oldTypeRef);
+                                    deleteCount++;
+
+                                    if (deleteCount >= BATCH_SIZE) {
+                                        await deleteBatch.commit();
+                                        console.log(`✅ Deleted batch: ${deleteCount} old Original Types`);
+                                        deleteCount = 0;
+                                    }
+                                }
+
+                                if (deleteCount > 0) {
+                                    await deleteBatch.commit();
+                                    console.log(`✅ Deleted final batch: ${deleteCount} old Original Types`);
+                                }
+
+                                updated = originalTypesToRename.length;
+
+                                setOriginalTypeFixResult({
+                                    success: true,
+                                    message: `Successfully renamed ${updated} Original Types!\n\n- Created ${updated} new documents\n- Updated ${purchaseUpdates} purchases\n- Updated ${openingUpdates} originalOpenings\n- Updated ${productUpdates} originalProducts\n- Deleted ${updated} old documents`,
+                                    updated,
+                                    errors
+                                });
+
+                                // Refresh page after 5 seconds
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 5000);
+
+                            } catch (error: any) {
+                                console.error('❌ Error fixing Original Type IDs:', error);
+                                setOriginalTypeFixResult({
+                                    success: false,
+                                    message: `Failed: ${error.message}`,
+                                    updated: 0,
+                                    errors: [error.message]
+                                });
+                            } finally {
+                                setFixingOriginalTypes(false);
+                            }
+                        }}
+                        disabled={fixingOriginalTypes || state.originalTypes.length === 0}
+                        className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {fixingOriginalTypes ? (
+                            <>
+                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                Renaming Original Types...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw size={18} />
+                                Fix Original Type IDs ({state.originalTypes.filter(ot => !ot.id.match(/^OT-\d+$/)).length} need fixing)
+                            </>
+                        )}
+                    </button>
+
+                    {originalTypeFixResult && (
+                        <div className={`p-4 rounded-lg border-2 ${
+                            originalTypeFixResult.success 
+                                ? 'bg-emerald-50 border-emerald-300' 
+                                : 'bg-red-50 border-red-300'
+                        }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {originalTypeFixResult.success ? (
+                                    <CheckCircle className="text-emerald-600" size={20} />
+                                ) : (
+                                    <XCircle className="text-red-600" size={20} />
+                                )}
+                                <span className={`font-bold ${
+                                    originalTypeFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                }`}>
+                                    {originalTypeFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                </span>
+                            </div>
+                            <p className={`text-sm whitespace-pre-line ${
+                                originalTypeFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                            }`}>
+                                {originalTypeFixResult.message}
+                            </p>
+                            {originalTypeFixResult.errors.length > 0 && (
+                                <div className="mt-2 text-xs text-red-600">
+                                    <strong>Errors:</strong>
+                                    <ul className="list-disc list-inside mt-1">
+                                        {originalTypeFixResult.errors.slice(0, 5).map((err, idx) => (
+                                            <li key={idx}>{err}</li>
+                                        ))}
+                                        {originalTypeFixResult.errors.length > 5 && (
+                                            <li>... and {originalTypeFixResult.errors.length - 5} more</li>
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+                            {originalTypeFixResult.success && (
+                                <p className="text-xs text-emerald-600 mt-2">
+                                    Page will refresh automatically in 5 seconds...
                                 </p>
                             )}
                         </div>

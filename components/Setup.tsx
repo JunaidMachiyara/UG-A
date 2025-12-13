@@ -26,6 +26,7 @@ export interface FieldDef {
     readOnly?: boolean; 
     compute?: (formData: any, allData: any[]) => any; 
     hidden?: (formData: any) => boolean;
+    validate?: (value: any, formData: any, allData: any[]) => string | null; // Returns error message or null
 }
 
 export interface ColumnDef {
@@ -111,6 +112,15 @@ export const GenericForm: React.FC<{
             if (!isHidden && field.required && !formData[field.name]) {
                 alert(`${field.label} is required`);
                 return;
+            }
+            
+            // Run custom validation if provided
+            if (!isHidden && field.validate) {
+                const error = field.validate(formData[field.name], formData, data);
+                if (error) {
+                    alert(error);
+                    return;
+                }
             }
         }
         
@@ -504,15 +514,28 @@ export const useSetupConfigs = () => {
                 label: 'Partner ID', 
                 type: 'text', 
                 required: false,
-                placeholder: 'Auto-generated based on type (e.g., SUP-1001, CUS-1001)',
-                readOnly: true,
+                placeholder: 'Enter ID (e.g., SUP-1001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    // If ID is provided, check for duplicates
+                    if (value && value.trim() !== '') {
+                        const trimmedId = value.trim();
+                        // Check if this ID already exists (excluding current record if editing)
+                        const existing = allData.find((p: any) => p.id === trimmedId);
+                        // If editing, formData.id will be the current ID, so exclude it from duplicate check
+                        if (existing && existing.id !== formData.id) {
+                            return `Partner ID "${trimmedId}" already exists. Please use a different ID.`;
+                        }
+                    }
+                    return null; // No error
+                },
                 compute: (formData, allData) => {
-                    // Auto-generate ID based on partner type if not provided
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^(SUP|CUS|SUB|VEN|CLA|FFW|COM|PTN)-\d+$/)) {
-                        // User provided ID but not in standard format, allow manual override
-                        return formData.id;
+                    // If user has manually entered an ID, use it
+                    if (formData.id && formData.id.trim() !== '') {
+                        return formData.id.trim();
                     }
                     
+                    // Auto-generate ID based on partner type if not provided
                     if (!formData.type) return ''; // No type selected yet
                     
                     // Get prefix based on partner type
@@ -843,16 +866,32 @@ export const useSetupConfigs = () => {
                 label: 'Original Type ID', 
                 type: 'text', 
                 required: false,
-                placeholder: 'Auto-generated (e.g., ORT-1001)',
-                readOnly: true,
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^ORT-\d+$/)) {
-                        return formData.id;
+                placeholder: 'Enter ID (e.g., OT-1001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    // If ID is provided, check for duplicates
+                    if (value && value.trim() !== '') {
+                        const trimmedId = value.trim();
+                        // Check if this ID already exists (excluding current record if editing)
+                        const existing = allData.find((ot: any) => ot.id === trimmedId);
+                        // If editing, formData.id will be the current ID, so exclude it from duplicate check
+                        if (existing && existing.id !== formData.id) {
+                            return `Original Type ID "${trimmedId}" already exists. Please use a different ID.`;
+                        }
                     }
-                    const prefix = 'ORT';
+                    return null; // No error
+                },
+                compute: (formData, allData) => {
+                    // If user has manually entered an ID, use it
+                    if (formData.id && formData.id.trim() !== '') {
+                        return formData.id.trim();
+                    }
+                    
+                    // Auto-generate ID if not provided
+                    const prefix = 'OT';
                     const existingIds = allData
                         .map((ot: any) => {
-                            const match = ot.id?.match(/^ORT-(\d+)$/);
+                            const match = ot.id?.match(/^OT-(\d+)$/);
                             return match ? parseInt(match[1]) : 0;
                         })
                         .filter(n => n > 0)
