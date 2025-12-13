@@ -134,6 +134,46 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         }
         case 'LOAD_ACCOUNTS': {
             console.log('✅ LOADED ACCOUNTS FROM FIREBASE:', action.payload.length);
+            console.log('📊 Current ledger entries in state:', state.ledger.length);
+            
+            // IMPORTANT: If ledger entries exist, recalculate balances from ledger instead of using stored balances
+            // This ensures balances are always accurate based on ledger entries
+            if (state.ledger.length > 0) {
+                console.log('📊 Recalculating account balances from ledger entries (ignoring stored balances)');
+                const updatedAccounts = action.payload.map(acc => {
+                    const accountEntries = state.ledger.filter(e => e.accountId === acc.id);
+                    const debitSum = accountEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                    const creditSum = accountEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                    let newBalance = 0;
+                    if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                        newBalance = debitSum - creditSum;
+                    } else {
+                        // For LIABILITY, EQUITY, REVENUE: Credit increases, Debit decreases
+                        newBalance = creditSum - debitSum;
+                    }
+                    
+                    // Debug logging for Capital account
+                    if (acc.name.includes('Capital') && accountEntries.length > 0) {
+                        console.log(`📊 LOAD_ACCOUNTS: Capital balance recalculated:`, {
+                            storedBalance: acc.balance,
+                            calculatedBalance: newBalance,
+                            debitSum,
+                            creditSum,
+                            formula: `creditSum - debitSum = ${creditSum} - ${debitSum} = ${newBalance}`
+                        });
+                    }
+                    
+                    return { ...acc, balance: newBalance };
+                });
+                return { ...state, accounts: updatedAccounts };
+            } else {
+                console.log('⚠️ No ledger entries in state yet - using stored balances from Firebase');
+                // Check if Capital account has a stored balance that might be wrong
+                const capitalAccount = action.payload.find(a => a.name.includes('Capital'));
+                if (capitalAccount) {
+                    console.log(`📊 Capital account stored balance in Firebase: ${capitalAccount.balance}`);
+                }
+            }
             return { ...state, accounts: action.payload };
         }
         case 'LOAD_ITEMS': {
@@ -205,14 +245,40 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             
             // Recalculate account balances from all ledger entries
             const updatedAccounts = state.accounts.map(acc => {
-                const debitSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.debit || 0), 0);
-                const creditSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.credit || 0), 0);
+                const accountEntries = action.payload.filter(e => e.accountId === acc.id);
+                const debitSum = accountEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                const creditSum = accountEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
                 let newBalance = 0;
                 if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
                     newBalance = debitSum - creditSum;
                 } else {
+                    // For LIABILITY, EQUITY, REVENUE: Credit increases, Debit decreases
+                    // Balance = Credits - Debits
                     newBalance = creditSum - debitSum;
                 }
+                
+                // Debug logging for Capital account
+                if (acc.name.includes('Capital') && accountEntries.length > 0) {
+                    console.log(`📊 Capital Account Balance Calculation:`, {
+                        accountName: acc.name,
+                        accountId: acc.id,
+                        accountType: acc.type,
+                        debitSum,
+                        creditSum,
+                        formula: acc.type === AccountType.EQUITY ? `creditSum - debitSum = ${creditSum} - ${debitSum}` : `debitSum - creditSum = ${debitSum} - ${creditSum}`,
+                        calculatedBalance: newBalance,
+                        oldBalance: acc.balance,
+                        entryCount: accountEntries.length,
+                        entries: accountEntries.map(e => ({
+                            transactionId: e.transactionId,
+                            debit: e.debit,
+                            credit: e.credit,
+                            narration: e.narration,
+                            stockValue: e.narration?.includes('Opening Stock') ? (e.debit > 0 ? -e.debit : e.credit) : null
+                        }))
+                    });
+                }
+                
                 return { ...acc, balance: newBalance };
             });
             
@@ -507,7 +573,7 @@ interface DataContextType {
     addDirectSale: (invoice: SalesInvoice, batchLandedCostPerKg: number) => Promise<void>;
     addOngoingOrder: (order: OngoingOrder) => void;
     processOrderShipment: (orderId: string, shipmentItems: { itemId: string, shipQty: number }[]) => void;
-    deleteEntity: (type: any, id: string) => void;
+    deleteEntity: (type: any, id: string) => Promise<void>;
     updateStock: (itemId: string, qtyChange: number) => void;
     addPlannerEntry: (entry: PlannerEntry) => void;
     updatePlannerEntry: (entry: PlannerEntry) => void;
@@ -2437,7 +2503,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .then(() => console.log('✅ Warehouse saved'))
             .catch((error) => console.error('❌ Error saving warehouse:', error));
     };
-    const deleteEntity = (type: any, id: string) => {
+    const deleteEntity = async (type: any, id: string) => {
         console.log(`🗑️ Attempting to delete ${type}/${id}`);
         
         // Special handling for certain entity types - require PIN
@@ -2482,16 +2548,253 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (type === 'items') {
             const item = state.items.find(i => i.id === id);
             if (item) {
+                // Check if item should have opening stock ledger entries
+                const openingStock = item.openingStock || item.stockQty || 0;
+                const avgCost = item.avgCost || 0;
+                const shouldHaveEntries = openingStock > 0 && avgCost !== 0;
+                
+                console.log(`📦 Item deletion check:`, {
+                    name: item.name,
+                    id: item.id,
+                    openingStock: openingStock,
+                    avgCost: avgCost,
+                    stockQty: item.stockQty,
+                    shouldHaveEntries: shouldHaveEntries,
+                    expectedValue: openingStock * avgCost
+                });
+                
                 // Find opening stock ledger entries for this item
                 const openingStockTransactionId = `OB-STK-${id}`;
+                console.log(`🔍 Looking for ledger entries with transactionId: ${openingStockTransactionId}`);
+                console.log(`📊 Total ledger entries in state: ${state.ledger.length}`);
+                
                 const itemLedgerEntries = state.ledger.filter(e => 
                     e.transactionId === openingStockTransactionId
                 );
                 
+                console.log(`🔍 Found ${itemLedgerEntries.length} ledger entries for item ${item.name}`);
+                if (itemLedgerEntries.length > 0) {
+                    console.log(`📋 Ledger entries:`, itemLedgerEntries.map(e => ({
+                        accountId: e.accountId,
+                        accountName: e.accountName,
+                        debit: e.debit,
+                        credit: e.credit
+                    })));
+                } else if (shouldHaveEntries) {
+                    console.warn(`⚠️ WARNING: Item should have opening stock ledger entries (${openingStock} × ${avgCost} = ${openingStock * avgCost}) but none found!`);
+                    console.warn(`⚠️ This means the opening stock ledger entries were never created during import.`);
+                }
+                
+                // First, try to find entries by transactionId in local state
                 if (itemLedgerEntries.length > 0) {
                     console.log(`🗑️ Found ${itemLedgerEntries.length} opening stock ledger entries for item ${item.name}. Archiving transaction.`);
-                    // Archive the opening stock transaction
-                    deleteTransaction(openingStockTransactionId, `Item "${item.name}" deleted`, CURRENT_USER?.name || 'System');
+                    
+                    // Update account balances BEFORE deleting ledger entries (so we have the data)
+                    const finishedGoodsAccount = state.accounts.find(a => 
+                        a.name.includes('Finished Goods') || a.name.includes('Inventory - Finished Goods')
+                    );
+                    const capitalAccount = state.accounts.find(a => 
+                        a.name.includes('Capital') || a.name.includes('Opening Equity')
+                    );
+                    
+                    const finishedGoodsEntry = itemLedgerEntries.find(e => 
+                        finishedGoodsAccount && (e.accountId === finishedGoodsAccount.id || e.accountName?.includes('Finished Goods'))
+                    );
+                    const capitalEntry = itemLedgerEntries.find(e => 
+                        capitalAccount && (e.accountId === capitalAccount.id || e.accountName?.includes('Capital'))
+                    );
+                    
+                    // Archive the opening stock transaction (await to ensure it completes)
+                    await deleteTransaction(openingStockTransactionId, `Item "${item.name}" deleted`, CURRENT_USER?.name || 'System');
+                    console.log(`✅ Ledger entries deleted for item ${item.name}`);
+                    
+                    // Update account balances in Firebase
+                    if (finishedGoodsAccount && finishedGoodsEntry) {
+                        // For assets: removing debit increases balance, removing credit decreases balance
+                        const balanceChange = finishedGoodsEntry.credit - finishedGoodsEntry.debit;
+                        const newBalance = finishedGoodsAccount.balance + balanceChange;
+                        
+                        try {
+                            await updateDoc(doc(db, 'accounts', finishedGoodsAccount.id), { balance: newBalance });
+                            console.log(`✅ Updated Finished Goods account (${finishedGoodsAccount.id}) balance in Firebase: ${finishedGoodsAccount.balance} → ${newBalance}`);
+                        } catch (error) {
+                            console.error('❌ Error updating Finished Goods account:', error);
+                        }
+                    }
+                    
+                    if (capitalAccount && capitalEntry) {
+                        // For equity: removing credit increases balance, removing debit decreases balance
+                        const balanceChange = capitalEntry.debit - capitalEntry.credit;
+                        const newBalance = capitalAccount.balance + balanceChange;
+                        
+                        try {
+                            await updateDoc(doc(db, 'accounts', capitalAccount.id), { balance: newBalance });
+                            console.log(`✅ Updated Capital account (${capitalAccount.id}) balance in Firebase: ${capitalAccount.balance} → ${newBalance}`);
+                        } catch (error) {
+                            console.error('❌ Error updating Capital account:', error);
+                        }
+                    }
+                } else {
+                    // Not found in local state - search Firebase by narration (transactionId might not match)
+                    console.warn(`⚠️ No opening stock ledger entries found in local state for item ${item.name} (transactionId: ${openingStockTransactionId})`);
+                    console.log(`📋 Item details:`, {
+                        id: item.id,
+                        name: item.name,
+                        openingStock: item.openingStock,
+                        avgCost: item.avgCost,
+                        stockQty: item.stockQty
+                    });
+                    
+                    console.log(`🔍 Searching Firebase for ledger entries by narration: "Opening Stock - ${item.name}"`);
+                    try {
+                        // Search by narration first (most reliable when transactionId doesn't match)
+                        const itemNameQuery = query(
+                            collection(db, 'ledger'),
+                            where('narration', '==', `Opening Stock - ${item.name}`),
+                            where('factoryId', '==', currentFactory?.id || '')
+                        );
+                        const itemNameSnapshot = await getDocs(itemNameQuery);
+                        console.log(`📊 Found ${itemNameSnapshot.size} ledger entries with item name in narration`);
+                        
+                        if (itemNameSnapshot.size > 0) {
+                            console.log(`✅ Using narration-based search to find and delete ledger entries`);
+                            const entriesToDelete = itemNameSnapshot.docs;
+                            const entries = entriesToDelete.map(doc => doc.data() as LedgerEntry);
+                            
+                            // Delete the entries
+                            const deletePromises = entriesToDelete.map(docSnapshot => deleteDoc(docSnapshot.ref));
+                            await Promise.all(deletePromises);
+                            console.log(`✅ Deleted ${entriesToDelete.length} ledger entries directly from Firebase using narration`);
+                            
+                            // Update account balances
+                            const finishedGoodsAccount = state.accounts.find(a => 
+                                a.name.includes('Finished Goods') || a.name.includes('Inventory - Finished Goods')
+                            );
+                            const capitalAccount = state.accounts.find(a => 
+                                a.name.includes('Capital') || a.name.includes('Opening Equity')
+                            );
+                            
+                            if (finishedGoodsAccount) {
+                                const finishedGoodsEntry = entries.find(e => 
+                                    e.accountId === finishedGoodsAccount.id || 
+                                    e.accountName?.includes('Finished Goods')
+                                );
+                                if (finishedGoodsEntry) {
+                                    const balanceChange = finishedGoodsEntry.credit - finishedGoodsEntry.debit;
+                                    const newBalance = finishedGoodsAccount.balance + balanceChange;
+                                    await updateDoc(doc(db, 'accounts', finishedGoodsAccount.id), { balance: newBalance });
+                                    console.log(`✅ Updated Finished Goods account (${finishedGoodsAccount.id}) balance: ${finishedGoodsAccount.balance} → ${newBalance}`);
+                                }
+                            }
+                            
+                            if (capitalAccount) {
+                                const capitalEntry = entries.find(e => 
+                                    e.accountId === capitalAccount.id || 
+                                    e.accountName?.includes('Capital')
+                                );
+                                if (capitalEntry) {
+                                    const balanceChange = capitalEntry.debit - capitalEntry.credit;
+                                    const newBalance = capitalAccount.balance + balanceChange;
+                                    await updateDoc(doc(db, 'accounts', capitalAccount.id), { balance: newBalance });
+                                    console.log(`✅ Updated Capital account (${capitalAccount.id}) balance: ${capitalAccount.balance} → ${newBalance}`);
+                                }
+                            }
+                        } else {
+                            // Also try transactionId search as fallback
+                            console.log(`🔍 Trying transactionId search as fallback: ${openingStockTransactionId}`);
+                            const ledgerQuery = query(
+                                collection(db, 'ledger'), 
+                                where('transactionId', '==', openingStockTransactionId),
+                                where('factoryId', '==', currentFactory?.id || '')
+                            );
+                            const ledgerSnapshot = await getDocs(ledgerQuery);
+                            console.log(`📊 Found ${ledgerSnapshot.size} ledger entries in Firebase for this transaction`);
+                            
+                            if (ledgerSnapshot.size > 0) {
+                                // Delete directly from Firebase
+                                const deletePromises = ledgerSnapshot.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
+                                await Promise.all(deletePromises);
+                                console.log(`✅ Deleted ${ledgerSnapshot.size} ledger entries directly from Firebase`);
+                                
+                                // Update account balances
+                                const entries = ledgerSnapshot.docs.map(doc => doc.data() as LedgerEntry);
+                                const finishedGoodsAccount = state.accounts.find(a => 
+                                    a.name.includes('Finished Goods') || a.name.includes('Inventory - Finished Goods')
+                                );
+                                const capitalAccount = state.accounts.find(a => 
+                                    a.name.includes('Capital') || a.name.includes('Opening Equity')
+                                );
+                                
+                                if (finishedGoodsAccount) {
+                                    const finishedGoodsEntry = entries.find(e => 
+                                        e.accountId === finishedGoodsAccount.id || 
+                                        e.accountName?.includes('Finished Goods')
+                                    );
+                                    if (finishedGoodsEntry) {
+                                        const balanceChange = finishedGoodsEntry.credit - finishedGoodsEntry.debit;
+                                        const newBalance = finishedGoodsAccount.balance + balanceChange;
+                                        await updateDoc(doc(db, 'accounts', finishedGoodsAccount.id), { balance: newBalance });
+                                        console.log(`✅ Updated Finished Goods account (${finishedGoodsAccount.id}) balance: ${newBalance}`);
+                                    }
+                                }
+                                
+                                if (capitalAccount) {
+                                    const capitalEntry = entries.find(e => 
+                                        e.accountId === capitalAccount.id || 
+                                        e.accountName?.includes('Capital')
+                                    );
+                                    if (capitalEntry) {
+                                        const balanceChange = capitalEntry.debit - capitalEntry.credit;
+                                        const newBalance = capitalAccount.balance + balanceChange;
+                                        await updateDoc(doc(db, 'accounts', capitalAccount.id), { balance: newBalance });
+                                        console.log(`✅ Updated Capital account (${capitalAccount.id}) balance: ${newBalance}`);
+                                    }
+                                }
+                            } else {
+                                // No entries found - check if item should have them and manually adjust
+                                const openingStock = item.openingStock || item.stockQty || 0;
+                                const avgCost = item.avgCost || 0;
+                                const hasOpeningStock = openingStock > 0 && avgCost !== 0;
+                                
+                                if (hasOpeningStock) {
+                                    const expectedValue = openingStock * avgCost;
+                                    console.warn(`⚠️ Item has opening stock (${openingStock} × ${avgCost} = ${expectedValue}) but no ledger entries found!`);
+                                    console.log(`💡 Manually adjusting account balances to reverse the opening stock value.`);
+                                    
+                                    // Manually adjust the account balances
+                                    const finishedGoodsAccount = state.accounts.find(a => 
+                                        a.name.includes('Finished Goods') || a.name.includes('Inventory - Finished Goods')
+                                    );
+                                    const capitalAccount = state.accounts.find(a => 
+                                        a.name.includes('Capital') || a.name.includes('Opening Equity')
+                                    );
+                                    
+                                    if (finishedGoodsAccount && capitalAccount) {
+                                        const stockValue = openingStock * avgCost;
+                                        const finishedGoodsChange = stockValue > 0 ? -stockValue : Math.abs(stockValue);
+                                        const capitalChange = stockValue > 0 ? -stockValue : Math.abs(stockValue);
+                                        
+                                        const newFinishedGoodsBalance = finishedGoodsAccount.balance + finishedGoodsChange;
+                                        const newCapitalBalance = capitalAccount.balance + capitalChange;
+                                        
+                                        try {
+                                            await updateDoc(doc(db, 'accounts', finishedGoodsAccount.id), { balance: newFinishedGoodsBalance });
+                                            console.log(`✅ Manually updated Finished Goods account (${finishedGoodsAccount.id}) balance: ${finishedGoodsAccount.balance} → ${newFinishedGoodsBalance}`);
+                                            
+                                            await updateDoc(doc(db, 'accounts', capitalAccount.id), { balance: newCapitalBalance });
+                                            console.log(`✅ Manually updated Capital account (${capitalAccount.id}) balance: ${capitalAccount.balance} → ${newCapitalBalance}`);
+                                        } catch (error) {
+                                            console.error('❌ Error manually updating account balances:', error);
+                                        }
+                                    }
+                                } else {
+                                    console.log(`ℹ️ Item has no opening stock (openingStock: ${openingStock}, avgCost: ${avgCost}), so no ledger entries expected.`);
+                                }
+                            }
+                        }
+                    } catch (firebaseError) {
+                        console.error('❌ Error searching Firebase for ledger entries:', firebaseError);
+                    }
                 }
             }
         }
@@ -2502,7 +2805,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (purchase) {
                 const transactionId = `PI-${purchase.batchNumber || id.toUpperCase()}`;
                 console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
-                deleteTransaction(transactionId, 'Purchase deleted', CURRENT_USER?.name || 'System');
+                await deleteTransaction(transactionId, 'Purchase deleted', CURRENT_USER?.name || 'System');
             }
         }
         
@@ -2512,7 +2815,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (invoice) {
                 const transactionId = `INV-${invoice.invoiceNo}`;
                 console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
-                deleteTransaction(transactionId, 'Sales invoice deleted', CURRENT_USER?.name || 'System');
+                await deleteTransaction(transactionId, 'Sales invoice deleted', CURRENT_USER?.name || 'System');
                 
                 // Restore item stock quantities (reverse the sale)
                 if (invoice.status === 'Posted') {
@@ -2546,7 +2849,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                           type === 'expenseVouchers' ? 'EV' : 'JV';
             const transactionId = `${prefix}-${id}`;
             console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
-            deleteTransaction(transactionId, `${type} deleted`, CURRENT_USER?.name || 'System');
+            await deleteTransaction(transactionId, `${type} deleted`, CURRENT_USER?.name || 'System');
         }
         
         // Archive invoices and purchases instead of deleting them
@@ -2597,6 +2900,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             deleteDoc(doc(db, type, id))
                 .then(() => {
                     console.log(`✅ Deleted ${type}/${id} from Firebase`);
+                    // For items, reload to ensure balance sheet is updated
+                    // Give enough time to see console logs (15 seconds for debugging)
+                    if (type === 'items') {
+                        console.log('🔄 Reloading page in 15 seconds to update Balance Sheet after item deletion...');
+                        console.log('📊 Check the logs above to see ledger deletion and account balance updates');
+                        setTimeout(() => {
+                            console.log('🔄 Reloading now...');
+                            window.location.reload();
+                        }, 15000);
+                    }
                 })
                 .catch((error) => {
                     console.error(`❌ Error deleting ${type}/${id}:`, error);

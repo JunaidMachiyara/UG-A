@@ -7,6 +7,7 @@ import Papa from 'papaparse';
 import { collection, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { TransactionType, LedgerEntry } from '../types';
+import { getAccountId } from '../services/accountMap';
 
 type ImportableEntity = 
     | 'items' 
@@ -146,6 +147,9 @@ export const DataImportExport: React.FC = () => {
                 // Batch import for large item lists (1500+ items)
                 const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
                 const validItems: any[] = [];
+                const seenCodes = new Set<string>(); // Track item codes to prevent duplicates
+                
+                console.log(`📊 Starting import of ${parsedData.length} items`);
                 
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
@@ -155,10 +159,21 @@ export const DataImportExport: React.FC = () => {
                         continue;
                     }
                     
+                    // Generate unique ID and code
+                    const itemCode = row.code || row.id || `ITEM-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`;
+                    
+                    // Check for duplicate codes in the CSV itself
+                    if (seenCodes.has(itemCode)) {
+                        console.warn(`⚠️ Duplicate item code in CSV row ${index + 2}: ${itemCode}`);
+                        errors.push(`Row ${index + 2}: Duplicate item code: ${itemCode}`);
+                        continue;
+                    }
+                    seenCodes.add(itemCode);
+                    
                     const openingStock = parseFloat(row.openingStock) || 0;
                     const item = {
-                        id: row.id || `ITEM-${Date.now()}-${index}`,
-                        code: row.code || row.id || `ITEM-${Date.now()}-${index}`,
+                        id: row.id || itemCode, // Use the unique code as ID if no ID provided
+                        code: itemCode,
                         name: row.name,
                         category: row.category || '',
                         section: row.section || '',
@@ -174,10 +189,18 @@ export const DataImportExport: React.FC = () => {
                     validItems.push(item);
                 }
                 
+                console.log(`✅ Prepared ${validItems.length} unique items for import (from ${parsedData.length} CSV rows)`);
+                
                 // Process in batches with delays to avoid rate limiting
+                console.log(`📦 Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
+                
                 for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
                     const batchItems = validItems.slice(i, i + BATCH_SIZE);
+                    const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+                    
+                    console.log(`📦 Batch ${batchNumber}: Preparing ${batchItems.length} items for Firebase write`);
+                    const itemsInBatch: string[] = [];
                     
                     for (const item of batchItems) {
                         // Prepare for batch write - use item's ID as document ID if provided
@@ -185,6 +208,10 @@ export const DataImportExport: React.FC = () => {
                         const itemRef = id 
                             ? doc(db, 'items', id)  // Use item's ID as document ID
                             : doc(collection(db, 'items'));  // Auto-generate if no ID
+                        
+                        console.log(`  📝 Adding to batch: ${item.name} (code: ${item.code}, id: ${id || 'auto-generated'}, ref: ${itemRef.id})`);
+                        itemsInBatch.push(`${item.name} (${item.code})`);
+                        
                         batch.set(itemRef, {
                             ...itemData,
                             createdAt: serverTimestamp()
@@ -193,17 +220,69 @@ export const DataImportExport: React.FC = () => {
                     
                     // Commit batch with error handling
                     try {
+                        console.log(`💾 Batch ${batchNumber}: Committing ${batchItems.length} items to Firebase...`);
+                        console.log(`   Items in this batch:`, itemsInBatch);
                         await batch.commit();
+                        console.log(`✅ Batch ${batchNumber} COMMITTED: ${batchItems.length} items written to Firebase`);
                         
-                        // After successful batch commit, add to local state and handle opening stock ledger entries
+                        // Wait for Firebase listener to load items before creating ledger entries
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        // Create opening stock ledger entries directly (don't call addItem - it causes duplicates)
+                        // Firebase listener already loaded items to state, we just need to create ledger entries
                         for (const item of batchItems) {
-                            // Use addItem with skipFirebase=true to update local state and handle opening stock
-                            // Firebase already saved via batch, so skip duplicate save
-                            await addItem(item, item.openingStock, true);
+                            const openingStock = item.openingStock || 0;
+                            const avgCost = item.avgCost || 0;
+                            
+                            if (openingStock > 0 && avgCost !== 0) {
+                                const prevYear = new Date().getFullYear() - 1;
+                                const date = `${prevYear}-12-31`;
+                                const stockValue = openingStock * avgCost;
+                                
+                                // Get account IDs using the same method as addItem
+                                const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
+                                const capitalId = getAccountId('301'); // Capital
+                                
+                                const entries = [
+                                    {
+                                        date,
+                                        transactionId: `OB-STK-${item.id || item.code}`,
+                                        transactionType: TransactionType.OPENING_BALANCE,
+                                        accountId: finishedGoodsId,
+                                        accountName: 'Inventory - Finished Goods',
+                                        currency: item.defaultCurrency || 'USD',
+                                        exchangeRate: 1,
+                                        fcyAmount: Math.abs(stockValue),
+                                        debit: stockValue > 0 ? stockValue : 0,
+                                        credit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                        narration: `Opening Stock - ${item.name}`,
+                                        factoryId: currentFactory?.id || ''
+                                    },
+                                    {
+                                        date,
+                                        transactionId: `OB-STK-${item.id || item.code}`,
+                                        transactionType: TransactionType.OPENING_BALANCE,
+                                        accountId: capitalId,
+                                        accountName: 'Capital',
+                                        currency: item.defaultCurrency || 'USD',
+                                        exchangeRate: 1,
+                                        fcyAmount: Math.abs(stockValue),
+                                        debit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                        credit: stockValue > 0 ? stockValue : 0,
+                                        narration: `Opening Stock - ${item.name}`,
+                                        factoryId: currentFactory?.id || ''
+                                    }
+                                ];
+                                await postTransaction(entries);
+                            }
+                            
+                            // Small delay every 10 items to avoid rate limiting
+                            if (batchItems.indexOf(item) % 10 === 9) {
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                            }
                         }
                         
                         successCount += batchItems.length;
-                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validItems.length / BATCH_SIZE)} saved: ${batchItems.length} items to Firebase`);
                         
                         // Small delay between batches to avoid rate limiting
                         if (i + BATCH_SIZE < validItems.length) {
@@ -489,8 +568,9 @@ export const DataImportExport: React.FC = () => {
                 }
             }
             
-            if ((selectedEntity !== 'items' && selectedEntity !== 'partners') || 
-                (selectedEntity === 'items' && parsedData.length <= 100) ||
+            // Handle items/partners with batch writes (even for small batches)
+            // This prevents duplicates - items/partners are processed here, NOT in the individual path below
+            if ((selectedEntity === 'items' && parsedData.length <= 100) ||
                 (selectedEntity === 'partners' && parsedData.length <= 50)) {
                 const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
                 const validItems: any[] = [];
@@ -544,10 +624,61 @@ export const DataImportExport: React.FC = () => {
                         await batch.commit();
                         
                         // After successful batch commit, add to local state and handle opening stock ledger entries
+                        // Wait for Firebase listener to load items before creating ledger entries
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        // Create opening stock ledger entries directly (don't call addItem - it causes duplicates)
+                        // Firebase listener already loaded items to state, we just need to create ledger entries
                         for (const item of batchItems) {
-                            // Use addItem with skipFirebase=true to update local state and handle opening stock
-                            // Firebase already saved via batch, so skip duplicate save
-                            await addItem(item, item.openingStock, true);
+                            const openingStock = item.openingStock || 0;
+                            const avgCost = item.avgCost || 0;
+                            
+                            if (openingStock > 0 && avgCost !== 0) {
+                                const prevYear = new Date().getFullYear() - 1;
+                                const date = `${prevYear}-12-31`;
+                                const stockValue = openingStock * avgCost;
+                                
+                                // Get account IDs using the same method as addItem
+                                const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
+                                const capitalId = getAccountId('301'); // Capital
+                                
+                                const entries = [
+                                    {
+                                        date,
+                                        transactionId: `OB-STK-${item.id || item.code}`,
+                                        transactionType: TransactionType.OPENING_BALANCE,
+                                        accountId: finishedGoodsId,
+                                        accountName: 'Inventory - Finished Goods',
+                                        currency: item.defaultCurrency || 'USD',
+                                        exchangeRate: 1,
+                                        fcyAmount: Math.abs(stockValue),
+                                        debit: stockValue > 0 ? stockValue : 0,
+                                        credit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                        narration: `Opening Stock - ${item.name}`,
+                                        factoryId: currentFactory?.id || ''
+                                    },
+                                    {
+                                        date,
+                                        transactionId: `OB-STK-${item.id || item.code}`,
+                                        transactionType: TransactionType.OPENING_BALANCE,
+                                        accountId: capitalId,
+                                        accountName: 'Capital',
+                                        currency: item.defaultCurrency || 'USD',
+                                        exchangeRate: 1,
+                                        fcyAmount: Math.abs(stockValue),
+                                        debit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                        credit: stockValue > 0 ? stockValue : 0,
+                                        narration: `Opening Stock - ${item.name}`,
+                                        factoryId: currentFactory?.id || ''
+                                    }
+                                ];
+                                await postTransaction(entries);
+                            }
+                            
+                            // Small delay every 10 items to avoid rate limiting
+                            if (batchItems.indexOf(item) % 10 === 9) {
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                            }
                         }
                         
                         successCount += batchItems.length;
@@ -564,8 +695,10 @@ export const DataImportExport: React.FC = () => {
                 }
             }
             
-            if (selectedEntity !== 'items' || parsedData.length <= 100) {
-                // Use proper add functions for smaller imports or other entities
+            // Handle other entities (NOT items/partners - those are handled above with batch writes)
+            // Items and partners are already processed via batch writes above, so skip them here
+            if (selectedEntity !== 'items' && selectedEntity !== 'partners') {
+                // Use proper add functions for other entities
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
                     try {
@@ -579,30 +712,8 @@ export const DataImportExport: React.FC = () => {
                         try {
                             switch (selectedEntity) {
                             case 'items': {
-                                // For large imports (>100 items), use batch processing
-                                if (parsedData.length > 100) {
-                                    // This will be handled in the batch section above
-                                    // Skip individual processing
-                                    break;
-                                }
-                                
-                                const openingStock = parseFloat(row.openingStock) || 0;
-                                const item = {
-                                    id: row.id,
-                                    code: row.code || row.id,
-                                    name: row.name,
-                                    category: row.category || '',
-                                    section: row.section || '',
-                                    packingType: row.packingType || 'Kg',
-                                    weightPerUnit: parseFloat(row.weightPerUnit) || 0,
-                                    avgCost: parseFloat(row.avgCost) || 0,
-                                    salePrice: parseFloat(row.salePrice) || 0,
-                                    stockQty: parseFloat(row.stockQty) || 0,
-                                    openingStock: openingStock,
-                                    nextSerial: 1
-                                };
-                                await addItem(item, openingStock);
-                                successCount++;
+                                // Items are handled via batch writes above - should never reach here
+                                console.warn('⚠️ Items should be processed via batch writes, not individual addItem');
                                 break;
                             }
                             case 'partners': {
@@ -922,13 +1033,22 @@ export const DataImportExport: React.FC = () => {
                 errors
             });
 
-            // Refresh page to reload data from Firebase
+            console.log('📊 ========== IMPORT COMPLETE ==========');
+            console.log(`✅ Total items processed: ${successCount}`);
+            console.log(`❌ Total errors: ${errors.length}`);
+            console.log('⏳ Waiting 15 seconds before reloading page...');
+            console.log('📋 Please copy all logs above before page reloads');
+            console.log('==========================================');
+            
+            // Wait 15 seconds before reloading so user can copy logs
             if (successCount > 0) {
                 setTimeout(() => {
+                    console.log('🔄 Reloading page now...');
                     window.location.reload();
-                }, 2000);
+                }, 15000);
             }
         } catch (error) {
+            console.error('❌ Import error:', error);
             alert(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
             setImporting(false);

@@ -509,7 +509,8 @@ const BalanceSheet: React.FC = () => {
 
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalSupplierAdvances;
     const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP + totalCustomerAdvances;
-    const totalEquity = equity.reduce((sum, a) => sum + Math.abs(a.balance), 0) + netIncome;
+    // FIXED: Equity should preserve negative balances (like negative inventory costs)
+    const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0) + netIncome;
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -579,7 +580,10 @@ const BalanceSheet: React.FC = () => {
                                 {equity.filter(a => a && a.balance !== undefined).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                        {/* FIXED: Show actual balance (can be negative for items with negative cost) */}
+                                        <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
+                                            {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                        </span>
                                     </div>
                                 ))}
                                 <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">
