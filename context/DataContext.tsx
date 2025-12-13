@@ -2478,6 +2478,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
+        // If deleting an item, also delete/archive its opening stock ledger entries
+        if (type === 'items') {
+            const item = state.items.find(i => i.id === id);
+            if (item) {
+                // Find opening stock ledger entries for this item
+                const openingStockTransactionId = `OB-STK-${id}`;
+                const itemLedgerEntries = state.ledger.filter(e => 
+                    e.transactionId === openingStockTransactionId
+                );
+                
+                if (itemLedgerEntries.length > 0) {
+                    console.log(`🗑️ Found ${itemLedgerEntries.length} opening stock ledger entries for item ${item.name}. Archiving transaction.`);
+                    // Archive the opening stock transaction
+                    deleteTransaction(openingStockTransactionId, `Item "${item.name}" deleted`, CURRENT_USER?.name || 'System');
+                }
+            }
+        }
+        
         // If deleting a purchase, also delete its ledger entries
         if (type === 'purchases') {
             const purchase = state.purchases.find(p => p.id === id);
