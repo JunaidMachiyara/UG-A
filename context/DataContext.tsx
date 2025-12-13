@@ -1432,16 +1432,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         const nextSerial = openingStock + 1; const itemWithStock = { ...itemWithFactory, stockQty: openingStock, nextSerial: nextSerial }; 
         
-        dispatch({ type: 'ADD_ITEM', payload: itemWithStock });
-        
-        // Save to Firebase (remove id field) - skip if already saved via batch
+        // Only dispatch ADD_ITEM if not skipping Firebase (Firebase listener will handle it)
+        // When skipFirebase=true, the batch write already saved to Firebase, and the listener will add it to state
         if (!skipFirebase) {
+            dispatch({ type: 'ADD_ITEM', payload: itemWithStock });
+            
+            // Save to Firebase (remove id field)
             const { id: _, ...itemData } = itemWithStock;
             addDoc(collection(db, 'items'), { ...itemData, createdAt: serverTimestamp() })
                 .then(() => console.log('✅ Item saved to Firebase'))
                 .catch((error) => console.error('❌ Error saving item:', error));
         }
-           // Do NOT post duplicate ledger entries for opening stock here
+        // When skipFirebase=true, Firebase listener will add the item to state automatically
+        // We only need to handle opening stock ledger entries here
     };
 
     const updateItem = async (id: string, updatedItem: Item) => {
