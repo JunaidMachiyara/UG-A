@@ -6,7 +6,31 @@ import { useAuth } from '../context/AuthContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ComposedChart, Treemap, Funnel, FunnelChart, LabelList } from 'recharts';
 import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText, Building2, ChevronDown } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
-import { AccountType, UserRole } from '../types';
+import { AccountType, UserRole, PartnerType } from '../types';
+
+// Format numbers in abbreviated format (1k, 1M, 1B, etc.)
+const formatNumber = (num: number): string => {
+    if (num === 0) return '0';
+    const absNum = Math.abs(num);
+    const sign = num < 0 ? '-' : '';
+    
+    if (absNum >= 1000000000) {
+        const value = absNum / 1000000000;
+        return `${sign}${value % 1 === 0 ? value.toFixed(0) : value.toFixed(1)}B`;
+    } else if (absNum >= 1000000) {
+        const value = absNum / 1000000;
+        return `${sign}${value % 1 === 0 ? value.toFixed(0) : value.toFixed(1)}M`;
+    } else if (absNum >= 1000) {
+        const value = absNum / 1000;
+        return `${sign}${value % 1 === 0 ? value.toFixed(0) : value.toFixed(1)}k`;
+    } else {
+        // For numbers less than 1000, show up to 2 decimal places if needed
+        return num.toLocaleString(undefined, { 
+            maximumFractionDigits: absNum % 1 === 0 ? 0 : 2,
+            minimumFractionDigits: 0
+        });
+    }
+};
 
 // Animation variants for stagger effect
 const fadeInUp = {
@@ -29,7 +53,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
                         <span className="text-slate-600">{entry.name}:</span>
                         <span className="font-bold text-slate-900">
                             {typeof entry.value === 'number' 
-                                ? `$${entry.value.toLocaleString()}` 
+                                ? `$${formatNumber(entry.value)}` 
                                 : entry.value}
                         </span>
                     </p>
@@ -360,8 +384,20 @@ export const Dashboard: React.FC = () => {
     const metrics = useMemo(() => {
         const cash = state.accounts.find(a => a.code === '1001')?.balance || 0;
         const bank = state.accounts.find(a => a.code === '1010')?.balance || 0;
-        const receivables = state.accounts.find(a => a.code === '1100')?.balance || 0;
-        const payables = state.accounts.find(a => a.code === '2000')?.balance || 0;
+        
+        // Accounts Receivable: Use same calculation as Balance Sheet - sum of positive customer balances (Debtors)
+        // This matches the "Debtors (Accounts Receivable)" value from the Balance Sheet
+        const customersAR = state.partners
+            .filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0)
+            .reduce((sum, c) => sum + c.balance, 0);
+        const receivables = customersAR;
+        
+        // Accounts Payable: Use same calculation as Balance Sheet - sum of negative supplier balances (Creditors)
+        // This matches the "Creditors (Accounts Payable)" value from the Balance Sheet
+        const suppliersAP = state.partners
+            .filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0)
+            .reduce((sum, s) => sum + Math.abs(s.balance), 0);
+        const payables = suppliersAP;
         
         const assets = state.accounts.filter(a => a.type === AccountType.ASSET).reduce((sum, a) => sum + a.balance, 0);
         const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY).reduce((sum, a) => sum + a.balance, 0);
@@ -370,16 +406,64 @@ export const Dashboard: React.FC = () => {
         const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + a.balance, 0);
         
         const inventory = state.accounts.filter(a => a.code?.startsWith('12')).reduce((sum, a) => sum + a.balance, 0);
+        
+        // Raw Materials Inventory: Account code 1200
+        const rawMaterialsInventory = state.accounts.find(a => a.code === '1200' || a.name.includes('Raw Material'))?.balance || 0;
+        
+        // Finished Goods Inventory: Account code 1202
+        const finishedGoodsInventory = state.accounts.find(a => a.code === '1202' || a.name.includes('Finished Goods'))?.balance || 0;
+        
         const netProfit = revenue - expenses;
-        const workingCapital = (cash + bank + receivables + inventory) - payables;
+        
+        // Calculate Net Working Capital properly: Current Assets - Current Liabilities
+        // Current Assets: All accounts with code 1000-1999 (all asset accounts are current)
+        const currentAssetsAccounts = state.accounts
+            .filter(a => {
+                if (a.type !== AccountType.ASSET) return false;
+                const codeNum = parseInt(a.code || '0');
+                return !isNaN(codeNum) && codeNum >= 1000 && codeNum < 2000;
+            })
+            .reduce((sum, a) => sum + a.balance, 0);
+        
+        // - Positive supplier balances = Advances to Suppliers (Asset)
+        const supplierAdvances = state.partners
+            .filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance > 0)
+            .reduce((sum, s) => sum + s.balance, 0);
+        
+        // Total Current Assets = Account balances + Partner receivables + Supplier advances
+        const currentAssets = currentAssetsAccounts + customersAR + supplierAdvances;
+        
+        // Current Liabilities: All accounts with code 2000-2499 (excluding long-term which start at 2500)
+        const currentLiabilitiesAccounts = state.accounts
+            .filter(a => {
+                if (a.type !== AccountType.LIABILITY) return false;
+                const codeNum = parseInt(a.code || '0');
+                return !isNaN(codeNum) && codeNum >= 2000 && codeNum < 2500;
+            })
+            .reduce((sum, a) => sum + a.balance, 0);
+        
+        // Add partner balances to current liabilities:
+        // - Negative customer balances = Customer Advances (Liability)
+        const customerAdvances = state.partners
+            .filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0)
+            .reduce((sum, c) => sum + Math.abs(c.balance), 0);
+        
+        // - Negative supplier balances = Accounts Payable (Creditors) - already calculated above
+        
+        // Total Current Liabilities = Account balances + Customer advances + Supplier payables
+        const currentLiabilities = currentLiabilitiesAccounts + customerAdvances + suppliersAP;
+        
+        // Net Working Capital = Current Assets - Current Liabilities
+        const workingCapital = currentAssets - currentLiabilities;
         
         return {
             cash, bank, receivables, payables, assets, liabilities, equity,
-            revenue, expenses, inventory, netProfit, workingCapital,
+            revenue, expenses, inventory, rawMaterialsInventory, finishedGoodsInventory, netProfit, workingCapital,
+            currentAssets, currentLiabilities, // Added for reference
             totalLiquidity: cash + bank,
-            currentRatio: payables > 0 ? ((cash + bank + receivables) / payables) : 0
+            currentRatio: currentLiabilities > 0 ? (currentAssets / currentLiabilities) : 0
         };
-    }, [state.accounts]);
+    }, [state.accounts, state.partners]);
 
     // Waterfall Chart Data - Cash Flow Analysis
     const waterfallData = useMemo(() => {
@@ -661,11 +745,12 @@ export const Dashboard: React.FC = () => {
                 </div>
             </div>
 
-            {/* KPI Cards Row 1 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* KPI Cards - 8 Cards in a Single Row */}
+            <div className="w-full">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
                 <StatCard 
                     title="Total Liquidity" 
-                    value={`$${metrics.totalLiquidity.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.totalLiquidity)}`} 
                     subValue="Cash + Bank Accounts" 
                     icon={Wallet} 
                     trend="up"
@@ -674,8 +759,8 @@ export const Dashboard: React.FC = () => {
                 />
                 <StatCard 
                     title="Net Working Capital" 
-                    value={`$${metrics.workingCapital.toLocaleString()}`} 
-                    subValue="Current Assets - Liabilities" 
+                    value={`$${formatNumber(metrics.workingCapital)}`} 
+                    subValue={`Current Assets ($${formatNumber(metrics.currentAssets || 0)}) - Current Liabilities ($${formatNumber(metrics.currentLiabilities || 0)})`} 
                     icon={TrendingUp} 
                     trend={metrics.workingCapital > 0 ? 'up' : 'down'}
                     change={metrics.workingCapital > 0 ? 'Healthy Position' : 'Needs Attention'}
@@ -683,7 +768,7 @@ export const Dashboard: React.FC = () => {
                 />
                 <StatCard 
                     title="Accounts Receivable" 
-                    value={`$${metrics.receivables.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.receivables)}`} 
                     subValue={`From ${state.partners.filter(p => p.type === 'CUSTOMER').length} Customers`}
                     icon={Users} 
                     change="Avg. 30 days"
@@ -691,20 +776,16 @@ export const Dashboard: React.FC = () => {
                 />
                 <StatCard 
                     title="Accounts Payable" 
-                    value={`$${metrics.payables.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.payables)}`} 
                     subValue={`To ${state.partners.filter(p => p.type === 'SUPPLIER').length} Suppliers`}
                     icon={CreditCard} 
                     trend="down"
                     change="Due in 15 days"
                     delay={300}
                 />
-            </div>
-
-            {/* Desktop KPI Cards Row 2 */}
-            <div className="hidden lg:grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatCard 
                     title="Total Revenue" 
-                    value={`$${metrics.revenue.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.revenue)}`} 
                     subValue="Year to Date" 
                     icon={DollarSign} 
                     trend="up"
@@ -713,7 +794,7 @@ export const Dashboard: React.FC = () => {
                 />
                 <StatCard 
                     title="Net Profit" 
-                    value={`$${metrics.netProfit.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.netProfit)}`} 
                     subValue={`Margin: ${metrics.revenue > 0 ? ((metrics.netProfit / metrics.revenue) * 100).toFixed(1) : 0}%`}
                     icon={Target} 
                     trend={metrics.netProfit > 0 ? 'up' : 'down'}
@@ -722,21 +803,21 @@ export const Dashboard: React.FC = () => {
                 />
                 <StatCard 
                     title="Inventory Value" 
-                    value={`$${metrics.inventory.toLocaleString()}`} 
+                    value={`$${formatNumber(metrics.inventory)}`} 
                     subValue={`${state.items.length} Active Items`}
                     icon={Package} 
                     change="Moving Avg Cost"
                     delay={600}
                 />
                 <StatCard 
-                    title="Current Ratio" 
-                    value={metrics.currentRatio.toFixed(2)} 
-                    subValue="Liquidity Health Indicator" 
-                    icon={Activity} 
-                    trend={metrics.currentRatio >= 1.5 ? 'up' : 'down'}
-                    change={metrics.currentRatio >= 1.5 ? 'Excellent' : 'Fair'}
+                    title="Raw Materials Inventory" 
+                    value={`$${formatNumber(metrics.rawMaterialsInventory)}`} 
+                    subValue="Inventory - Raw Materials"
+                    icon={Layers} 
+                    change="From Balance Sheet"
                     delay={700}
                 />
+                </div>
             </div>
 
             {/* Production Yield Analysis - FEATURED AT TOP */}
@@ -798,13 +879,13 @@ export const Dashboard: React.FC = () => {
                     {/* Key Metrics Cards */}
                     <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-amber-100 hover:scale-105 transition-transform">
                         <div className="text-xs font-bold text-amber-600 uppercase mb-2">Raw Material Used</div>
-                        <div className="text-3xl font-bold text-slate-900 mb-1">{productionYieldData.totalRawMaterialKg.toLocaleString()}</div>
+                        <div className="text-3xl font-bold text-slate-900 mb-1">{formatNumber(productionYieldData.totalRawMaterialKg)}</div>
                         <div className="text-xs text-slate-500">Kilograms Opened</div>
                     </div>
 
                     <div className="bg-white/90 backdrop-blur-sm p-5 rounded-2xl shadow-lg border border-emerald-100 hover:scale-105 transition-transform">
                         <div className="text-xs font-bold text-emerald-600 uppercase mb-2">Finished Goods</div>
-                        <div className="text-3xl font-bold text-slate-900 mb-1">{productionYieldData.totalFinishedGoodsKg.toLocaleString()}</div>
+                        <div className="text-3xl font-bold text-slate-900 mb-1">{formatNumber(productionYieldData.totalFinishedGoodsKg)}</div>
                         <div className="text-xs text-slate-500">Kilograms Produced</div>
                     </div>
 
@@ -929,7 +1010,7 @@ export const Dashboard: React.FC = () => {
                                     <LabelList 
                                         dataKey="weight" 
                                         position="top" 
-                                        formatter={(value: number) => `${value.toLocaleString()} Kg`} 
+                                        formatter={(value: number) => `${formatNumber(value)} Kg`} 
                                         style={{ fontSize: 12, fill: '#78350f', fontWeight: 'bold' }} 
                                         offset={12}
                                     />
@@ -1265,7 +1346,7 @@ export const Dashboard: React.FC = () => {
                         <Factory size={32} className="animate-pulse" />
                         <h4 className="text-lg font-bold">Total Assets</h4>
                     </div>
-                    <div className="text-4xl font-bold mb-2">${metrics.assets.toLocaleString()}</div>
+                    <div className="text-4xl font-bold mb-2">${formatNumber(metrics.assets)}</div>
                     <div className="text-blue-100 text-sm">Balance Sheet Strength</div>
                 </div>
                 
@@ -1338,7 +1419,7 @@ const CustomTreemapContent = (props: any) => {
                         fill="#fff"
                         fontSize={11}
                     >
-                        ${size?.toLocaleString()}
+                        ${size ? formatNumber(size) : '0'}
                     </text>
                 </>
             )}

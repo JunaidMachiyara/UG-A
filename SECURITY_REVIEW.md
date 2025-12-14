@@ -118,3 +118,4 @@ const ProtectedRoute = ({ module, action, children }) => {
 5. **RECOMMENDED**: Implement session timeout
 6. **RECOMMENDED**: Add rate limiting for login attempts
 
+
