@@ -73,9 +73,9 @@ const CSV_TEMPLATES = {
         ['wh-001', 'Main Warehouse', 'Dubai']
     ],
     purchases: [
-        ['supplierId', 'subSupplierId', 'originalTypeId', 'weightPurchased', 'costPerKgFCY', 'totalCostFCY', 'batchNumber', 'containerNumber', 'divisionId', 'subDivisionId', 'status', 'receivedWeight'],
-        ['SUP-1001', '', 'OT-001', '10000', '2.50', '25000', 'BATCH-001', 'CONT-12345', 'DIV-001', 'SUBDIV-001', 'Arrived', '9950'],
-        ['SUP-1002', 'SUB-1001', 'OT-002', '5000', '3.00', '15000', '', '', 'DIV-001', '', 'In Transit', '']
+        ['supplierId', 'subSupplierId', 'originalTypeId', 'originalProductId', 'weightPurchased', 'costPerKgFCY', 'totalCostFCY', 'batchNumber', 'containerNumber', 'divisionId', 'subDivisionId', 'status', 'receivedWeight'],
+        ['SUP-1001', '', 'OT-001', 'ORP-1001', '10000', '2.50', '25000', 'BATCH-001', 'CONT-12345', 'DIV-001', 'SUBDIV-001', 'Arrived', '9950'],
+        ['SUP-1002', 'SUB-1001', 'OT-002', '', '5000', '3.00', '15000', '', '', 'DIV-001', '', 'In Transit', '']
     ]
 };
 
@@ -665,6 +665,21 @@ export const DataImportExport: React.FC = () => {
                         }
                     }
                     
+                    // Validate originalProductId if provided (optional)
+                    let originalProductId = row.originalProductId?.trim();
+                    if (originalProductId) {
+                        const originalProduct = state.originalProducts.find(op => op.id === originalProductId);
+                        if (!originalProduct) {
+                            errors.push(`Row ${index + 2}: Original Product with ID "${originalProductId}" not found. Please create original product first or leave blank.`);
+                            continue;
+                        }
+                        // Validate that the original product belongs to the selected original type
+                        if (originalProduct.originalTypeId !== originalTypeId) {
+                            errors.push(`Row ${index + 2}: Original Product "${originalProductId}" does not belong to Original Type "${originalTypeId}". Please use a product that belongs to this type or leave blank.`);
+                            continue;
+                        }
+                    }
+                    
                     // Parse numeric fields
                     const weightPurchased = parseFloat(row.weightPurchased);
                     const costPerKgFCY = parseFloat(row.costPerKgFCY);
@@ -725,6 +740,7 @@ export const DataImportExport: React.FC = () => {
                         subSuppliers: subSupplierId ? [subSupplierId] : undefined,
                         originalTypeId: originalTypeId,
                         originalType: originalTypeName,
+                        originalProductId: originalProductId || undefined,
                         containerNumber: containerNumber || undefined,
                         divisionId: divisionId,
                         subDivisionId: subDivisionId,
@@ -737,7 +753,15 @@ export const DataImportExport: React.FC = () => {
                         additionalCosts: [], // No additional costs for CSV imports
                         totalLandedCost: totalLandedCost,
                         landedCostPerKg: landedCostPerKg,
-                        items: [], // Single-type purchase for now
+                        items: originalProductId ? [{
+                            originalTypeId: originalTypeId,
+                            originalType: originalTypeName,
+                            originalProductId: originalProductId,
+                            weightPurchased: weightPurchased,
+                            qtyPurchased: qtyPurchased,
+                            costPerKgFCY: costPerKgFCY,
+                            totalCostFCY: totalCostFCY
+                        }] : [], // Single-type purchase with optional original product
                         factoryId: currentFactory?.id || ''
                     };
                     
@@ -811,10 +835,90 @@ export const DataImportExport: React.FC = () => {
                                     console.error(`❌ Error creating LogisticsEntry for purchase ${purchase.batchNumber}:`, error);
                                     errors.push(`Failed to create LogisticsEntry for batch ${purchase.batchNumber}: ${error.message}`);
                                 }
-                                
-                                // Small delay every 10 entries
-                                if (batchPurchases.indexOf(purchase) % 10 === 9) {
-                                    await new Promise(resolve => setTimeout(resolve, 100));
+                            }
+                        }
+                        
+                        // Create opening balance ledger entries for Raw Material Inventory and Capital
+                        // BATCHED: Collect all entries first, then post in one batch for speed
+                        const rawMaterialAccount = state.accounts.find(a => 
+                            a.name.includes('Raw Material') || 
+                            a.name.includes('Raw Materials') ||
+                            a.code === '104' || 
+                            a.code === '1200'
+                        );
+                        const capitalAccount = state.accounts.find(a => 
+                            a.name.includes('Capital') || 
+                            a.code === '301'
+                        );
+                        
+                        if (!rawMaterialAccount || !capitalAccount) {
+                            console.error('❌ Account lookup failed for purchase ledger entries:', {
+                                rawMaterialAccount: rawMaterialAccount?.name || 'NOT FOUND',
+                                capitalAccount: capitalAccount?.name || 'NOT FOUND'
+                            });
+                            errors.push(`Missing required accounts. Raw Material: ${rawMaterialAccount ? 'Found' : 'NOT FOUND'}, Capital: ${capitalAccount ? 'Found' : 'NOT FOUND'}`);
+                        } else {
+                            const rawMaterialInvId = rawMaterialAccount.id;
+                            const capitalId = capitalAccount.id;
+                            
+                            // Collect all ledger entries for this batch
+                            const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
+                            
+                            for (const purchase of batchPurchases) {
+                                try {
+                                    const stockValue = purchase.totalLandedCost || purchase.totalCostFCY || 0;
+                                    
+                                    if (stockValue <= 0) {
+                                        console.log(`⚠️ Purchase ${purchase.batchNumber} has zero value, skipping ledger entries`);
+                                        continue;
+                                    }
+                                    
+                                    const transactionId = `OB-PUR-${purchase.id}`;
+                                    
+                                    allLedgerEntries.push(
+                                        {
+                                            date: purchase.date,
+                                            transactionId,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: rawMaterialInvId,
+                                            accountName: rawMaterialAccount.name,
+                                            currency: 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: stockValue,
+                                            debit: stockValue,
+                                            credit: 0,
+                                            narration: `Opening Stock (Purchase) - ${purchase.originalType} (Batch: ${purchase.batchNumber})`,
+                                            factoryId: currentFactory?.id || ''
+                                        },
+                                        {
+                                            date: purchase.date,
+                                            transactionId,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: capitalId,
+                                            accountName: capitalAccount.name,
+                                            currency: 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: stockValue,
+                                            debit: 0,
+                                            credit: stockValue,
+                                            narration: `Opening Stock (Purchase) - ${purchase.originalType} (Batch: ${purchase.batchNumber})`,
+                                            factoryId: currentFactory?.id || ''
+                                        }
+                                    );
+                                } catch (error: any) {
+                                    console.error(`❌ Error preparing ledger entries for purchase ${purchase.batchNumber}:`, error);
+                                    errors.push(`Failed to prepare ledger entries for batch ${purchase.batchNumber}: ${error.message}`);
+                                }
+                            }
+                            
+                            // Post all ledger entries in ONE batch call (much faster!)
+                            if (allLedgerEntries.length > 0) {
+                                try {
+                                    await postTransaction(allLedgerEntries);
+                                    console.log(`✅ Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchases) in one batch`);
+                                } catch (error: any) {
+                                    console.error(`❌ Error posting batch ledger entries:`, error);
+                                    errors.push(`Failed to post ledger entries batch: ${error.message}`);
                                 }
                             }
                         }
@@ -1435,6 +1539,7 @@ export const DataImportExport: React.FC = () => {
                         supplierId: p.supplierId,
                         subSupplierId: p.subSuppliers && p.subSuppliers.length > 0 ? p.subSuppliers[0] : '',
                         originalTypeId: p.originalTypeId,
+                        originalProductId: p.originalProductId || (p.items && p.items.length > 0 ? p.items[0].originalProductId : '') || '',
                         weightPurchased: p.weightPurchased,
                         costPerKgFCY: p.costPerKgFCY,
                         totalCostFCY: p.totalCostFCY,

@@ -1731,20 +1731,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         console.log('🟢 Productions with factory:', productionsWithFactory);
         
-        // Save each production entry to Firebase
-        productionsWithFactory.forEach(prod => {
-            const { id, ...prodData } = prod;
-            console.log('💾 Saving to Firebase:', prodData);
+        // Save production entries to Firebase using batch writes (FAST for bulk uploads!)
+        const BATCH_SIZE = 500; // Firebase limit
+        const productionBatches: any[][] = [];
+        
+        for (let i = 0; i < productionsWithFactory.length; i += BATCH_SIZE) {
+            productionBatches.push(productionsWithFactory.slice(i, i + BATCH_SIZE));
+        }
+        
+        for (let batchIdx = 0; batchIdx < productionBatches.length; batchIdx++) {
+            const batch = writeBatch(db);
+            const batchProds = productionBatches[batchIdx];
             
-            // Remove undefined fields (Firebase doesn't allow undefined values)
-            const cleanedData = Object.fromEntries(
-                Object.entries(prodData).filter(([_, value]) => value !== undefined)
-            );
+            for (const prod of batchProds) {
+                const { id, ...prodData } = prod;
+                // Remove undefined fields (Firebase doesn't allow undefined values)
+                const cleanedData = Object.fromEntries(
+                    Object.entries(prodData).filter(([_, value]) => value !== undefined)
+                );
+                
+                const prodRef = doc(collection(db, 'productions'));
+                batch.set(prodRef, { ...cleanedData, createdAt: serverTimestamp() });
+            }
             
-            addDoc(collection(db, 'productions'), { ...cleanedData, createdAt: serverTimestamp() })
-                .then(() => console.log('✅ Production entry saved to Firebase'))
-                .catch((error) => console.error('❌ Error saving production:', error));
-        });
+            await batch.commit();
+            console.log(`✅ Batch ${batchIdx + 1}/${productionBatches.length}: Saved ${batchProds.length} production entries to Firebase`);
+        }
         
         // Create accounting entries for production
         const fgInvId = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'))?.id;
@@ -1843,34 +1855,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 
             } else if (wipId) {
                 // NORMAL PRODUCTION ACCOUNTING: WIP to FG
+                // BATCHED: Collect all ledger entries first, then post in one go (FAST!)
+                const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
+                
                 for (const prod of productionsWithFactory) {
                     try {
-                    const item = state.items.find(i => i.id === prod.itemId);
-                    if (!item) {
-                        console.log('❌ Item not found for production:', prod.itemId);
-                        continue;
-                    }
-                    
-                    console.log('📦 Item found:', item.name, 'avgCost:', item.avgCost);
-                    
-                    // Calculate values using avgCost (can be negative for waste/garbage items)
-                    const finishedGoodsValue = prod.qtyProduced * (item.avgCost || 0);
-                    const totalKg = prod.weightProduced;
-                    const wipCostPerKg = 1; // This should ideally come from the actual WIP cost tracking
-                    const wipValueConsumed = totalKg * wipCostPerKg;
-                    const productionGain = finishedGoodsValue - wipValueConsumed;
-                    
-                    console.log('💰 Calculations:', {
-                        finishedGoodsValue,
-                        totalKg,
-                        wipValueConsumed,
-                        productionGain
-                    });
-                    
-                    const transactionId = `PROD-${prod.id}`;
-                    const entries: Omit<LedgerEntry, 'id'>[] = [
+                        const item = state.items.find(i => i.id === prod.itemId);
+                        if (!item) {
+                            console.log('❌ Item not found for production:', prod.itemId);
+                            continue;
+                        }
+                        
+                        // Calculate values using avgCost (can be negative for waste/garbage items)
+                        const finishedGoodsValue = prod.qtyProduced * (item.avgCost || 0);
+                        const totalKg = prod.weightProduced;
+                        const wipCostPerKg = 1; // This should ideally come from the actual WIP cost tracking
+                        const wipValueConsumed = totalKg * wipCostPerKg;
+                        const productionGain = finishedGoodsValue - wipValueConsumed;
+                        
+                        const transactionId = `PROD-${prod.id}`;
+                        
                         // Finished Goods entry (debit if positive, credit if negative value like garbage)
-                        {
+                        allLedgerEntries.push({
                             date: prod.date,
                             transactionId,
                             transactionType: TransactionType.PRODUCTION,
@@ -1883,9 +1889,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             credit: finishedGoodsValue < 0 ? Math.abs(finishedGoodsValue) : 0,
                             narration: `Production: ${prod.itemName} (${prod.qtyProduced} units, ${totalKg}kg)`,
                             factoryId: prod.factoryId
-                        },
+                        });
+                        
                         // Credit WIP (reduce work in progress)
-                        {
+                        allLedgerEntries.push({
                             date: prod.date,
                             transactionId,
                             transactionType: TransactionType.PRODUCTION,
@@ -1898,31 +1905,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             credit: wipValueConsumed,
                             narration: `Production: ${prod.itemName} (${totalKg}kg raw material consumed)`,
                             factoryId: prod.factoryId
-                        }
-                    ];
-                    
-                    // If there's a production gain, credit Production Gain account
-                    if (productionGain !== 0 && productionGainId) {
-                        entries.push({
-                            date: prod.date,
-                            transactionId,
-                            transactionType: TransactionType.PRODUCTION,
-                            accountId: productionGainId,
-                            accountName: 'Production Gain',
-                            currency: 'USD',
-                            exchangeRate: 1,
-                            fcyAmount: Math.abs(productionGain),
-                            debit: productionGain < 0 ? Math.abs(productionGain) : 0,
-                            credit: productionGain > 0 ? productionGain : 0,
-                            narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`,
-                            factoryId: prod.factoryId
                         });
-                    }
-                    
-                    await postTransaction(entries);
+                        
+                        // If there's a production gain, credit Production Gain account
+                        if (productionGain !== 0 && productionGainId) {
+                            allLedgerEntries.push({
+                                date: prod.date,
+                                transactionId,
+                                transactionType: TransactionType.PRODUCTION,
+                                accountId: productionGainId,
+                                accountName: 'Production Gain',
+                                currency: 'USD',
+                                exchangeRate: 1,
+                                fcyAmount: Math.abs(productionGain),
+                                debit: productionGain < 0 ? Math.abs(productionGain) : 0,
+                                credit: productionGain > 0 ? productionGain : 0,
+                                narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`,
+                                factoryId: prod.factoryId
+                            });
+                        }
                     } catch (error: any) {
-                        console.error('❌ Error in production accounting:', error);
+                        console.error('❌ Error preparing production accounting:', error);
                     }
+                }
+                
+                // Post all ledger entries in one batch (much faster!)
+                if (allLedgerEntries.length > 0) {
+                    await postTransaction(allLedgerEntries);
+                    console.log(`✅ Created ${allLedgerEntries.length} ledger entries for ${productionsWithFactory.length} production entries in one batch`);
                 }
             }
         }
@@ -1944,23 +1954,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
         });
         
-        // Apply updates to Firebase
-        itemStockUpdates.forEach(({ stockQtyDelta, maxSerialEnd }, itemId) => {
-            const item = state.items.find(i => i.id === itemId);
-            if (item) {
-                const updates: any = {
-                    stockQty: item.stockQty + stockQtyDelta
-                };
+        // Apply updates to Firebase using batch writes (FAST!)
+        if (itemStockUpdates.size > 0) {
+            const BATCH_SIZE = 500;
+            const itemUpdateBatches: Array<Array<[string, { stockQtyDelta: number; maxSerialEnd: number }]>> = [];
+            
+            const itemUpdatesArray = Array.from(itemStockUpdates.entries());
+            for (let i = 0; i < itemUpdatesArray.length; i += BATCH_SIZE) {
+                itemUpdateBatches.push(itemUpdatesArray.slice(i, i + BATCH_SIZE));
+            }
+            
+            for (let batchIdx = 0; batchIdx < itemUpdateBatches.length; batchIdx++) {
+                const batch = writeBatch(db);
+                const batchUpdates = itemUpdateBatches[batchIdx];
                 
-                if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
-                    updates.nextSerial = maxSerialEnd + 1;
+                for (const [itemId, { stockQtyDelta, maxSerialEnd }] of batchUpdates) {
+                    const item = state.items.find(i => i.id === itemId);
+                    if (item) {
+                        const updates: any = {
+                            stockQty: item.stockQty + stockQtyDelta
+                        };
+                        
+                        if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
+                            updates.nextSerial = maxSerialEnd + 1;
+                        }
+                        
+                        batch.update(doc(db, 'items', itemId), updates);
+                    }
                 }
                 
-                updateDoc(doc(db, 'items', itemId), updates)
-                    .then(() => console.log(`✅ Updated stock for item ${itemId}: stockQty +${stockQtyDelta} = ${updates.stockQty}`))
-                    .catch((error) => console.error(`❌ Error updating item ${itemId}:`, error));
+                await batch.commit();
+                console.log(`✅ Batch ${batchIdx + 1}/${itemUpdateBatches.length}: Updated stock for ${batchUpdates.length} items`);
             }
-        });
+        }
     };
 
     const deleteProduction = async (id: string) => {
@@ -2913,13 +2939,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
-        // If deleting a purchase, also delete its ledger entries
+        // If deleting a purchase, also delete its ledger entries and related records
         if (type === 'purchases') {
             const purchase = state.purchases.find(p => p.id === id);
             if (purchase) {
+                // Delete ledger entries for regular purchases (PI-XXX)
                 const transactionId = `PI-${purchase.batchNumber || id.toUpperCase()}`;
-                console.log(`🗑️ Also deleting ledger entries for transaction: ${transactionId}`);
+                console.log(`🗑️ Deleting ledger entries for transaction: ${transactionId}`);
                 await deleteTransaction(transactionId, 'Purchase deleted', CURRENT_USER?.name || 'System');
+                
+                // Delete ledger entries for CSV-imported purchases (OB-PUR-XXX)
+                const csvTransactionId = `OB-PUR-${purchase.id}`;
+                console.log(`🗑️ Deleting CSV import ledger entries for transaction: ${csvTransactionId}`);
+                await deleteTransaction(csvTransactionId, 'Purchase deleted', CURRENT_USER?.name || 'System');
+                
+                // Delete related LogisticsEntry records
+                const relatedLogistics = state.logisticsEntries.filter(le => le.purchaseId === purchase.id);
+                console.log(`🗑️ Deleting ${relatedLogistics.length} LogisticsEntry record(s) for purchase ${purchase.batchNumber}`);
+                for (const logisticsEntry of relatedLogistics) {
+                    try {
+                        await deleteDoc(doc(db, 'logisticsEntries', logisticsEntry.id));
+                        console.log(`✅ Deleted LogisticsEntry ${logisticsEntry.id}`);
+                    } catch (error: any) {
+                        console.error(`❌ Error deleting LogisticsEntry ${logisticsEntry.id}:`, error);
+                    }
+                }
             }
         }
         
