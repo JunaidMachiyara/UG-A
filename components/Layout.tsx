@@ -78,9 +78,9 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 />
             )}
             
-            {/* Sidebar */}
-            <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out overflow-hidden ${
-                sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+            {/* Sidebar (Mobile / Tablet Only) */}
+            <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out overflow-hidden lg:hidden ${
+                sidebarOpen ? 'translate-x-0' : '-translate-x-full'
             }`}>
                 <div className="p-6 flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -234,7 +234,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
             {/* Main Content */}
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 shadow-sm">
+                <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-6 lg:px-8 shadow-sm">
                     <div className="flex items-center gap-2 md:gap-4">
                         <button
                             onClick={() => setSidebarOpen(true)}
@@ -242,13 +242,236 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         >
                             <Menu size={20} />
                         </button>
-                        <h2 className="text-base md:text-lg font-semibold text-slate-800">Overview</h2>
+                        <h2 className="text-base md:text-lg font-semibold text-slate-800 hidden sm:block">Overview</h2>
                         {currentFactory && (
                             <div className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs md:text-sm font-medium">
                                 <Building2 size={14} className="md:w-4 md:h-4" />
                                 <span className="hidden md:inline">{currentFactory.code}</span>
                             </div>
                         )}
+                        {/* Top navigation (Desktop) */}
+                        <nav className="hidden lg:flex items-center gap-1 ml-4">
+                            {hasPermission(PermissionModule.DASHBOARD, 'view') && (
+                                <NavLink
+                                    to="/"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <LayoutDashboard size={14} />
+                                    <span>Dashboard</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.DATA_ENTRY, 'view') && (
+                                <NavLink
+                                    to="/entry"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <ShoppingCart size={14} />
+                                    <span>Data Entry</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.OFFLOADING, 'view') && (
+                                <NavLink
+                                    to="/offloading"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Container size={14} />
+                                    <span>Off-Loading</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.LOGISTICS, 'view') && (
+                                <NavLink
+                                    to="/logistics"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Truck size={14} />
+                                    <span>Logistics</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.CUSTOMS, 'view') && (
+                                <NavLink
+                                    to="/customs"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Briefcase size={14} />
+                                    <span>Customs</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.POSTING, 'view') && (
+                                <NavLink
+                                    to="/posting"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <ClipboardCheck size={14} />
+                                    <span>Posting</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.ACCOUNTING, 'view') && (
+                                <NavLink
+                                    to="/accounting"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <FileText size={14} />
+                                    <span>Accounting</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.REPORTS, 'view') && (
+                                <NavLink
+                                    to="/reports"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <PieChart size={14} />
+                                    <span>Reports</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.HR, 'view') && (
+                                <NavLink
+                                    to="/hr"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Users size={14} />
+                                    <span>HR & Fleet</span>
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.CHAT, 'view') && (
+                                <NavLink
+                                    to="/chat"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <MessageSquare size={14} />
+                                    <span>Chat</span>
+                                    {unreadCount > 0 && (
+                                        <span className="ml-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                                            {unreadCount}
+                                        </span>
+                                    )}
+                                </NavLink>
+                            )}
+                            {hasPermission(PermissionModule.SETUP, 'view') && (
+                                <NavLink
+                                    to="/setup"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Database size={14} />
+                                    <span>Setup</span>
+                                </NavLink>
+                            )}
+                            <NavLink
+                                to="/csv-validator"
+                                className={({ isActive }) =>
+                                    `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                        isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                    }`
+                                }
+                            >
+                                <CheckSquare size={14} />
+                                <span>CSV Validator</span>
+                            </NavLink>
+                            <NavLink
+                                to="/import-export"
+                                className={({ isActive }) =>
+                                    `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                        isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                    }`
+                                }
+                            >
+                                <Upload size={14} />
+                                <span>Import/Export</span>
+                            </NavLink>
+                            {(currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.FACTORY_ADMIN) && (
+                                <NavLink
+                                    to="/admin"
+                                    className={({ isActive }) =>
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        }`
+                                    }
+                                >
+                                    <Settings size={14} />
+                                    <span>Admin</span>
+                                </NavLink>
+                            )}
+                            {currentUser?.role === UserRole.SUPER_ADMIN && (
+                                <>
+                                    <NavLink
+                                        to="/admin/factories"
+                                        className={({ isActive }) =>
+                                            `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                                isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                            }`
+                                        }
+                                    >
+                                        <Building2 size={14} />
+                                        <span>Factories</span>
+                                    </NavLink>
+                                    <NavLink
+                                        to="/admin/users"
+                                        className={({ isActive }) =>
+                                            `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                                isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                            }`
+                                        }
+                                    >
+                                        <Users size={14} />
+                                        <span>Users</span>
+                                    </NavLink>
+                                    <NavLink
+                                        to="/admin/migration"
+                                        className={({ isActive }) =>
+                                            `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
+                                                isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                            }`
+                                        }
+                                    >
+                                        <Database size={14} />
+                                        <span>Migration</span>
+                                    </NavLink>
+                                </>
+                            )}
+                        </nav>
                     </div>
                     <div className="flex items-center gap-2 md:gap-4">
                         <div className="hidden md:block">{getStatusIndicator()}</div>

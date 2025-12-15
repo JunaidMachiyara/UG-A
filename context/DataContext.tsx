@@ -685,7 +685,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (snapshot) => {
                 const categories: Category[] = [];
                 snapshot.forEach((doc) => {
-                    categories.push({ id: doc.id, ...doc.data() } as Category);
+                    const data = doc.data() as any;
+                    // Preserve business ID/code stored in the document; fall back to Firestore ID only if missing
+                    const businessId = data.id || doc.id;
+                    categories.push({ ...data, id: businessId } as Category);
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_CATEGORIES', payload: categories });
@@ -701,7 +704,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (snapshot) => {
                 const sections: Section[] = [];
                 snapshot.forEach((doc) => {
-                    sections.push({ id: doc.id, ...doc.data() } as Section);
+                    const data = doc.data() as any;
+                    const businessId = data.id || doc.id;
+                    sections.push({ ...data, id: businessId } as Section);
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SECTIONS', payload: sections });
@@ -2368,16 +2373,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const addCategory = (cat: Category) => {
         const categoryWithFactory = { ...cat, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_CATEGORY', payload: categoryWithFactory });
-        const { id: _, ...categoryData } = categoryWithFactory;
-        addDoc(collection(db, 'categories'), { ...categoryData, createdAt: serverTimestamp() })
+        // Preserve the business ID in Firestore so UI can show it
+        addDoc(collection(db, 'categories'), { ...categoryWithFactory, createdAt: serverTimestamp() })
             .then(() => console.log('✅ Category saved'))
             .catch((error) => console.error('❌ Error saving category:', error));
     };
     const addSection = (sec: Section) => {
         const sectionWithFactory = { ...sec, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_SECTION', payload: sectionWithFactory });
-        const { id: _, ...sectionData } = sectionWithFactory;
-        addDoc(collection(db, 'sections'), { ...sectionData, createdAt: serverTimestamp() })
+        addDoc(collection(db, 'sections'), { ...sectionWithFactory, createdAt: serverTimestamp() })
             .then(() => console.log('✅ Section saved'))
             .catch((error) => console.error('❌ Error saving section:', error));
     };
@@ -2681,8 +2685,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     console.log(`🗑️ Found ${partnerLedgerEntries.length} ledger entries for partner ${partner.name}. Archiving ${transactionIds.length} transactions.`);
                     
                     // Archive each transaction
-                    transactionIds.forEach(transactionId => {
-                        deleteTransaction(transactionId, `Partner "${partner.name}" deleted`, CURRENT_USER?.name || 'System');
+                    transactionIds.forEach((transactionId) => {
+                        deleteTransaction(String(transactionId), `Partner "${partner.name}" deleted`, CURRENT_USER?.name || 'System');
                     });
                 }
             }

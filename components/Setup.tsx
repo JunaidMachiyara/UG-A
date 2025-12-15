@@ -746,7 +746,7 @@ export const useSetupConfigs = () => {
         title: 'Inventory Items (Finished Goods)',
         entityKey: 'items',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            // Show only business code as the visible ID for users
             { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Category', key: 'category' },
@@ -779,7 +779,7 @@ export const useSetupConfigs = () => {
             },
             { name: 'packingType', label: 'Packing Type', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'weightPerUnit', label: 'Package Size (Kg)', type: 'number', required: true },
-            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage', step: 'any' },
+            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage' },
             { name: 'salePrice', label: 'Avg Sale Price', type: 'number' },
             { name: 'stockQty', label: 'Opening Stock Qty', type: 'number', placeholder: 'For Opening Balance Only' }
         ],
@@ -831,10 +831,48 @@ export const useSetupConfigs = () => {
         title: 'Product Categories',
         entityKey: 'categories',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'ID / Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' }
         ],
-        fields: [{ name: 'name', label: 'Category Name', type: 'text', required: true }],
+        fields: [
+            {
+                name: 'id',
+                label: 'Category ID',
+                type: 'text',
+                required: false,
+                placeholder: 'Enter ID (e.g., CAT-1001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    if (value && value.trim() !== '') {
+                        const trimmedId = value.trim();
+                        const existing = allData.find((c: any) => c.id === trimmedId);
+                        if (existing && existing.id !== formData.id) {
+                            return `Category ID "${trimmedId}" already exists. Please use a different ID.`;
+                        }
+                    }
+                    return null;
+                },
+                compute: (formData, allData) => {
+                    // If user entered an ID, respect it
+                    if (formData.id && formData.id.trim() !== '') {
+                        return formData.id.trim();
+                    }
+
+                    // Auto-generate next CAT-XXXX
+                    const prefix = 'CAT';
+                    const existingIds = allData
+                        .map((c: any) => {
+                            const match = c.id?.match(/^CAT-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter((n: number) => n > 0)
+                        .sort((a: number, b: number) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
+            { name: 'name', label: 'Category Name', type: 'text', required: true }
+        ],
         onSave: (data) => addCategory(data),
         onDelete: (id) => deleteEntity('categories', id)
     };
@@ -843,10 +881,46 @@ export const useSetupConfigs = () => {
         title: 'Factory Sections',
         entityKey: 'sections',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'ID / Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' }
         ],
-        fields: [{ name: 'name', label: 'Section Name', type: 'text', required: true }],
+        fields: [
+            {
+                name: 'id',
+                label: 'Section ID',
+                type: 'text',
+                required: false,
+                placeholder: 'Enter ID (e.g., SEC-1001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    if (value && value.trim() !== '') {
+                        const trimmedId = value.trim();
+                        const existing = allData.find((s: any) => s.id === trimmedId);
+                        if (existing && existing.id !== formData.id) {
+                            return `Section ID "${trimmedId}" already exists. Please use a different ID.`;
+                        }
+                    }
+                    return null;
+                },
+                compute: (formData, allData) => {
+                    if (formData.id && formData.id.trim() !== '') {
+                        return formData.id.trim();
+                    }
+
+                    const prefix = 'SEC';
+                    const existingIds = allData
+                        .map((s: any) => {
+                            const match = s.id?.match(/^SEC-(\d+)$/);
+                            return match ? parseInt(match[1]) : 0;
+                        })
+                        .filter((n: number) => n > 0)
+                        .sort((a: number, b: number) => b - a);
+                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
+                    return `${prefix}-${nextNumber}`;
+                }
+            },
+            { name: 'name', label: 'Section Name', type: 'text', required: true }
+        ],
         onSave: (data) => addSection(data),
         onDelete: (id) => deleteEntity('sections', id)
     };
