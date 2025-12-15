@@ -34,6 +34,10 @@ export const AdminModule: React.FC = () => {
     const [subDivisionFixResult, setSubDivisionFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
     const [fixingOriginalProducts, setFixingOriginalProducts] = useState(false);
     const [originalProductFixResult, setOriginalProductFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
+    const [fixingCategories, setFixingCategories] = useState(false);
+    const [categoryFixResult, setCategoryFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
+    const [fixingSections, setFixingSections] = useState(false);
+    const [sectionFixResult, setSectionFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
     const [fixingPurchaseLedgers, setFixingPurchaseLedgers] = useState(false);
     const [purchaseLedgerFixResult, setPurchaseLedgerFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
     const [deletingAllPurchases, setDeletingAllPurchases] = useState(false);
@@ -47,6 +51,8 @@ export const AdminModule: React.FC = () => {
         logisticsEntries: number;
         purchases: number;
     } | null>(null);
+    const [deletingFactoryItems, setDeletingFactoryItems] = useState(false);
+    const [deleteItemsResult, setDeleteItemsResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
 
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
@@ -264,6 +270,109 @@ export const AdminModule: React.FC = () => {
             executeReset();
         }
     };
+
+    // Delete ALL items (and their opening stock ledger entries) for the current factory
+    const deleteAllItemsForCurrentFactory = async () => {
+        if (!currentFactory) {
+            alert('Please select a factory first.');
+            return;
+        }
+
+        const pin = prompt('Enter Supervisor PIN (7860) to delete ALL items for this factory:');
+        if (pin !== SUPERVISOR_PIN) {
+            alert('Invalid PIN. Operation cancelled.');
+            return;
+        }
+
+        if (!window.confirm(
+            `This will permanently delete ALL items and their opening stock entries for factory "${currentFactory.name}".\n\n` +
+            `This is intended only for resetting before a fresh CSV import.\n\n` +
+            `Are you sure you want to continue?`
+        )) {
+            return;
+        }
+
+        setDeletingFactoryItems(true);
+        setDeleteItemsResult(null);
+
+        try {
+            // Load all items for this factory
+            const itemsQuery = query(
+                collection(db, 'items'),
+                where('factoryId', '==', currentFactory.id)
+            );
+            const snapshot = await getDocs(itemsQuery);
+
+            if (snapshot.empty) {
+                setDeleteItemsResult({
+                    success: true,
+                    message: `No items found for factory ${currentFactory.name}.`,
+                    deleted: 0,
+                    errors: []
+                });
+                setDeletingFactoryItems(false);
+                return;
+            }
+
+            const errors: string[] = [];
+            let deleted = 0;
+
+            // First: delete opening stock ledger entries OB-STK-<itemId>
+            for (const docSnap of snapshot.docs) {
+                const itemId = docSnap.id;
+                const data = docSnap.data() as any;
+                const name = data.name || itemId;
+                const transactionId = `OB-STK-${itemId}`;
+
+                try {
+                    await deleteTransaction(transactionId, `Delete Opening Stock for ${name}`, currentUser?.name || 'Admin');
+                } catch (err: any) {
+                    console.warn('Failed to delete opening stock transaction for item', itemId, err);
+                    errors.push(`Item ${name} (${itemId}): could not delete opening stock transaction (${transactionId})`);
+                }
+            }
+
+            // Then: delete items themselves in batches
+            const BATCH_SIZE = 500;
+            let batch = writeBatch(db);
+            let opCount = 0;
+
+            for (const docSnap of snapshot.docs) {
+                batch.delete(docSnap.ref);
+                deleted++;
+                opCount++;
+                if (opCount === BATCH_SIZE) {
+                    await batch.commit();
+                    batch = writeBatch(db);
+                    opCount = 0;
+                }
+            }
+            if (opCount > 0) {
+                await batch.commit();
+            }
+
+            setDeleteItemsResult({
+                success: true,
+                message: `Deleted ${deleted} items for factory ${currentFactory.name}.`,
+                deleted,
+                errors
+            });
+
+            // Reload after a short delay so state/Firebase stay in sync
+            setTimeout(() => window.location.reload(), 3000);
+        } catch (error: any) {
+            console.error('Failed to delete items for factory:', error);
+            setDeleteItemsResult({
+                success: false,
+                message: `Failed to delete items for factory: ${error?.message || 'Unknown error'}`,
+                deleted: 0,
+                errors: []
+            });
+        } finally {
+            setDeletingFactoryItems(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -551,6 +660,86 @@ export const AdminModule: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {/* Delete ALL Items for Current Factory */}
+            <div className="bg-white border-2 border-red-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-red-100 p-3 rounded-lg">
+                        <Trash2 className="text-red-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Delete ALL Items for Current Factory</h3>
+                        <p className="text-sm text-slate-600">
+                            Permanently delete all inventory items and their opening stock ledger entries for factory "{currentFactory?.name || 'N/A'}".
+                        </p>
+                    </div>
+                </div>
+
+                {deleteItemsResult && (
+                    <div
+                        className={`p-4 mb-4 rounded-lg border-2 ${
+                            deleteItemsResult.success ? 'bg-emerald-50 border-emerald-300' : 'bg-red-50 border-red-300'
+                        }`}
+                    >
+                        <div className="flex items-center gap-2 mb-2">
+                            {deleteItemsResult.success ? (
+                                <CheckCircle className="text-emerald-600" size={20} />
+                            ) : (
+                                <XCircle className="text-red-600" size={20} />
+                            )}
+                            <span
+                                className={`font-bold ${
+                                    deleteItemsResult.success ? 'text-emerald-900' : 'text-red-900'
+                                }`}
+                            >
+                                {deleteItemsResult.success ? 'Items Deleted' : 'Delete Failed'}
+                            </span>
+                        </div>
+                        <p
+                            className={`text-sm ${
+                                deleteItemsResult.success ? 'text-emerald-700' : 'text-red-700'
+                            }`}
+                        >
+                            {deleteItemsResult.message}
+                        </p>
+                        {deleteItemsResult.errors.length > 0 && (
+                            <ul className="mt-2 text-xs text-red-700 list-disc list-inside">
+                                {deleteItemsResult.errors.slice(0, 5).map((err, idx) => (
+                                    <li key={idx}>{err}</li>
+                                ))}
+                                {deleteItemsResult.errors.length > 5 && (
+                                    <li>...and {deleteItemsResult.errors.length - 5} more</li>
+                                )}
+                            </ul>
+                        )}
+                    </div>
+                )}
+
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-red-800">
+                        <strong>Warning:</strong> This will remove <strong>all items</strong> for the current factory, including opening
+                        stock entries. This is intended only for resetting before a fresh CSV import. This action cannot be undone.
+                    </p>
+                </div>
+
+                <button
+                    onClick={deleteAllItemsForCurrentFactory}
+                    disabled={deletingFactoryItems}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold disabled:opacity-50 flex items-center gap-2"
+                >
+                    {deletingFactoryItems ? (
+                        <>
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                            Deleting all items...
+                        </>
+                    ) : (
+                        <>
+                            <Trash2 size={18} />
+                            Delete ALL Items for {currentFactory?.name || 'Current Factory'}
+                        </>
+                    )}
+                </button>
+            </div>
 
             {/* Fix Missing Opening Balances Section */}
             <div className="bg-white border-2 border-blue-200 rounded-xl p-6 shadow-lg">
@@ -2076,6 +2265,522 @@ export const AdminModule: React.FC = () => {
                                 </div>
                             )}
                             {originalProductFixResult.success && (
+                                <p className="text-xs text-emerald-600 mt-2">
+                                    Page will refresh automatically in 5 seconds...
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Fix Category IDs Section */}
+            <div className="bg-white border-2 border-purple-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-100 p-3 rounded-lg">
+                        <RefreshCw className="text-purple-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Category IDs</h3>
+                        <p className="text-sm text-slate-600">Rename all Categories to use CAT-1001, CAT-1002 format instead of random IDs</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-purple-900 mb-2">
+                            Current Categories: {state.categories.length}
+                        </p>
+                        <p className="text-xs text-purple-700">
+                            This will rename all Categories to use sequential IDs (CAT-1001, CAT-1002, etc.) and update all references in:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Items (category field)</li>
+                            </ul>
+                        </p>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <p className="text-sm text-amber-800">
+                            <strong>⚠️ Warning:</strong> This operation will:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Create new Category documents with new IDs</li>
+                                <li>Update all references in Items collection</li>
+                                <li>Delete old Category documents</li>
+                            </ul>
+                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            const pin = prompt('Enter Supervisor PIN to proceed:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            const categoriesToFix = state.categories.filter(c => !c.id.match(/^CAT-\d+$/));
+                            if (categoriesToFix.length === 0) {
+                                alert('All Categories already have correct IDs (CAT-XXXX format).');
+                                return;
+                            }
+
+                            if (!confirm(`This will rename ${categoriesToFix.length} Categories. Continue?`)) {
+                                return;
+                            }
+
+                            setFixingCategories(true);
+                            setCategoryFixResult(null);
+
+                            try {
+                                const errors: string[] = [];
+                                let updated = 0;
+                                const idMapping: Record<string, string> = {};
+
+                                // Step 1: Generate new IDs for all Categories
+                                const categoriesToRename = state.categories
+                                    .filter(c => !c.id.match(/^CAT-\d+$/))
+                                    .sort((a, b) => a.name.localeCompare(b.name));
+
+                                const existingCatIds = state.categories
+                                    .filter(c => c.id.match(/^CAT-\d+$/))
+                                    .map(c => {
+                                        const match = c.id.match(/^CAT-(\d+)$/);
+                                        return match ? parseInt(match[1]) : 0;
+                                    })
+                                    .filter(n => n > 0)
+                                    .sort((a, b) => b - a);
+
+                                let nextNumber = existingCatIds.length > 0 ? existingCatIds[0] + 1 : 1001;
+
+                                categoriesToRename.forEach(c => {
+                                    const newId = `CAT-${String(nextNumber).padStart(4, '0')}`;
+                                    idMapping[c.id] = newId;
+                                    nextNumber++;
+                                });
+
+                                console.log(`📋 Category ID Mapping:`, idMapping);
+                                console.log(`📊 Will rename ${categoriesToRename.length} Categories`);
+
+                                // Step 2: Create new documents with new IDs
+                                const batch = writeBatch(db);
+                                let batchCount = 0;
+                                const BATCH_SIZE = 500;
+
+                                for (const oldCat of categoriesToRename) {
+                                    const newId = idMapping[oldCat.id];
+                                    if (!newId) continue;
+
+                                    const { id, ...catData } = oldCat;
+                                    const newCatRef = doc(db, 'categories', newId);
+                                    batch.set(newCatRef, {
+                                        ...catData,
+                                        createdAt: catData.createdAt || new Date(),
+                                        updatedAt: new Date()
+                                    });
+
+                                    batchCount++;
+                                    if (batchCount >= BATCH_SIZE) {
+                                        await batch.commit();
+                                        console.log(`✅ Committed batch: ${batchCount} new Categories created`);
+                                        batchCount = 0;
+                                    }
+                                }
+
+                                if (batchCount > 0) {
+                                    await batch.commit();
+                                    console.log(`✅ Committed final batch: ${batchCount} new Categories created`);
+                                }
+
+                                // Step 3: Update all references in items
+                                console.log('🔄 Updating items...');
+                                const itemsQuery = query(
+                                    collection(db, 'items'),
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
+                                const itemsSnapshot = await getDocs(itemsQuery);
+                                const itemsBatch = writeBatch(db);
+                                let itemUpdates = 0;
+
+                                itemsSnapshot.docs.forEach(docSnapshot => {
+                                    const item = docSnapshot.data();
+                                    let needsUpdate = false;
+                                    const updates: any = {};
+
+                                    if (item.category && idMapping[item.category]) {
+                                        updates.category = idMapping[item.category];
+                                        needsUpdate = true;
+                                    }
+
+                                    if (needsUpdate) {
+                                        itemsBatch.update(docSnapshot.ref, updates);
+                                        itemUpdates++;
+                                    }
+                                });
+
+                                if (itemUpdates > 0) {
+                                    await itemsBatch.commit();
+                                    console.log(`✅ Updated ${itemUpdates} items`);
+                                }
+
+                                // Step 4: Delete old Category documents
+                                console.log('🗑️ Deleting old Category documents...');
+                                const deleteBatch = writeBatch(db);
+                                let deleteCount = 0;
+
+                                for (const oldCat of categoriesToRename) {
+                                    const oldCatRef = doc(db, 'categories', oldCat.id);
+                                    deleteBatch.delete(oldCatRef);
+                                    deleteCount++;
+
+                                    if (deleteCount >= BATCH_SIZE) {
+                                        await deleteBatch.commit();
+                                        console.log(`✅ Deleted batch: ${deleteCount} old Categories`);
+                                        deleteCount = 0;
+                                    }
+                                }
+
+                                if (deleteCount > 0) {
+                                    await deleteBatch.commit();
+                                    console.log(`✅ Deleted final batch: ${deleteCount} old Categories`);
+                                }
+
+                                updated = categoriesToRename.length;
+
+                                setCategoryFixResult({
+                                    success: true,
+                                    message: `Successfully renamed ${updated} Categories!\n\n- Created ${updated} new documents\n- Updated ${itemUpdates} items\n- Deleted ${updated} old documents`,
+                                    updated,
+                                    errors
+                                });
+
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 5000);
+
+                            } catch (error: any) {
+                                console.error('❌ Error fixing Category IDs:', error);
+                                setCategoryFixResult({
+                                    success: false,
+                                    message: `Failed: ${error.message}`,
+                                    updated: 0,
+                                    errors: [error.message]
+                                });
+                            } finally {
+                                setFixingCategories(false);
+                            }
+                        }}
+                        disabled={fixingCategories || state.categories.length === 0}
+                        className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {fixingCategories ? (
+                            <>
+                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                Renaming Categories...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw size={18} />
+                                Fix Category IDs ({state.categories.filter(c => !c.id.match(/^CAT-\d+$/)).length} need fixing)
+                            </>
+                        )}
+                    </button>
+
+                    {categoryFixResult && (
+                        <div className={`p-4 rounded-lg border-2 ${
+                            categoryFixResult.success 
+                                ? 'bg-emerald-50 border-emerald-300' 
+                                : 'bg-red-50 border-red-300'
+                        }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {categoryFixResult.success ? (
+                                    <CheckCircle className="text-emerald-600" size={20} />
+                                ) : (
+                                    <XCircle className="text-red-600" size={20} />
+                                )}
+                                <span className={`font-bold ${
+                                    categoryFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                }`}>
+                                    {categoryFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                </span>
+                            </div>
+                            <p className={`text-sm whitespace-pre-line ${
+                                categoryFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                            }`}>
+                                {categoryFixResult.message}
+                            </p>
+                            {categoryFixResult.errors.length > 0 && (
+                                <div className="mt-2 text-xs text-red-600">
+                                    <strong>Errors:</strong>
+                                    <ul className="list-disc list-inside mt-1">
+                                        {categoryFixResult.errors.slice(0, 5).map((err, idx) => (
+                                            <li key={idx}>{err}</li>
+                                        ))}
+                                        {categoryFixResult.errors.length > 5 && (
+                                            <li>... and {categoryFixResult.errors.length - 5} more</li>
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+                            {categoryFixResult.success && (
+                                <p className="text-xs text-emerald-600 mt-2">
+                                    Page will refresh automatically in 5 seconds...
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Fix Section IDs Section */}
+            <div className="bg-white border-2 border-indigo-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-indigo-100 p-3 rounded-lg">
+                        <RefreshCw className="text-indigo-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Section IDs</h3>
+                        <p className="text-sm text-slate-600">Rename all Factory Sections to use SEC-1001, SEC-1002 format instead of random IDs</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-indigo-900 mb-2">
+                            Current Sections: {state.sections.length}
+                        </p>
+                        <p className="text-xs text-indigo-700">
+                            This will rename all Factory Sections to use sequential IDs (SEC-1001, SEC-1002, etc.) and update all references in:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Items (section field)</li>
+                            </ul>
+                        </p>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <p className="text-sm text-amber-800">
+                            <strong>⚠️ Warning:</strong> This operation will:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Create new Section documents with new IDs</li>
+                                <li>Update all references in Items collection</li>
+                                <li>Delete old Section documents</li>
+                            </ul>
+                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            const pin = prompt('Enter Supervisor PIN to proceed:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            const sectionsToFix = state.sections.filter(s => !s.id.match(/^SEC-\d+$/));
+                            if (sectionsToFix.length === 0) {
+                                alert('All Sections already have correct IDs (SEC-XXXX format).');
+                                return;
+                            }
+
+                            if (!confirm(`This will rename ${sectionsToFix.length} Sections. Continue?`)) {
+                                return;
+                            }
+
+                            setFixingSections(true);
+                            setSectionFixResult(null);
+
+                            try {
+                                const errors: string[] = [];
+                                let updated = 0;
+                                const idMapping: Record<string, string> = {};
+
+                                // Step 1: Generate new IDs for all Sections
+                                const sectionsToRename = state.sections
+                                    .filter(s => !s.id.match(/^SEC-\d+$/))
+                                    .sort((a, b) => a.name.localeCompare(b.name));
+
+                                const existingSecIds = state.sections
+                                    .filter(s => s.id.match(/^SEC-\d+$/))
+                                    .map(s => {
+                                        const match = s.id.match(/^SEC-(\d+)$/);
+                                        return match ? parseInt(match[1]) : 0;
+                                    })
+                                    .filter(n => n > 0)
+                                    .sort((a, b) => b - a);
+
+                                let nextNumber = existingSecIds.length > 0 ? existingSecIds[0] + 1 : 1001;
+
+                                sectionsToRename.forEach(s => {
+                                    const newId = `SEC-${String(nextNumber).padStart(4, '0')}`;
+                                    idMapping[s.id] = newId;
+                                    nextNumber++;
+                                });
+
+                                console.log(`📋 Section ID Mapping:`, idMapping);
+                                console.log(`📊 Will rename ${sectionsToRename.length} Sections`);
+
+                                // Step 2: Create new documents with new IDs
+                                const batch = writeBatch(db);
+                                let batchCount = 0;
+                                const BATCH_SIZE = 500;
+
+                                for (const oldSec of sectionsToRename) {
+                                    const newId = idMapping[oldSec.id];
+                                    if (!newId) continue;
+
+                                    const { id, ...secData } = oldSec;
+                                    const newSecRef = doc(db, 'sections', newId);
+                                    batch.set(newSecRef, {
+                                        ...secData,
+                                        createdAt: secData.createdAt || new Date(),
+                                        updatedAt: new Date()
+                                    });
+
+                                    batchCount++;
+                                    if (batchCount >= BATCH_SIZE) {
+                                        await batch.commit();
+                                        console.log(`✅ Committed batch: ${batchCount} new Sections created`);
+                                        batchCount = 0;
+                                    }
+                                }
+
+                                if (batchCount > 0) {
+                                    await batch.commit();
+                                    console.log(`✅ Committed final batch: ${batchCount} new Sections created`);
+                                }
+
+                                // Step 3: Update all references in items
+                                console.log('🔄 Updating items...');
+                                const itemsQuery = query(
+                                    collection(db, 'items'),
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
+                                const itemsSnapshot = await getDocs(itemsQuery);
+                                const itemsBatch = writeBatch(db);
+                                let itemUpdates = 0;
+
+                                itemsSnapshot.docs.forEach(docSnapshot => {
+                                    const item = docSnapshot.data();
+                                    let needsUpdate = false;
+                                    const updates: any = {};
+
+                                    if (item.section && idMapping[item.section]) {
+                                        updates.section = idMapping[item.section];
+                                        needsUpdate = true;
+                                    }
+
+                                    if (needsUpdate) {
+                                        itemsBatch.update(docSnapshot.ref, updates);
+                                        itemUpdates++;
+                                    }
+                                });
+
+                                if (itemUpdates > 0) {
+                                    await itemsBatch.commit();
+                                    console.log(`✅ Updated ${itemUpdates} items`);
+                                }
+
+                                // Step 4: Delete old Section documents
+                                console.log('🗑️ Deleting old Section documents...');
+                                const deleteBatch = writeBatch(db);
+                                let deleteCount = 0;
+
+                                for (const oldSec of sectionsToRename) {
+                                    const oldSecRef = doc(db, 'sections', oldSec.id);
+                                    deleteBatch.delete(oldSecRef);
+                                    deleteCount++;
+
+                                    if (deleteCount >= BATCH_SIZE) {
+                                        await deleteBatch.commit();
+                                        console.log(`✅ Deleted batch: ${deleteCount} old Sections`);
+                                        deleteCount = 0;
+                                    }
+                                }
+
+                                if (deleteCount > 0) {
+                                    await deleteBatch.commit();
+                                    console.log(`✅ Deleted final batch: ${deleteCount} old Sections`);
+                                }
+
+                                updated = sectionsToRename.length;
+
+                                setSectionFixResult({
+                                    success: true,
+                                    message: `Successfully renamed ${updated} Sections!\n\n- Created ${updated} new documents\n- Updated ${itemUpdates} items\n- Deleted ${updated} old documents`,
+                                    updated,
+                                    errors
+                                });
+
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 5000);
+
+                            } catch (error: any) {
+                                console.error('❌ Error fixing Section IDs:', error);
+                                setSectionFixResult({
+                                    success: false,
+                                    message: `Failed: ${error.message}`,
+                                    updated: 0,
+                                    errors: [error.message]
+                                });
+                            } finally {
+                                setFixingSections(false);
+                            }
+                        }}
+                        disabled={fixingSections || state.sections.length === 0}
+                        className="w-full px-4 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {fixingSections ? (
+                            <>
+                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                Renaming Sections...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw size={18} />
+                                Fix Section IDs ({state.sections.filter(s => !s.id.match(/^SEC-\d+$/)).length} need fixing)
+                            </>
+                        )}
+                    </button>
+
+                    {sectionFixResult && (
+                        <div className={`p-4 rounded-lg border-2 ${
+                            sectionFixResult.success 
+                                ? 'bg-emerald-50 border-emerald-300' 
+                                : 'bg-red-50 border-red-300'
+                        }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {sectionFixResult.success ? (
+                                    <CheckCircle className="text-emerald-600" size={20} />
+                                ) : (
+                                    <XCircle className="text-red-600" size={20} />
+                                )}
+                                <span className={`font-bold ${
+                                    sectionFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                }`}>
+                                    {sectionFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                </span>
+                            </div>
+                            <p className={`text-sm whitespace-pre-line ${
+                                sectionFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                            }`}>
+                                {sectionFixResult.message}
+                            </p>
+                            {sectionFixResult.errors.length > 0 && (
+                                <div className="mt-2 text-xs text-red-600">
+                                    <strong>Errors:</strong>
+                                    <ul className="list-disc list-inside mt-1">
+                                        {sectionFixResult.errors.slice(0, 5).map((err, idx) => (
+                                            <li key={idx}>{err}</li>
+                                        ))}
+                                        {sectionFixResult.errors.length > 5 && (
+                                            <li>... and {sectionFixResult.errors.length - 5} more</li>
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+                            {sectionFixResult.success && (
                                 <p className="text-xs text-emerald-600 mt-2">
                                     Page will refresh automatically in 5 seconds...
                                 </p>

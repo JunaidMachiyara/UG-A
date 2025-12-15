@@ -55,7 +55,11 @@ export enum TransactionType {
     PURCHASE_BILL = 'PB', // New: General Purchase / Bill Entry
     PRODUCTION = 'PROD',
     OPENING_BALANCE = 'OB',
-    ORIGINAL_OPENING = 'OO'
+    ORIGINAL_OPENING = 'OO',
+    INVENTORY_ADJUSTMENT = 'IA', // Inventory adjustments/corrections
+    RETURN_TO_SUPPLIER = 'RTS', // Returns to suppliers
+    WRITE_OFF = 'WO', // Write-offs
+    BALANCING_DISCREPANCY = 'BD' // Balancing discrepancies
 }
 
 export enum PackingType {

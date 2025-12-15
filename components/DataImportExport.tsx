@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { getExchangeRates } from '../context/DataContext';
@@ -157,7 +157,7 @@ export const DataImportExport: React.FC = () => {
                 const validItems: any[] = [];
                 const seenCodes = new Set<string>(); // Track item codes to prevent duplicates
                 
-                console.log(`📊 Starting import of ${parsedData.length} items`);
+                console.log(`≡ƒôè Starting import of ${parsedData.length} items`);
                 
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
@@ -172,7 +172,7 @@ export const DataImportExport: React.FC = () => {
                     
                     // Check for duplicate codes in the CSV itself
                     if (seenCodes.has(itemCode)) {
-                        console.warn(`⚠️ Duplicate item code in CSV row ${index + 2}: ${itemCode}`);
+                        console.warn(`ΓÜá∩╕Å Duplicate item code in CSV row ${index + 2}: ${itemCode}`);
                         errors.push(`Row ${index + 2}: Duplicate item code: ${itemCode}`);
                         continue;
                     }
@@ -197,17 +197,17 @@ export const DataImportExport: React.FC = () => {
                     validItems.push(item);
                 }
                 
-                console.log(`✅ Prepared ${validItems.length} unique items for import (from ${parsedData.length} CSV rows)`);
+                console.log(`Γ£à Prepared ${validItems.length} unique items for import (from ${parsedData.length} CSV rows)`);
                 
                 // Process in batches with delays to avoid rate limiting
-                console.log(`📦 Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
+                console.log(`≡ƒôª Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
                 
                 for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
                     const batchItems = validItems.slice(i, i + BATCH_SIZE);
                     const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
                     
-                    console.log(`📦 Batch ${batchNumber}: Preparing ${batchItems.length} items for Firebase write`);
+                    console.log(`≡ƒôª Batch ${batchNumber}: Preparing ${batchItems.length} items for Firebase write`);
                     const itemsInBatch: string[] = [];
                     
                     for (const item of batchItems) {
@@ -217,7 +217,7 @@ export const DataImportExport: React.FC = () => {
                             ? doc(db, 'items', id)  // Use item's ID as document ID
                             : doc(collection(db, 'items'));  // Auto-generate if no ID
                         
-                        console.log(`  📝 Adding to batch: ${item.name} (code: ${item.code}, id: ${id || 'auto-generated'}, ref: ${itemRef.id})`);
+                        console.log(`  ≡ƒô¥ Adding to batch: ${item.name} (code: ${item.code}, id: ${id || 'auto-generated'}, ref: ${itemRef.id})`);
                         itemsInBatch.push(`${item.name} (${item.code})`);
                         
                         batch.set(itemRef, {
@@ -228,10 +228,10 @@ export const DataImportExport: React.FC = () => {
                     
                     // Commit batch with error handling
                     try {
-                        console.log(`💾 Batch ${batchNumber}: Committing ${batchItems.length} items to Firebase...`);
+                        console.log(`≡ƒÆ╛ Batch ${batchNumber}: Committing ${batchItems.length} items to Firebase...`);
                         console.log(`   Items in this batch:`, itemsInBatch);
                         await batch.commit();
-                        console.log(`✅ Batch ${batchNumber} COMMITTED: ${batchItems.length} items written to Firebase`);
+                        console.log(`Γ£à Batch ${batchNumber} COMMITTED: ${batchItems.length} items written to Firebase`);
                         
                         // Wait for Firebase listener to load items before creating ledger entries
                         await new Promise(resolve => setTimeout(resolve, 500));
@@ -297,7 +297,7 @@ export const DataImportExport: React.FC = () => {
                             await new Promise(resolve => setTimeout(resolve, 200));
                         }
                     } catch (batchError: any) {
-                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        console.error(`Γ¥î Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
                         errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchItems.length + 1}) failed: ${batchError.message}`);
                     }
                 }
@@ -436,7 +436,7 @@ export const DataImportExport: React.FC = () => {
                     // Commit batch with error handling
                     try {
                         await batch.commit();
-                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPartners.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
+                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPartners.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
                         
                         // After successful batch commit, handle opening balance ledger entries
                         // Note: Firebase listener will automatically add partners to local state
@@ -553,14 +553,14 @@ export const DataImportExport: React.FC = () => {
                                         await new Promise(resolve => setTimeout(resolve, 200));
                                     }
                                 } catch (error: any) {
-                                    console.error(`❌ Error creating opening balance for ${partner.name}:`, error);
+                                    console.error(`Γ¥î Error creating opening balance for ${partner.name}:`, error);
                                     errors.push(`Failed to create opening balance for ${partner.name}: ${error.message}`);
                                 }
                             }
                         }
                         
                         if (balanceEntriesCreated > 0) {
-                            console.log(`✅ Created ${balanceEntriesCreated} opening balance entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+                            console.log(`Γ£à Created ${balanceEntriesCreated} opening balance entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
                         }
                         
                         successCount += batchPartners.length;
@@ -570,7 +570,7 @@ export const DataImportExport: React.FC = () => {
                             await new Promise(resolve => setTimeout(resolve, 200));
                         }
                     } catch (batchError: any) {
-                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        console.error(`Γ¥î Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
                         errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchPartners.length + 1}) failed: ${batchError.message}`);
                     }
                 }
@@ -613,8 +613,8 @@ export const DataImportExport: React.FC = () => {
                     containerCounter = existingContainerNumbers[0] + 1;
                 }
                 
-                console.log(`📊 Starting import of ${parsedData.length} purchases (Original Stock)`);
-                console.log(`📅 Using upload date: ${uploadDate}`);
+                console.log(`≡ƒôè Starting import of ${parsedData.length} purchases (Original Stock)`);
+                console.log(`≡ƒôà Using upload date: ${uploadDate}`);
                 
                 // Validate and prepare all purchases first
                 for (let index = 0; index < parsedData.length; index++) {
@@ -777,7 +777,7 @@ export const DataImportExport: React.FC = () => {
                     validPurchases.push(purchase);
                 }
                 
-                console.log(`✅ Prepared ${validPurchases.length} valid purchases for import (from ${parsedData.length} CSV rows)`);
+                console.log(`Γ£à Prepared ${validPurchases.length} valid purchases for import (from ${parsedData.length} CSV rows)`);
                 
                 // Process in batches
                 for (let i = 0; i < validPurchases.length; i += BATCH_SIZE) {
@@ -805,7 +805,7 @@ export const DataImportExport: React.FC = () => {
                     
                     try {
                         await batch.commit();
-                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPurchases.length / BATCH_SIZE)} committed: ${batchPurchases.length} purchases saved to Firebase`);
+                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPurchases.length / BATCH_SIZE)} committed: ${batchPurchases.length} purchases saved to Firebase`);
                         
                         // Wait for Firebase listener to load purchases
                         await new Promise(resolve => setTimeout(resolve, 500));
@@ -830,9 +830,9 @@ export const DataImportExport: React.FC = () => {
                                     
                                     // Use saveLogisticsEntry to save offloading data
                                     saveLogisticsEntry(logisticsEntry);
-                                    console.log(`✅ Created LogisticsEntry for purchase ${purchase.batchNumber} (Invoice: ${logisticsData.invoicedWeight}kg, Received: ${logisticsData.receivedWeight}kg, Shortage: ${logisticsData.shortageKg}kg)`);
+                                    console.log(`Γ£à Created LogisticsEntry for purchase ${purchase.batchNumber} (Invoice: ${logisticsData.invoicedWeight}kg, Received: ${logisticsData.receivedWeight}kg, Shortage: ${logisticsData.shortageKg}kg)`);
                                 } catch (error: any) {
-                                    console.error(`❌ Error creating LogisticsEntry for purchase ${purchase.batchNumber}:`, error);
+                                    console.error(`Γ¥î Error creating LogisticsEntry for purchase ${purchase.batchNumber}:`, error);
                                     errors.push(`Failed to create LogisticsEntry for batch ${purchase.batchNumber}: ${error.message}`);
                                 }
                             }
@@ -852,7 +852,7 @@ export const DataImportExport: React.FC = () => {
                         );
                         
                         if (!rawMaterialAccount || !capitalAccount) {
-                            console.error('❌ Account lookup failed for purchase ledger entries:', {
+                            console.error('Γ¥î Account lookup failed for purchase ledger entries:', {
                                 rawMaterialAccount: rawMaterialAccount?.name || 'NOT FOUND',
                                 capitalAccount: capitalAccount?.name || 'NOT FOUND'
                             });
@@ -869,7 +869,7 @@ export const DataImportExport: React.FC = () => {
                                     const stockValue = purchase.totalLandedCost || purchase.totalCostFCY || 0;
                                     
                                     if (stockValue <= 0) {
-                                        console.log(`⚠️ Purchase ${purchase.batchNumber} has zero value, skipping ledger entries`);
+                                        console.log(`ΓÜá∩╕Å Purchase ${purchase.batchNumber} has zero value, skipping ledger entries`);
                                         continue;
                                     }
                                     
@@ -906,7 +906,7 @@ export const DataImportExport: React.FC = () => {
                                         }
                                     );
                                 } catch (error: any) {
-                                    console.error(`❌ Error preparing ledger entries for purchase ${purchase.batchNumber}:`, error);
+                                    console.error(`Γ¥î Error preparing ledger entries for purchase ${purchase.batchNumber}:`, error);
                                     errors.push(`Failed to prepare ledger entries for batch ${purchase.batchNumber}: ${error.message}`);
                                 }
                             }
@@ -915,9 +915,9 @@ export const DataImportExport: React.FC = () => {
                             if (allLedgerEntries.length > 0) {
                                 try {
                                     await postTransaction(allLedgerEntries);
-                                    console.log(`✅ Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchases) in one batch`);
+                                    console.log(`Γ£à Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchases) in one batch`);
                                 } catch (error: any) {
-                                    console.error(`❌ Error posting batch ledger entries:`, error);
+                                    console.error(`Γ¥î Error posting batch ledger entries:`, error);
                                     errors.push(`Failed to post ledger entries batch: ${error.message}`);
                                 }
                             }
@@ -930,7 +930,7 @@ export const DataImportExport: React.FC = () => {
                             await new Promise(resolve => setTimeout(resolve, 200));
                         }
                     } catch (batchError: any) {
-                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        console.error(`Γ¥î Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
                         errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchPurchases.length + 1}) failed: ${batchError.message}`);
                     }
                 }
@@ -1050,14 +1050,14 @@ export const DataImportExport: React.FC = () => {
                         }
                         
                         successCount += batchItems.length;
-                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validItems.length / BATCH_SIZE)} saved: ${batchItems.length} items to Firebase`);
+                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validItems.length / BATCH_SIZE)} saved: ${batchItems.length} items to Firebase`);
                         
                         // Small delay between batches to avoid rate limiting
                         if (i + BATCH_SIZE < validItems.length) {
                             await new Promise(resolve => setTimeout(resolve, 200));
                         }
                     } catch (batchError: any) {
-                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        console.error(`Γ¥î Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
                         errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchItems.length + 1}) failed: ${batchError.message}`);
                     }
                 }
@@ -1081,17 +1081,17 @@ export const DataImportExport: React.FC = () => {
                             switch (selectedEntity) {
                             case 'items': {
                                 // Items are handled via batch writes above - should never reach here
-                                console.warn('⚠️ Items should be processed via batch writes, not individual addItem');
+                                console.warn('ΓÜá∩╕Å Items should be processed via batch writes, not individual addItem');
                                 break;
                             }
                             case 'partners': {
                                 // Partners are handled via batch writes above - should never reach here
-                                console.warn('⚠️ Partners should be processed via batch writes, not individual addPartner');
+                                console.warn('ΓÜá∩╕Å Partners should be processed via batch writes, not individual addPartner');
                                 break;
                             }
                             case 'purchases': {
                                 // Purchases are handled via batch writes above - should never reach here
-                                console.warn('⚠️ Purchases should be processed via batch writes, not individual addPurchase');
+                                console.warn('ΓÜá∩╕Å Purchases should be processed via batch writes, not individual addPurchase');
                                 break;
                             }
                             case 'partners': {
@@ -1403,7 +1403,7 @@ export const DataImportExport: React.FC = () => {
                 }
             }
 
-            console.log(`✅ Successfully imported ${successCount} ${selectedEntity}`);
+            console.log(`Γ£à Successfully imported ${successCount} ${selectedEntity}`);
 
             setImportResult({
                 success: successCount,
@@ -1411,22 +1411,22 @@ export const DataImportExport: React.FC = () => {
                 errors
             });
 
-            console.log('📊 ========== IMPORT COMPLETE ==========');
-            console.log(`✅ Total items processed: ${successCount}`);
-            console.log(`❌ Total errors: ${errors.length}`);
-            console.log('⏳ Waiting 15 seconds before reloading page...');
-            console.log('📋 Please copy all logs above before page reloads');
+            console.log('≡ƒôè ========== IMPORT COMPLETE ==========');
+            console.log(`Γ£à Total items processed: ${successCount}`);
+            console.log(`Γ¥î Total errors: ${errors.length}`);
+            console.log('ΓÅ│ Waiting 15 seconds before reloading page...');
+            console.log('≡ƒôï Please copy all logs above before page reloads');
             console.log('==========================================');
             
             // Wait 15 seconds before reloading so user can copy logs
             if (successCount > 0) {
                 setTimeout(() => {
-                    console.log('🔄 Reloading page now...');
+                    console.log('≡ƒöä Reloading page now...');
                     window.location.reload();
                 }, 15000);
             }
         } catch (error) {
-            console.error('❌ Import error:', error);
+            console.error('Γ¥î Import error:', error);
             alert(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
             setImporting(false);
@@ -1791,14 +1791,14 @@ export const DataImportExport: React.FC = () => {
                             <h4 className="font-semibold text-slate-700 mb-2">Errors:</h4>
                             <div className="max-h-48 overflow-y-auto text-sm text-slate-600 space-y-1">
                                 {importResult.errors.map((error, index) => (
-                                    <div key={index} className="text-red-600">• {error}</div>
+                                    <div key={index} className="text-red-600">ΓÇó {error}</div>
                                 ))}
                             </div>
                         </div>
                     )}
                     {importResult.success > 0 && (
                         <div className="mt-4 p-4 bg-blue-100 border border-blue-200 rounded-lg text-blue-800 text-sm">
-                            ℹ️ Page will refresh automatically to load new data from Firebase...
+                            Γä╣∩╕Å Page will refresh automatically to load new data from Firebase...
                         </div>
                     )}
                 </div>

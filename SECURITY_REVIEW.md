@@ -119,3 +119,4 @@ const ProtectedRoute = ({ module, action, children }) => {
 6. **RECOMMENDED**: Add rate limiting for login attempts
 
 
+

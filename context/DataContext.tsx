@@ -2667,7 +2667,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                      e.transactionType === TransactionType.PAYMENT_VOUCHER ||
                      e.transactionType === TransactionType.EXPENSE_VOUCHER ||
                      e.transactionType === TransactionType.JOURNAL_VOUCHER ||
-                     e.transactionType === TransactionType.PURCHASE_BILL)
+                     e.transactionType === TransactionType.PURCHASE_BILL ||
+                     e.transactionType === TransactionType.INVENTORY_ADJUSTMENT ||
+                     e.transactionType === TransactionType.RETURN_TO_SUPPLIER ||
+                     e.transactionType === TransactionType.WRITE_OFF ||
+                     e.transactionType === TransactionType.BALANCING_DISCREPANCY)
                 );
                 
                 if (partnerLedgerEntries.length > 0) {
@@ -3059,14 +3063,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 .then(() => {
                     console.log(`✅ Deleted ${type}/${id} from Firebase`);
                     // For items, reload to ensure balance sheet is updated
-                    // Give enough time to see console logs (15 seconds for debugging)
                     if (type === 'items') {
-                        console.log('🔄 Reloading page in 15 seconds to update Balance Sheet after item deletion...');
-                        console.log('📊 Check the logs above to see ledger deletion and account balance updates');
-                        setTimeout(() => {
-                            console.log('🔄 Reloading now...');
-                            window.location.reload();
-                        }, 15000);
+                        window.location.reload();
                     }
                 })
                 .catch((error) => {

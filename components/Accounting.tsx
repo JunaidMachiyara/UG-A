@@ -4,9 +4,9 @@ import { useData } from '../context/DataContext';
 import { TransactionType, AccountType, Currency, PartnerType, LedgerEntry } from '../types';
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
-import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag } from 'lucide-react';
+import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale } from 'lucide-react';
 
-type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB';
+type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'RTS' | 'WO' | 'BD';
 
 interface JvRow {
     id: string;
@@ -57,6 +57,24 @@ export const Accounting: React.FC = () => {
         { id: '1', accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 },
         { id: '2', accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }
     ]);
+
+    // New Transaction Types State
+    const [iaItemId, setIaItemId] = useState(''); // Inventory Adjustment - Item
+    const [iaAdjustmentType, setIaAdjustmentType] = useState<'INCREASE' | 'DECREASE'>('INCREASE');
+    const [iaQty, setIaQty] = useState('');
+    const [iaReason, setIaReason] = useState('');
+
+    const [rtsSupplierId, setRtsSupplierId] = useState(''); // Return to Supplier
+    const [rtsItemId, setRtsItemId] = useState('');
+    const [rtsQty, setRtsQty] = useState('');
+    const [rtsReason, setRtsReason] = useState('');
+
+    const [woAccountId, setWoAccountId] = useState(''); // Write-off
+    const [woReason, setWoReason] = useState('');
+
+    const [bdAccountId, setBdAccountId] = useState(''); // Balancing Discrepancy
+    const [bdAdjustmentType, setBdAdjustmentType] = useState<'INCREASE' | 'DECREASE'>('INCREASE');
+    const [bdReason, setBdReason] = useState('');
 
     // --- Ledger Filtering State ---
     const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -121,6 +139,20 @@ export const Accounting: React.FC = () => {
     const resetForm = (type: VoucherType) => {
         setVType(type);
         setVoucherNo(generateVoucherId(type));
+        // Reset new transaction type states
+        setIaItemId('');
+        setIaAdjustmentType('INCREASE');
+        setIaQty('');
+        setIaReason('');
+        setRtsSupplierId('');
+        setRtsItemId('');
+        setRtsQty('');
+        setRtsReason('');
+        setWoAccountId('');
+        setWoReason('');
+        setBdAccountId('');
+        setBdAdjustmentType('INCREASE');
+        setBdReason('');
         
         // Clear all fields
         setSourceId(''); setDestId(''); 
@@ -131,6 +163,20 @@ export const Accounting: React.FC = () => {
         
         setPbPaymentMode('CREDIT');
         setPbVendorId('');
+        // Reset new transaction type states
+        setIaItemId('');
+        setIaAdjustmentType('INCREASE');
+        setIaQty('');
+        setIaReason('');
+        setRtsSupplierId('');
+        setRtsItemId('');
+        setRtsQty('');
+        setRtsReason('');
+        setWoAccountId('');
+        setWoReason('');
+        setBdAccountId('');
+        setBdAdjustmentType('INCREASE');
+        setBdReason('');
     };
 
     // Initial Load
@@ -159,9 +205,9 @@ export const Accounting: React.FC = () => {
     // --- Actions ---
     const handleSave = async () => {
         if (!date) return alert("Date is required");
-        if (vType !== 'JV' && vType !== 'TR' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
+        if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
-        if (vType !== 'JV' && !description) return alert("Description is required");
+        if (vType !== 'JV' && vType !== 'IA' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
 
         let entries: Omit<LedgerEntry, 'id'>[] = [];
         const baseAmount = parseFloat(amount) / exchangeRate;
@@ -262,6 +308,62 @@ export const Accounting: React.FC = () => {
             const totalCr = jvRows.reduce((sum, r) => sum + (r.credit / r.exchangeRate), 0);
             if (Math.abs(totalDr - totalCr) > 0.01) return alert(`Journal is unbalanced! Diff: $${(totalDr - totalCr).toFixed(2)}`);
             entries = jvRows.map(row => ({ date, transactionId: voucherNo, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: row.accountId, accountName: 'Journal Entry', currency: row.currency, exchangeRate: row.exchangeRate, fcyAmount: row.debit > 0 ? row.debit : row.credit, debit: row.debit / row.exchangeRate, credit: row.credit / row.exchangeRate, narration: row.desc || description || 'Manual Journal' }));
+        } else if (vType === 'IA') {
+            // Inventory Adjustment
+            if (!iaItemId || !iaQty || parseFloat(iaQty) <= 0) return alert("Select item and enter valid quantity");
+            if (!iaReason) return alert("Reason is required for inventory adjustment");
+            const item = state.items.find(i => i.id === iaItemId);
+            if (!item) return alert("Item not found");
+            const qty = parseFloat(iaQty);
+            const adjustmentValue = qty * (item.avgCost || 0);
+            const inventoryAccountId = state.accounts.find(a => a.name.includes('Finished Goods') || a.code === '1202')?.id || '1202';
+            const adjustmentAccountId = state.accounts.find(a => a.name.includes('Inventory Adjustment') || a.name.includes('Write-off'))?.id || '503';
+            
+            if (iaAdjustmentType === 'INCREASE') {
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Increase: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccountId, accountName: 'Inventory Adjustment', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Increase: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+            } else {
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Decrease: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccountId, accountName: 'Inventory Adjustment', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+            }
+        } else if (vType === 'RTS') {
+            // Return to Supplier
+            if (!rtsSupplierId || !rtsItemId || !rtsQty || parseFloat(rtsQty) <= 0) return alert("Select supplier, item and enter valid quantity");
+            if (!rtsReason) return alert("Reason is required for return to supplier");
+            const item = state.items.find(i => i.id === rtsItemId);
+            const supplier = state.partners.find(p => p.id === rtsSupplierId);
+            if (!item || !supplier) return alert("Item or supplier not found");
+            const qty = parseFloat(rtsQty);
+            const returnValue = qty * (item.avgCost || 0);
+            const inventoryAccountId = state.accounts.find(a => a.name.includes('Finished Goods') || a.code === '1202')?.id || '1202';
+            
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.RETURN_TO_SUPPLIER, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: returnValue, debit: 0, credit: returnValue, narration: `Return to Supplier: ${item.name} (${qty} units) to ${supplier.name} - ${rtsReason}`, factoryId: state.currentFactory?.id || '' });
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.RETURN_TO_SUPPLIER, accountId: rtsSupplierId, accountName: supplier.name, currency: 'USD', exchangeRate: 1, fcyAmount: returnValue, debit: returnValue, credit: 0, narration: `Return: ${item.name} (${qty} units) - ${rtsReason}`, factoryId: state.currentFactory?.id || '' });
+        } else if (vType === 'WO') {
+            // Write-off
+            if (!woAccountId || !amount || parseFloat(amount) <= 0) return alert("Select account and enter valid amount");
+            if (!woReason) return alert("Reason is required for write-off");
+            const account = state.accounts.find(a => a.id === woAccountId);
+            if (!account) return alert("Account not found");
+            const writeOffAccountId = state.accounts.find(a => a.name.includes('Write-off') || a.name.includes('Bad Debt'))?.id || '504';
+            
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.WRITE_OFF, accountId: woAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Write-off: ${account.name} - ${woReason}`, factoryId: state.currentFactory?.id || '' });
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.WRITE_OFF, accountId: writeOffAccountId, accountName: 'Write-off / Bad Debt', currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Write-off: ${account.name} - ${woReason}`, factoryId: state.currentFactory?.id || '' });
+        } else if (vType === 'BD') {
+            // Balancing Discrepancy
+            if (!bdAccountId || !amount || parseFloat(amount) <= 0) return alert("Select account and enter valid amount");
+            if (!bdReason) return alert("Reason is required for balancing discrepancy");
+            const account = state.accounts.find(a => a.id === bdAccountId);
+            if (!account) return alert("Account not found");
+            const discrepancyAccountId = state.accounts.find(a => a.name.includes('Discrepancy') || a.name.includes('Suspense'))?.id || '505';
+            
+            if (bdAdjustmentType === 'INCREASE') {
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccountId, accountName: 'Balancing Discrepancy', currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+            } else {
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccountId, accountName: 'Balancing Discrepancy', currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+            }
         }
 
         await postTransaction(entries);
@@ -424,7 +526,7 @@ export const Accounting: React.FC = () => {
 
                     <div className="p-8 space-y-8">
                         {/* 1. Voucher Type Selection - Now manually triggers reset */}
-                        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                             {[
                                 { id: 'RV', label: 'Receipt Voucher', icon: ArrowRight, color: 'text-emerald-600' },
                                 { id: 'PV', label: 'Payment Voucher', icon: CreditCard, color: 'text-red-600' },
@@ -432,6 +534,10 @@ export const Accounting: React.FC = () => {
                                 { id: 'EV', label: 'Expense Voucher', icon: DollarSign, color: 'text-amber-600' },
                                 { id: 'JV', label: 'Journal Voucher', icon: FileText, color: 'text-blue-600' },
                                 { id: 'TR', label: 'Internal Transfer', icon: RefreshCw, color: 'text-purple-600' },
+                                { id: 'IA', label: 'Inventory Adjustment', icon: Package, color: 'text-indigo-600' },
+                                { id: 'RTS', label: 'Return to Supplier', icon: RotateCcw, color: 'text-pink-600' },
+                                { id: 'WO', label: 'Write-off', icon: AlertTriangle, color: 'text-red-700' },
+                                { id: 'BD', label: 'Balancing Discrepancy', icon: Scale, color: 'text-teal-600' },
                             ].map(type => (
                                 <button
                                     key={type.id}
@@ -686,6 +792,194 @@ export const Accounting: React.FC = () => {
                                             placeholder="Enter transaction details..." 
                                             value={description} 
                                             onChange={e => setDescription(e.target.value)} 
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* New Transaction Type Forms */}
+                        {vType === 'IA' && (
+                            <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
+                                <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                                    <Package size={20} /> Inventory Adjustment
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Item</label>
+                                        <EntitySelector 
+                                            entities={state.items.map(i => ({ id: i.id, name: `${i.code} - ${i.name}` }))} 
+                                            selectedId={iaItemId} 
+                                            onSelect={setIaItemId} 
+                                            placeholder="Select Item..." 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Adjustment Type</label>
+                                        <select 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={iaAdjustmentType} 
+                                            onChange={e => setIaAdjustmentType(e.target.value as 'INCREASE' | 'DECREASE')}
+                                        >
+                                            <option value="INCREASE">Increase Inventory</option>
+                                            <option value="DECREASE">Decrease Inventory</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Quantity</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={iaQty} 
+                                            onChange={e => setIaQty(e.target.value)} 
+                                            placeholder="Enter quantity"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={iaReason} 
+                                            onChange={e => setIaReason(e.target.value)} 
+                                            placeholder="Reason for adjustment (required)"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {vType === 'RTS' && (
+                            <div className="space-y-6 bg-pink-50 p-6 rounded-xl border-2 border-pink-200">
+                                <h3 className="text-lg font-bold text-pink-900 flex items-center gap-2">
+                                    <RotateCcw size={20} /> Return to Supplier
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Supplier</label>
+                                        <EntitySelector 
+                                            entities={state.partners.filter(p => p.type === PartnerType.SUPPLIER).map(p => ({ id: p.id, name: p.name }))} 
+                                            selectedId={rtsSupplierId} 
+                                            onSelect={setRtsSupplierId} 
+                                            placeholder="Select Supplier..." 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Item</label>
+                                        <EntitySelector 
+                                            entities={state.items.map(i => ({ id: i.id, name: `${i.code} - ${i.name}` }))} 
+                                            selectedId={rtsItemId} 
+                                            onSelect={setRtsItemId} 
+                                            placeholder="Select Item..." 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Quantity</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={rtsQty} 
+                                            onChange={e => setRtsQty(e.target.value)} 
+                                            placeholder="Enter quantity"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={rtsReason} 
+                                            onChange={e => setRtsReason(e.target.value)} 
+                                            placeholder="Reason for return (required)"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {vType === 'WO' && (
+                            <div className="space-y-6 bg-red-50 p-6 rounded-xl border-2 border-red-200">
+                                <h3 className="text-lg font-bold text-red-900 flex items-center gap-2">
+                                    <AlertTriangle size={20} /> Write-off
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Account to Write-off</label>
+                                        <EntitySelector 
+                                            entities={allAccounts} 
+                                            selectedId={woAccountId} 
+                                            onSelect={setWoAccountId} 
+                                            placeholder="Select Account..." 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Amount ({currency})</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-2xl font-bold text-slate-800" 
+                                            value={amount} 
+                                            onChange={e => setAmount(e.target.value)} 
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={woReason} 
+                                            onChange={e => setWoReason(e.target.value)} 
+                                            placeholder="Reason for write-off (required)"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {vType === 'BD' && (
+                            <div className="space-y-6 bg-teal-50 p-6 rounded-xl border-2 border-teal-200">
+                                <h3 className="text-lg font-bold text-teal-900 flex items-center gap-2">
+                                    <Scale size={20} /> Balancing Discrepancy
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Account</label>
+                                        <EntitySelector 
+                                            entities={allAccounts} 
+                                            selectedId={bdAccountId} 
+                                            onSelect={setBdAccountId} 
+                                            placeholder="Select Account..." 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Adjustment Type</label>
+                                        <select 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={bdAdjustmentType} 
+                                            onChange={e => setBdAdjustmentType(e.target.value as 'INCREASE' | 'DECREASE')}
+                                        >
+                                            <option value="INCREASE">Increase Balance</option>
+                                            <option value="DECREASE">Decrease Balance</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Amount ({currency})</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-2xl font-bold text-slate-800" 
+                                            value={amount} 
+                                            onChange={e => setAmount(e.target.value)} 
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={bdReason} 
+                                            onChange={e => setBdReason(e.target.value)} 
+                                            placeholder="Reason for discrepancy (required)"
                                         />
                                     </div>
                                 </div>
