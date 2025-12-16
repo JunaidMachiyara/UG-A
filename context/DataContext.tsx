@@ -1330,18 +1330,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             partnerId = `${prefix}-${nextNumber}`;
         } else {
             partnerId = partnerId.trim();
-            // Check if ID already exists
-            const existingPartner = state.partners.find(p => p.id === partnerId);
+            // Check if ID/code already exists for THIS factory (allow same code across factories)
+            const existingPartner = state.partners.find(p => 
+                (p.id === partnerId || (p as any).code === partnerId) && 
+                p.factoryId === currentFactory?.id
+            );
             if (existingPartner) {
-                alert(`Partner ID "${partnerId}" already exists. Please use a different ID.`);
+                alert(`Partner ID/Code "${partnerId}" already exists for this factory. Please use a different ID.`);
                 return;
             }
             
-            // Also check in Firebase to be safe
+            // Also check in Firebase to be safe (per factory)
             try {
-                const partnerDoc = await getDoc(doc(db, 'partners', partnerId));
-                if (partnerDoc.exists()) {
-                    alert(`Partner ID "${partnerId}" already exists in database. Please use a different ID.`);
+                const partnersQuery = query(
+                    collection(db, 'partners'),
+                    where('factoryId', '==', currentFactory?.id || '')
+                );
+                const partnersSnapshot = await getDocs(partnersQuery);
+                const existsInFirebase = partnersSnapshot.docs.some(doc => {
+                    const data = doc.data();
+                    return data.id === partnerId || data.code === partnerId;
+                });
+                if (existsInFirebase) {
+                    alert(`Partner ID/Code "${partnerId}" already exists in database for this factory. Please use a different ID.`);
                     return;
                 }
             } catch (error) {

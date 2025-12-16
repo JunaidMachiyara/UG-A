@@ -759,8 +759,27 @@ export const useSetupConfigs = () => {
                 name: 'code', 
                 label: 'Item Code', 
                 type: 'text', 
-                required: true, 
-                defaultValue: (data: any[]) => `ITEM-${1001 + data.length}` 
+                required: true,
+                placeholder: 'Enter Item Code or leave blank for auto-generation',
+                compute: (formData, allData) => {
+                    // If user has manually entered a code, always respect it
+                    if (formData.code && String(formData.code).trim() !== '') {
+                        return String(formData.code).trim();
+                    }
+
+                    // Auto-generate ITEM-XXXX based on last code for THIS factory only
+                    const prefix = 'ITEM-';
+                    const existingNums = (allData as any[])
+                        .map((item: any) => {
+                            const match = String(item.code || '').match(/^ITEM-(\d+)$/i);
+                            return match ? parseInt(match[1], 10) : 0;
+                        })
+                        .filter((n: number) => n > 0)
+                        .sort((a: number, b: number) => b - a);
+
+                    const nextNumber = existingNums.length > 0 ? existingNums[0] + 1 : 1001;
+                    return `${prefix}${nextNumber}`;
+                }
             },
             { name: 'name', label: 'Item Name', type: 'text', required: true },
             { 

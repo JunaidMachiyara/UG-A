@@ -29,6 +29,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     const { state, isFirestoreLoaded, firestoreStatus, firestoreError } = useData();
     const { currentUser, currentFactory, factories, logout, switchFactory, hasPermission } = useAuth();
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
+    const [showHeaderFactorySwitcher, setShowHeaderFactorySwitcher] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     
     // Calculate global unread chat messages
@@ -146,8 +147,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     {hasPermission(PermissionModule.SETUP, 'view') && (
                         <SidebarItem to="/setup" icon={Database} label="Setup" />
                     )}
-                    <SidebarItem to="/csv-validator" icon={CheckSquare} label="CSV Validator" />
-                    <SidebarItem to="/import-export" icon={Upload} label="Import/Export" />
                     
                     {/* Admin - Available to Super Admin and Factory Admin */}
                     {(currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.FACTORY_ADMIN) && (
@@ -160,7 +159,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">System Admin</div>
                             <SidebarItem to="/admin/factories" icon={Building2} label="Factories" />
                             <SidebarItem to="/admin/users" icon={Users} label="User Management" />
-                            <SidebarItem to="/admin/migration" icon={Database} label="Data Migration" />
+                            <SidebarItem to="/csv-validator" icon={CheckSquare} label="CSV Validator" />
+                            <SidebarItem to="/import-export" icon={Upload} label="Import/Export" />
+                            {/* Hidden: Data Migration tool - not needed for fresh start */}
+                            {/* <SidebarItem to="/admin/migration" icon={Database} label="Data Migration" /> */}
                         </>
                     )}
                 </nav>
@@ -243,8 +245,44 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                             <Menu size={20} />
                         </button>
                         <h2 className="text-base md:text-lg font-semibold text-slate-800 hidden sm:block">Overview</h2>
+                        {/* Factory Selector - Desktop */}
                         {currentFactory && (
-                            <div className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs md:text-sm font-medium">
+                            <div className="hidden lg:block relative">
+                                <button
+                                    onClick={() => setShowHeaderFactorySwitcher(!showHeaderFactorySwitcher)}
+                                    className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 border border-indigo-200 hover:border-indigo-300 rounded-lg text-sm font-medium text-indigo-700 transition-colors"
+                                >
+                                    <Building2 size={16} />
+                                    <span className="max-w-[200px] truncate">{currentFactory.name}</span>
+                                    <ChevronDown size={14} className={`transition-transform ${showHeaderFactorySwitcher ? 'rotate-180' : ''}`} />
+                                </button>
+                                {showHeaderFactorySwitcher && currentUser?.role === UserRole.SUPER_ADMIN && factories.length > 1 && (
+                                    <div className="absolute top-full left-0 mt-1 bg-white border border-indigo-200 rounded-lg shadow-lg z-50 min-w-[250px] max-h-64 overflow-y-auto">
+                                        <div className="p-2">
+                                            <div className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Switch Factory</div>
+                                            {factories.map(factory => (
+                                                <button
+                                                    key={factory.id}
+                                                    onClick={() => {
+                                                        switchFactory(factory.id);
+                                                        setShowHeaderFactorySwitcher(false);
+                                                    }}
+                                                    className={`w-full text-left px-3 py-2 rounded-md hover:bg-indigo-50 transition-colors ${
+                                                        factory.id === currentFactory.id ? 'bg-indigo-100 font-semibold' : ''
+                                                    }`}
+                                                >
+                                                    <div className="text-sm font-medium text-indigo-900 truncate">{factory.name}</div>
+                                                    <div className="text-xs text-indigo-600 truncate">{factory.location}</div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {/* Factory Badge - Mobile/Tablet */}
+                        {currentFactory && (
+                            <div className="lg:hidden flex items-center gap-2 px-2 md:px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs md:text-sm font-medium">
                                 <Building2 size={14} className="md:w-4 md:h-4" />
                                 <span className="hidden md:inline">{currentFactory.code}</span>
                             </div>
@@ -255,8 +293,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -268,8 +306,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/entry"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -281,8 +319,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/offloading"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -294,8 +332,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/logistics"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -307,8 +345,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/customs"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -320,8 +358,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/posting"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -333,8 +371,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/accounting"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -346,8 +384,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/reports"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -359,8 +397,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/hr"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -372,8 +410,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/chat"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -390,8 +428,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                 <NavLink
                                     to="/setup"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -399,34 +437,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                     <span>Setup</span>
                                 </NavLink>
                             )}
-                            <NavLink
-                                to="/csv-validator"
-                                className={({ isActive }) =>
-                                    `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                        isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                                    }`
-                                }
-                            >
-                                <CheckSquare size={14} />
-                                <span>CSV Validator</span>
-                            </NavLink>
-                            <NavLink
-                                to="/import-export"
-                                className={({ isActive }) =>
-                                    `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                        isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                                    }`
-                                }
-                            >
-                                <Upload size={14} />
-                                <span>Import/Export</span>
-                            </NavLink>
                             {(currentUser?.role === UserRole.SUPER_ADMIN || currentUser?.role === UserRole.FACTORY_ADMIN) && (
                                 <NavLink
                                     to="/admin"
                                     className={({ isActive }) =>
-                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                            isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                        `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 border border-slate-300 ${
+                                            isActive ? 'bg-blue-600 text-white border-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                         }`
                                     }
                                 >
@@ -436,29 +452,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                             )}
                             {currentUser?.role === UserRole.SUPER_ADMIN && (
                                 <>
-                                    <NavLink
-                                        to="/admin/factories"
-                                        className={({ isActive }) =>
-                                            `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                                isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                                            }`
-                                        }
-                                    >
-                                        <Building2 size={14} />
-                                        <span>Factories</span>
-                                    </NavLink>
-                                    <NavLink
-                                        to="/admin/users"
-                                        className={({ isActive }) =>
-                                            `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
-                                                isActive ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                                            }`
-                                        }
-                                    >
-                                        <Users size={14} />
-                                        <span>Users</span>
-                                    </NavLink>
-                                    <NavLink
+                                    {/* Factories and Users moved to Admin page as tabs */}
+                                    {/* CSV Validator and Import/Export moved to Admin page as tabs */}
+                                    {/* Hidden: Data Migration tool - not needed for fresh start */}
+                                    {/* <NavLink
                                         to="/admin/migration"
                                         className={({ isActive }) =>
                                             `px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 ${
@@ -468,7 +465,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                     >
                                         <Database size={14} />
                                         <span>Migration</span>
-                                    </NavLink>
+                                    </NavLink> */}
                                 </>
                             )}
                         </nav>

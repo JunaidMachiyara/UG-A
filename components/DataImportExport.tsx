@@ -1,10 +1,10 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { getExchangeRates } from '../context/DataContext';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
 import Papa from 'papaparse';
-import { collection, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, writeBatch, doc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { TransactionType, LedgerEntry } from '../types';
 import { getAccountId } from '../services/accountMap';
@@ -202,28 +202,63 @@ export const DataImportExport: React.FC = () => {
                 // Process in batches with delays to avoid rate limiting
                 console.log(`≡ƒôª Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
                 
-                for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+                // First, check for existing items with same (factoryId, code) to prevent overwrites
+                const itemsCollection = collection(db, 'items');
+                const existingItemsQuery = query(itemsCollection, where('factoryId', '==', currentFactory?.id || ''));
+                const existingItemsSnapshot = await getDocs(existingItemsQuery);
+                const existingCodes = new Set<string>();
+                existingItemsSnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (data.code) {
+                        existingCodes.add(data.code);
+                    }
+                });
+
+                // Filter out items that already exist with same code for this factory
+                const itemsToImport = validItems.filter(item => {
+                    if (existingCodes.has(item.code)) {
+                        console.warn(`⚠️ Skipping item ${item.name} (code: ${item.code}) - already exists for factory ${currentFactory?.name}`);
+                        return false;
+                    }
+                    return true;
+                });
+
+                if (itemsToImport.length === 0) {
+                    alert('All items already exist for this factory. No items imported.');
+                    setImporting(false);
+                    return;
+                }
+
+                if (itemsToImport.length < validItems.length) {
+                    alert(`${validItems.length - itemsToImport.length} item(s) skipped (already exist). ${itemsToImport.length} new item(s) will be imported.`);
+                }
+
+                // Process in batches with delays to avoid rate limiting
+                for (let i = 0; i < itemsToImport.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
-                    const batchItems = validItems.slice(i, i + BATCH_SIZE);
+                    const batchItems = itemsToImport.slice(i, i + BATCH_SIZE);
                     const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
                     
                     console.log(`≡ƒôª Batch ${batchNumber}: Preparing ${batchItems.length} items for Firebase write`);
                     const itemsInBatch: string[] = [];
                     
                     for (const item of batchItems) {
-                        // Prepare for batch write - use item's ID as document ID if provided
-                        const { id, ...itemData } = item;
-                        const itemRef = id 
-                            ? doc(db, 'items', id)  // Use item's ID as document ID
-                            : doc(collection(db, 'items'));  // Auto-generate if no ID
+                        // Use CSV 'id' as 'code', let Firestore auto-generate document ID
+                        const { id: csvId, ...itemData } = item;
+                        // Create auto-generated document ID (Firestore will assign it)
+                        const itemRef = doc(collection(db, 'items'));
                         
-                        console.log(`  ≡ƒô¥ Adding to batch: ${item.name} (code: ${item.code}, id: ${id || 'auto-generated'}, ref: ${itemRef.id})`);
-                        itemsInBatch.push(`${item.name} (${item.code})`);
-                        
-                        batch.set(itemRef, {
+                        // Store CSV id as code field, ensure code is set
+                        const itemDataForSave = {
                             ...itemData,
+                            code: csvId || item.code || `ITEM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Use CSV id as code, fallback if missing
                             createdAt: serverTimestamp()
-                        });
+                        };
+                        
+                        console.log(`  ≡ƒô¥ Adding to batch: ${item.name} (code: ${itemDataForSave.code}, Firestore ID: ${itemRef.id})`);
+                        itemsInBatch.push(`${item.name} (${itemDataForSave.code})`);
+                        
+                        batch.set(itemRef, itemDataForSave);
                     }
                     
                     // Commit batch with error handling
@@ -405,19 +440,53 @@ export const DataImportExport: React.FC = () => {
                     validPartners.push(partner);
                 }
                 
+                // First, check for existing partners with same (factoryId, id/code) to prevent overwrites
+                const partnersCollection = collection(db, 'partners');
+                const existingPartnersQuery = query(partnersCollection, where('factoryId', '==', currentFactory?.id || ''));
+                const existingPartnersSnapshot = await getDocs(existingPartnersQuery);
+                const existingPartnerCodes = new Set<string>();
+                existingPartnersSnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    // Check both id and code fields (some partners may have code field)
+                    if (data.id) existingPartnerCodes.add(data.id);
+                    if (data.code) existingPartnerCodes.add(data.code);
+                });
+
+                // Filter out partners that already exist with same code/id for this factory
+                const partnersToImport = validPartners.filter(partner => {
+                    if (existingPartnerCodes.has(partner.id)) {
+                        console.warn(`⚠️ Skipping partner ${partner.name} (id: ${partner.id}) - already exists for factory ${currentFactory?.name}`);
+                        return false;
+                    }
+                    return true;
+                });
+
+                if (partnersToImport.length === 0) {
+                    alert('All partners already exist for this factory. No partners imported.');
+                    setImporting(false);
+                    return;
+                }
+
+                if (partnersToImport.length < validPartners.length) {
+                    alert(`${validPartners.length - partnersToImport.length} partner(s) skipped (already exist). ${partnersToImport.length} new partner(s) will be imported.`);
+                }
+
                 // Process in batches with delays to avoid rate limiting
-                for (let i = 0; i < validPartners.length; i += BATCH_SIZE) {
+                for (let i = 0; i < partnersToImport.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
-                    const batchPartners = validPartners.slice(i, i + BATCH_SIZE);
+                    const batchPartners = partnersToImport.slice(i, i + BATCH_SIZE);
                     
                     for (const partner of batchPartners) {
-                        // Prepare for batch write - use partner's ID as document ID
-                        const { id, openingBalance, ...partnerData } = partner;
-                        const partnerRef = doc(db, 'partners', id);
+                        // Use CSV 'id' as business code, let Firestore auto-generate document ID
+                        const { id: csvId, openingBalance, ...partnerData } = partner;
+                        // Create auto-generated document ID (Firestore will assign it)
+                        const partnerRef = doc(collection(db, 'partners'));
                         
-                        // Save with balance = 0, opening balance will be handled via ledger
+                        // Store CSV id as code field (or keep it as id field for backward compatibility)
+                        // Note: We'll store it as 'code' to distinguish from Firestore document ID
                         const partnerDataForSave = {
                             ...partnerData,
+                            code: csvId, // Store CSV id as code field
                             balance: 0, // Save with 0, balance comes from ledger
                             createdAt: serverTimestamp(),
                             updatedAt: serverTimestamp()
@@ -436,7 +505,10 @@ export const DataImportExport: React.FC = () => {
                     // Commit batch with error handling
                     try {
                         await batch.commit();
-                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPartners.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
+                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(partnersToImport.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
+                        
+                        // Wait for Firebase listener to load partners into state
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                         
                         // After successful batch commit, handle opening balance ledger entries
                         // Note: Firebase listener will automatically add partners to local state
@@ -447,6 +519,17 @@ export const DataImportExport: React.FC = () => {
                             // Handle opening balance if needed (similar to addPartner logic)
                             if (partner.openingBalance !== 0) {
                                 try {
+                                    // Find the partner in state by code to get its Firestore document ID
+                                    const csvId = partner.id; // This is the CSV id (now stored as code)
+                                    const savedPartner = state.partners.find(p => 
+                                        (p as any).code === csvId || p.name === partner.name
+                                    );
+                                    
+                                    if (!savedPartner) {
+                                        console.warn(`⚠️ Could not find partner ${partner.name} in state after save. Skipping opening balance.`);
+                                        continue;
+                                    }
+                                    
                                     const prevYear = new Date().getFullYear() - 1;
                                     const date = `${prevYear}-12-31`;
                                     const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
@@ -462,9 +545,9 @@ export const DataImportExport: React.FC = () => {
                                             {
                                                 ...commonProps,
                                                 date,
-                                                transactionId: `OB-${partner.id}`,
+                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                 transactionType: TransactionType.OPENING_BALANCE,
-                                                accountId: partner.id,
+                                                accountId: savedPartner.id, // Use Firestore document ID
                                                 accountName: partner.name,
                                                 debit: partner.openingBalance,
                                                 credit: 0,
@@ -474,7 +557,7 @@ export const DataImportExport: React.FC = () => {
                                             {
                                                 ...commonProps,
                                                 date,
-                                                transactionId: `OB-${partner.id}`,
+                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                 transactionType: TransactionType.OPENING_BALANCE,
                                                 accountId: openingEquityId,
                                                 accountName: 'Opening Equity',
@@ -493,7 +576,7 @@ export const DataImportExport: React.FC = () => {
                                                 {
                                                     ...commonProps,
                                                     date,
-                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                     transactionType: TransactionType.OPENING_BALANCE,
                                                     accountId: openingEquityId,
                                                     accountName: 'Opening Equity',
@@ -505,9 +588,9 @@ export const DataImportExport: React.FC = () => {
                                                 {
                                                     ...commonProps,
                                                     date,
-                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                     transactionType: TransactionType.OPENING_BALANCE,
-                                                    accountId: partner.id,
+                                                    accountId: savedPartner.id, // Use Firestore document ID
                                                     accountName: partner.name,
                                                     debit: 0,
                                                     credit: absBalance,
@@ -521,7 +604,7 @@ export const DataImportExport: React.FC = () => {
                                                 {
                                                     ...commonProps,
                                                     date,
-                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                     transactionType: TransactionType.OPENING_BALANCE,
                                                     accountId: openingEquityId,
                                                     accountName: 'Opening Equity',
@@ -533,9 +616,9 @@ export const DataImportExport: React.FC = () => {
                                                 {
                                                     ...commonProps,
                                                     date,
-                                                    transactionId: `OB-${partner.id}`,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                     transactionType: TransactionType.OPENING_BALANCE,
-                                                    accountId: partner.id,
+                                                    accountId: savedPartner.id, // Use Firestore document ID
                                                     accountName: partner.name,
                                                     debit: absBalance,
                                                     credit: 0,

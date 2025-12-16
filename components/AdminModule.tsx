@@ -3,12 +3,16 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { UserRole, TransactionType, LedgerEntry, PartnerType } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search, CheckSquare } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs, query, where, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { getExchangeRates } from '../context/DataContext';
 import { getAccountId } from '../services/accountMap';
 import Papa from 'papaparse';
+import { CSVValidator } from './CSVValidator';
+import { DataImportExport } from './DataImportExport';
+import { FactoryManagement } from './FactoryManagement';
+import { UserManagement } from './UserManagement';
 
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
@@ -53,6 +57,7 @@ export const AdminModule: React.FC = () => {
     } | null>(null);
     const [deletingFactoryItems, setDeletingFactoryItems] = useState(false);
     const [deleteItemsResult, setDeleteItemsResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
+    const [activeTab, setActiveTab] = useState<'admin' | 'csv-validator' | 'import-export'>('admin');
 
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
@@ -384,40 +389,109 @@ export const AdminModule: React.FC = () => {
                 <p className="text-red-100">Sensitive operations - Use with extreme caution</p>
             </div>
 
+            {/* Tabs Navigation */}
+            <div className="bg-white rounded-lg border border-slate-200 p-1 flex flex-wrap gap-2">
+                <button
+                    onClick={() => setActiveTab('admin')}
+                    className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                        activeTab === 'admin'
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                >
+                    <Shield size={16} />
+                    <span>Admin Tools</span>
+                </button>
+                {currentUser?.role === UserRole.SUPER_ADMIN && (
+                    <>
+                        <button
+                            onClick={() => setActiveTab('factories')}
+                            className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                                activeTab === 'factories'
+                                    ? 'bg-red-600 text-white shadow-sm'
+                                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                            }`}
+                        >
+                            <Building2 size={16} />
+                            <span>Factories</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('users')}
+                            className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                                activeTab === 'users'
+                                    ? 'bg-red-600 text-white shadow-sm'
+                                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                            }`}
+                        >
+                            <Users size={16} />
+                            <span>Users</span>
+                        </button>
+                    </>
+                )}
+                <button
+                    onClick={() => setActiveTab('csv-validator')}
+                    className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                        activeTab === 'csv-validator'
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                >
+                    <CheckSquare size={16} />
+                    <span>CSV Validator</span>
+                </button>
+                <button
+                    onClick={() => setActiveTab('import-export')}
+                    className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                        activeTab === 'import-export'
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                >
+                    <Upload size={16} />
+                    <span>Import/Export</span>
+                </button>
+            </div>
+
+            {/* Tab Content */}
+            {activeTab === 'factories' && currentUser?.role === UserRole.SUPER_ADMIN && (
+                <div>
+                    <FactoryManagement />
+                </div>
+            )}
+
+            {activeTab === 'users' && currentUser?.role === UserRole.SUPER_ADMIN && (
+                <div>
+                    <UserManagement />
+                </div>
+            )}
+
+            {activeTab === 'csv-validator' && (
+                <div className="bg-white rounded-lg border border-slate-200 p-6">
+                    <CSVValidator />
+                </div>
+            )}
+
+            {activeTab === 'import-export' && (
+                <div className="bg-white rounded-lg border border-slate-200 p-6">
+                    <DataImportExport />
+                </div>
+            )}
+
+            {activeTab === 'admin' && (
+                <>
+
             {/* Quick Links for Super Admin */}
             {currentUser?.role === UserRole.SUPER_ADMIN && (
                 <div>
                     <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wider mb-3 px-1">System Administration</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <button
-                            onClick={() => navigate('/admin/factories')}
-                            className="bg-white border-2 border-indigo-200 hover:border-indigo-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
-                        >
-                            <div className="flex items-center justify-between mb-3">
-                                <div className="bg-indigo-100 p-3 rounded-lg">
-                                    <Building2 className="text-indigo-600" size={28} />
-                                </div>
-                                <ArrowRight className="text-indigo-400 group-hover:translate-x-1 transition-transform" size={24} />
-                            </div>
-                            <h3 className="font-bold text-lg text-indigo-900 mb-1">Factory Management</h3>
-                            <p className="text-sm text-indigo-600">Add, edit, and manage factory locations</p>
-                        </button>
+                    {/* Factory Management and User Management moved to tabs above */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+                        <p className="font-semibold mb-1">💡 Quick Access</p>
+                        <p>Use the tabs above to access <strong>Factories</strong> and <strong>Users</strong> management.</p>
+                    </div>
 
-                        <button
-                            onClick={() => navigate('/admin/users')}
-                            className="bg-white border-2 border-blue-200 hover:border-blue-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
-                        >
-                            <div className="flex items-center justify-between mb-3">
-                                <div className="bg-blue-100 p-3 rounded-lg">
-                                    <Users className="text-blue-600" size={28} />
-                                </div>
-                                <ArrowRight className="text-blue-400 group-hover:translate-x-1 transition-transform" size={24} />
-                            </div>
-                            <h3 className="font-bold text-lg text-blue-900 mb-1">User Management</h3>
-                            <p className="text-sm text-blue-600">Create users and assign roles & permissions</p>
-                        </button>
-
-                        <button
+                        {/* Hidden: Data Migration tool - not needed for fresh start, hidden to prevent accidental use */}
+                        {/* <button
                             onClick={() => navigate('/admin/migration')}
                             className="bg-white border-2 border-emerald-200 hover:border-emerald-400 p-6 rounded-lg text-left transition-all hover:shadow-lg group"
                         >
@@ -429,8 +503,7 @@ export const AdminModule: React.FC = () => {
                             </div>
                             <h3 className="font-bold text-lg text-emerald-900 mb-1">Data Migration</h3>
                             <p className="text-sm text-emerald-600">Bulk add factoryId to existing data</p>
-                        </button>
-                    </div>
+                        </button> */}
                 </div>
             )}
 
@@ -3520,6 +3593,8 @@ export const AdminModule: React.FC = () => {
                 </div>
             </div>
             </div> {/* Close Database Management Section */}
+                </>
+            )}
         </div>
     );
 };
