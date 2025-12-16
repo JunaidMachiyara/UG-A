@@ -500,7 +500,8 @@ export const useSetupConfigs = () => {
         title: 'Business Partners',
         entityKey: 'partners',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs font-semibold text-blue-600">{(r as any).code || r.id}</span> },
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-400">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type', render: (r) => <span className="text-xs font-mono bg-slate-100 px-1 rounded">{r.type}</span> },
             { header: 'Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || '-' },
@@ -1012,11 +1013,11 @@ export const useSetupConfigs = () => {
         fields: [
             { 
                 name: 'id', 
-                label: 'Original Product ID', 
+                label: 'Original Product ID / Code', 
                 type: 'text', 
                 required: false,
-                placeholder: 'Auto-generated (e.g., ORP-1001)',
-                readOnly: true,
+                placeholder: 'Enter ID (e.g., ORP-1001) or leave blank for auto-generation',
+                readOnly: false,
                 compute: (formData, allData) => {
                     if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^ORP-\d+$/)) {
                         return formData.id;

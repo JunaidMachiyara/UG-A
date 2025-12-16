@@ -177,9 +177,13 @@ export const LogisticsModule: React.FC = () => {
             tallyItems: originalRow.tallyItems // Preserve tally items if any
         };
 
-        saveLogisticsEntry(entryToSave);
-        setEditingId(null);
-        setEditFormData({});
+        saveLogisticsEntry(entryToSave).then(() => {
+            setEditingId(null);
+            setEditFormData({});
+        }).catch((error) => {
+            console.error('Failed to save logistics entry:', error);
+            alert('Failed to save logistics entry. Please try again.');
+        });
     };
 
     return (

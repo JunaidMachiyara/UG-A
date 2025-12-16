@@ -498,9 +498,17 @@ const BalanceSheet: React.FC = () => {
     const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
 
     // Split supplier/vendor balances
-    const positiveSuppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance > 0);
+    // NOTE: Include SUPPLIER + VENDOR + freight/clearing/commission agents so ALL trade payables/advances are reflected
+    const supplierLikeTypes = [
+        PartnerType.SUPPLIER,
+        PartnerType.VENDOR,
+        PartnerType.FREIGHT_FORWARDER,
+        PartnerType.CLEARING_AGENT,
+        PartnerType.COMMISSION_AGENT
+    ];
+    const positiveSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance > 0);
     const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + s.balance, 0);
-    const negativeSuppliers = state.partners.filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0);
+    const negativeSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance < 0);
     const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
     
     const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);

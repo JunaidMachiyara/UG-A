@@ -296,11 +296,21 @@ export const Accounting: React.FC = () => {
             entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: sourceId, accountName: sourceName, currency: fromCurrency, exchangeRate: fromRate, fcyAmount: parseFloat(fromAmount), debit: 0, credit: fromBase });
             entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: description, accountId: destId, accountName: destName, currency: toCurrency, exchangeRate: toRate, fcyAmount: parseFloat(toAmount), debit: toBase, credit: 0 });
             if (Math.abs(variance) > 0.01) {
-                const varianceAccountId = state.accounts.find(a => a.name.includes('Exchange'))?.id || '502';
-                if (variance < 0) {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Loss', accountId: varianceAccountId, accountName: 'Exchange Variance', currency: 'USD', exchangeRate: 1, fcyAmount: Math.abs(variance), debit: Math.abs(variance), credit: 0 });
+                // Lookup exchange variance account dynamically (factory-specific, always correct)
+                const varianceAccount = state.accounts.find(a => 
+                    a.name.includes('Exchange') ||
+                    a.name.includes('Exchange Variance') ||
+                    a.code === '502'
+                );
+                
+                if (!varianceAccount) {
+                    console.warn('⚠️ Exchange Variance account not found. Skipping variance entry.');
                 } else {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Gain', accountId: varianceAccountId, accountName: 'Exchange Variance', currency: 'USD', exchangeRate: 1, fcyAmount: variance, debit: 0, credit: variance });
+                    if (variance < 0) {
+                        entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Loss', accountId: varianceAccount.id, accountName: varianceAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: Math.abs(variance), debit: Math.abs(variance), credit: 0, factoryId: state.currentFactory?.id || '' });
+                    } else {
+                        entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INTERNAL_TRANSFER, narration: 'Exchange Gain', accountId: varianceAccount.id, accountName: varianceAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: variance, debit: 0, credit: variance, factoryId: state.currentFactory?.id || '' });
+                    }
                 }
             }
         } else if (vType === 'JV') {
@@ -316,15 +326,33 @@ export const Accounting: React.FC = () => {
             if (!item) return alert("Item not found");
             const qty = parseFloat(iaQty);
             const adjustmentValue = qty * (item.avgCost || 0);
-            const inventoryAccountId = state.accounts.find(a => a.name.includes('Finished Goods') || a.code === '1202')?.id || '1202';
-            const adjustmentAccountId = state.accounts.find(a => a.name.includes('Inventory Adjustment') || a.name.includes('Write-off'))?.id || '503';
+            
+            // Lookup accounts dynamically (factory-specific, always correct)
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Finished Goods') || 
+                a.name.includes('Inventory - Finished Goods') ||
+                a.code === '105' ||
+                a.code === '1202'
+            );
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Inventory Adjustment') || 
+                a.name.includes('Write-off') ||
+                a.code === '503'
+            );
+            
+            if (!inventoryAccount || !adjustmentAccount) {
+                const missingAccounts = [];
+                if (!inventoryAccount) missingAccounts.push('Inventory - Finished Goods (105 or 1202)');
+                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503)');
+                return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+            }
             
             if (iaAdjustmentType === 'INCREASE') {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Increase: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccountId, accountName: 'Inventory Adjustment', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Increase: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Increase: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Increase: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
             } else {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Decrease: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccountId, accountName: 'Inventory Adjustment', currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Decrease: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
             }
         } else if (vType === 'RTS') {
             // Return to Supplier
@@ -335,9 +363,20 @@ export const Accounting: React.FC = () => {
             if (!item || !supplier) return alert("Item or supplier not found");
             const qty = parseFloat(rtsQty);
             const returnValue = qty * (item.avgCost || 0);
-            const inventoryAccountId = state.accounts.find(a => a.name.includes('Finished Goods') || a.code === '1202')?.id || '1202';
             
-            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.RETURN_TO_SUPPLIER, accountId: inventoryAccountId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: returnValue, debit: 0, credit: returnValue, narration: `Return to Supplier: ${item.name} (${qty} units) to ${supplier.name} - ${rtsReason}`, factoryId: state.currentFactory?.id || '' });
+            // Lookup inventory account dynamically (factory-specific, always correct)
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Finished Goods') || 
+                a.name.includes('Inventory - Finished Goods') ||
+                a.code === '105' ||
+                a.code === '1202'
+            );
+            
+            if (!inventoryAccount) {
+                return alert('Missing required account: Inventory - Finished Goods (105 or 1202). Please ensure this account exists in Setup > Chart of Accounts.');
+            }
+            
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.RETURN_TO_SUPPLIER, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: returnValue, debit: 0, credit: returnValue, narration: `Return to Supplier: ${item.name} (${qty} units) to ${supplier.name} - ${rtsReason}`, factoryId: state.currentFactory?.id || '' });
             entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.RETURN_TO_SUPPLIER, accountId: rtsSupplierId, accountName: supplier.name, currency: 'USD', exchangeRate: 1, fcyAmount: returnValue, debit: returnValue, credit: 0, narration: `Return: ${item.name} (${qty} units) - ${rtsReason}`, factoryId: state.currentFactory?.id || '' });
         } else if (vType === 'WO') {
             // Write-off
@@ -345,24 +384,45 @@ export const Accounting: React.FC = () => {
             if (!woReason) return alert("Reason is required for write-off");
             const account = state.accounts.find(a => a.id === woAccountId);
             if (!account) return alert("Account not found");
-            const writeOffAccountId = state.accounts.find(a => a.name.includes('Write-off') || a.name.includes('Bad Debt'))?.id || '504';
+            
+            // Lookup write-off account dynamically (factory-specific, always correct)
+            const writeOffAccount = state.accounts.find(a => 
+                a.name.includes('Write-off') || 
+                a.name.includes('Bad Debt') ||
+                a.code === '504'
+            );
+            
+            if (!writeOffAccount) {
+                return alert('Missing required account: Write-off / Bad Debt (504). Please ensure this account exists in Setup > Chart of Accounts.');
+            }
             
             entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.WRITE_OFF, accountId: woAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Write-off: ${account.name} - ${woReason}`, factoryId: state.currentFactory?.id || '' });
-            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.WRITE_OFF, accountId: writeOffAccountId, accountName: 'Write-off / Bad Debt', currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Write-off: ${account.name} - ${woReason}`, factoryId: state.currentFactory?.id || '' });
+            entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.WRITE_OFF, accountId: writeOffAccount.id, accountName: writeOffAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Write-off: ${account.name} - ${woReason}`, factoryId: state.currentFactory?.id || '' });
         } else if (vType === 'BD') {
             // Balancing Discrepancy
             if (!bdAccountId || !amount || parseFloat(amount) <= 0) return alert("Select account and enter valid amount");
             if (!bdReason) return alert("Reason is required for balancing discrepancy");
             const account = state.accounts.find(a => a.id === bdAccountId);
             if (!account) return alert("Account not found");
-            const discrepancyAccountId = state.accounts.find(a => a.name.includes('Discrepancy') || a.name.includes('Suspense'))?.id || '505';
+            
+            // Lookup discrepancy account dynamically (factory-specific, always correct)
+            const discrepancyAccount = state.accounts.find(a => 
+                a.name.includes('Discrepancy') || 
+                a.name.includes('Suspense') ||
+                a.name.includes('Balancing Discrepancy') ||
+                a.code === '505'
+            );
+            
+            if (!discrepancyAccount) {
+                return alert('Missing required account: Balancing Discrepancy / Suspense (505). Please ensure this account exists in Setup > Chart of Accounts.');
+            }
             
             if (bdAdjustmentType === 'INCREASE') {
                 entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccountId, accountName: 'Balancing Discrepancy', currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
             } else {
                 entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccountId, accountName: 'Balancing Discrepancy', currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
             }
         }
 

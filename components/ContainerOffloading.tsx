@@ -182,7 +182,7 @@ export const ContainerOffloading: React.FC = () => {
         setTallyQty('');
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!activeShipment) {
             alert('Please select a container to off-load.');
             return;
@@ -250,7 +250,7 @@ export const ContainerOffloading: React.FC = () => {
             addProduction(productionEntries);
         }
 
-        saveLogisticsEntry(entry);
+        await saveLogisticsEntry(entry);
         alert('Container Off-loaded Successfully!');
         
         // Reset and refresh

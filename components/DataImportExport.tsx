@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { getExchangeRates } from '../context/DataContext';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Database, X, Copy, Check } from 'lucide-react';
 import Papa from 'papaparse';
 import { collection, writeBatch, doc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { TransactionType, LedgerEntry } from '../types';
-import { getAccountId } from '../services/accountMap';
+import { TransactionType, LedgerEntry, Partner, AccountType } from '../types';
+// Removed getAccountId import - using dynamic account lookup from state.accounts instead
 
 type ImportableEntity = 
     | 'items' 
@@ -18,7 +18,10 @@ type ImportableEntity =
     | 'sections'
     | 'divisions'
     | 'subDivisions'
-    | 'purchases';
+    | 'purchases'
+    | 'originalProducts'
+    | 'logos'
+    | 'warehouses';
 
 interface ImportResult {
     success: number;
@@ -99,6 +102,9 @@ export const DataImportExport: React.FC = () => {
     } = useData();
     const { currentFactory } = useAuth();
     const [selectedEntity, setSelectedEntity] = useState<ImportableEntity>('items');
+    const [showValidationModal, setShowValidationModal] = useState(false);
+    const [validationErrors, setValidationErrors] = useState<string[]>([]);
+    const [validItemCount, setValidItemCount] = useState(0);
     const [parsedData, setParsedData] = useState<any[]>([]);
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -150,6 +156,34 @@ export const DataImportExport: React.FC = () => {
                 return;
             }
 
+            // CRITICAL VALIDATION: Detect if wrong entity type is selected
+            // Check if CSV contains partner data (has 'type' field) when Items is selected
+            if (selectedEntity === 'items') {
+                const hasTypeField = parsedData.some(row => row.type && 
+                    ['CUSTOMER', 'SUPPLIER', 'VENDOR', 'SUB SUPPLIER', 'CLEARING AGENT'].includes(row.type.toUpperCase().trim())
+                );
+                if (hasTypeField) {
+                    const partnerCount = parsedData.filter(row => row.type && 
+                        ['CUSTOMER', 'SUPPLIER', 'VENDOR', 'SUB SUPPLIER', 'CLEARING AGENT'].includes(row.type.toUpperCase().trim())
+                    ).length;
+                    alert(`❌ CRITICAL ERROR: You selected "Items" but your CSV contains Partner data!\n\nFound ${partnerCount} partner(s) with 'type' field (CUSTOMER, SUPPLIER, etc.).\n\nPlease:\n1. Select "Partners" from the entity dropdown\n2. Re-upload your CSV file\n\nImport cancelled to prevent data corruption.`);
+                    setImporting(false);
+                    return;
+                }
+            }
+            
+            // Check if CSV contains item data (has 'category' or 'section' field) when Partners is selected
+            if (selectedEntity === 'partners') {
+                const hasItemFields = parsedData.some(row => row.category || row.section || row.avgCost || row.openingStock);
+                if (hasItemFields && !parsedData.some(row => row.type && 
+                    ['CUSTOMER', 'SUPPLIER', 'VENDOR', 'SUB SUPPLIER', 'CLEARING AGENT'].includes(row.type.toUpperCase().trim())
+                )) {
+                    alert(`❌ CRITICAL ERROR: You selected "Partners" but your CSV appears to contain Item data!\n\nFound fields like 'category', 'section', 'avgCost', or 'openingStock' which are Item fields.\n\nPlease:\n1. Select "Items" from the entity dropdown\n2. Re-upload your CSV file\n\nImport cancelled to prevent data corruption.`);
+                    setImporting(false);
+                    return;
+                }
+            }
+
             // Special handling for large item imports - use batch writes
             if (selectedEntity === 'items' && parsedData.length > 100) {
                 // Batch import for large item lists (1500+ items)
@@ -159,12 +193,40 @@ export const DataImportExport: React.FC = () => {
                 
                 console.log(`≡ƒôè Starting import of ${parsedData.length} items`);
                 
+                // Build validation sets for categories and sections (for THIS factory only)
+                const validCategoryIds = new Set(state.categories.map(c => c.id));
+                const validCategoryNames = new Set(state.categories.map(c => c.name.toLowerCase().trim()));
+                const validSectionIds = new Set(state.sections.map(s => s.id));
+                const validSectionNames = new Set(state.sections.map(s => s.name.toLowerCase().trim()));
+                
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
                     if (!row.name) {
                         errors.push(`Row ${index + 2}: Missing required field 'name'`);
                         continue;
+                    }
+                    
+                    // Validate category if provided
+                    const categoryCode = row.category?.trim();
+                    if (categoryCode) {
+                        const categoryExists = validCategoryIds.has(categoryCode) || 
+                                              validCategoryNames.has(categoryCode.toLowerCase());
+                        if (!categoryExists) {
+                            errors.push(`Row ${index + 2}: Category "${categoryCode}" does not exist in Setup. Please create this category first or use an existing category.`);
+                            continue; // Skip this item
+                        }
+                    }
+                    
+                    // Validate section if provided
+                    const sectionCode = row.section?.trim();
+                    if (sectionCode) {
+                        const sectionExists = validSectionIds.has(sectionCode) || 
+                                             validSectionNames.has(sectionCode.toLowerCase());
+                        if (!sectionExists) {
+                            errors.push(`Row ${index + 2}: Section "${sectionCode}" does not exist in Setup. Please create this section first or use an existing section.`);
+                            continue; // Skip this item
+                        }
                     }
                     
                     // Generate unique ID and code
@@ -179,15 +241,23 @@ export const DataImportExport: React.FC = () => {
                     seenCodes.add(itemCode);
                     
                     const openingStock = parseFloat(row.openingStock) || 0;
+                    const avgCost = parseFloat(row.avgCost) || 0;
+                    
+                    // Validate opening stock has avgCost
+                    if (openingStock > 0 && (avgCost === 0 || isNaN(avgCost))) {
+                        errors.push(`Row ${index + 2}: Item "${row.name}" has opening stock (${openingStock}) but avgCost is missing or zero. Ledger entries will NOT be created. Please provide avgCost to create opening stock ledger entries.`);
+                        // Still import item, but warn about missing ledger entries
+                    }
+                    
                     const item = {
                         id: row.id || itemCode, // Use the unique code as ID if no ID provided
                         code: itemCode,
                         name: row.name,
-                        category: row.category || '',
-                        section: row.section || '',
+                        category: categoryCode || '',
+                        section: sectionCode || '',
                         packingType: row.packingType || 'Kg',
                         weightPerUnit: parseFloat(row.weightPerUnit) || 0,
-                        avgCost: parseFloat(row.avgCost) || 0,
+                        avgCost: avgCost,
                         salePrice: parseFloat(row.salePrice) || 0,
                         stockQty: parseFloat(row.stockQty) || 0,
                         openingStock: openingStock,
@@ -198,6 +268,28 @@ export const DataImportExport: React.FC = () => {
                 }
                 
                 console.log(`Γ£à Prepared ${validItems.length} unique items for import (from ${parsedData.length} CSV rows)`);
+                
+                // Show validation summary before import
+                if (errors.length > 0) {
+                    const validationErrs = errors.filter(e => e.includes('does not exist') || e.includes('Ledger entries will NOT'));
+                    const otherErrs = errors.filter(e => !validationErrs.includes(e));
+                    
+                    if (validItems.length === 0) {
+                        // Show all errors in modal for user to note
+                        setValidationErrors([...validationErrs, ...otherErrs]);
+                        setValidItemCount(0);
+                        setShowValidationModal(true);
+                        setImporting(false);
+                        return;
+                    }
+                    
+                    // Show validation modal with errors for user to note
+                    setValidationErrors([...validationErrs, ...otherErrs]);
+                    setValidItemCount(validItems.length);
+                    setShowValidationModal(true);
+                    setImporting(false);
+                    return; // Wait for user to review and confirm
+                }
                 
                 // Process in batches with delays to avoid rate limiting
                 console.log(`≡ƒôª Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
@@ -273,55 +365,76 @@ export const DataImportExport: React.FC = () => {
                         
                         // Create opening stock ledger entries directly (don't call addItem - it causes duplicates)
                         // Firebase listener already loaded items to state, we just need to create ledger entries
-                        for (const item of batchItems) {
-                            const openingStock = item.openingStock || 0;
-                            const avgCost = item.avgCost || 0;
+                        
+                        // Lookup accounts dynamically (factory-specific, always correct)
+                        const finishedGoodsAccount = state.accounts.find(a => 
+                            a.name.includes('Finished Goods') || 
+                            a.name.includes('Inventory - Finished Goods') ||
+                            a.code === '105'
+                        );
+                        const capitalAccount = state.accounts.find(a => 
+                            a.name.includes('Capital') || 
+                            a.name.includes('Owner\'s Capital') ||
+                            a.code === '301'
+                        );
+                        
+                        if (!finishedGoodsAccount || !capitalAccount) {
+                            const missingAccounts = [];
+                            if (!finishedGoodsAccount) missingAccounts.push('Inventory - Finished Goods (105)');
+                            if (!capitalAccount) missingAccounts.push('Capital (301)');
+                            console.error(`❌ Required accounts not found: ${missingAccounts.join(', ')}`);
+                            errors.push(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+                            // Continue with other items, but skip ledger entries
+                        } else {
+                            const finishedGoodsId = finishedGoodsAccount.id;
+                            const capitalId = capitalAccount.id;
                             
-                            if (openingStock > 0 && avgCost !== 0) {
-                                const prevYear = new Date().getFullYear() - 1;
-                                const date = `${prevYear}-12-31`;
-                                const stockValue = openingStock * avgCost;
+                            for (const item of batchItems) {
+                                const openingStock = item.openingStock || 0;
+                                const avgCost = item.avgCost || 0;
                                 
-                                // Get account IDs using the same method as addItem
-                                const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
-                                const capitalId = getAccountId('301'); // Capital
+                                if (openingStock > 0 && avgCost !== 0) {
+                                    const prevYear = new Date().getFullYear() - 1;
+                                    const date = `${prevYear}-12-31`;
+                                    const stockValue = openingStock * avgCost;
+                                    
+                                    const entries = [
+                                        {
+                                            date,
+                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: finishedGoodsId,
+                                            accountName: finishedGoodsAccount.name,
+                                            currency: item.defaultCurrency || 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: Math.abs(stockValue),
+                                            debit: stockValue > 0 ? stockValue : 0,
+                                            credit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                            narration: `Opening Stock - ${item.name}`,
+                                            factoryId: currentFactory?.id || ''
+                                        },
+                                        {
+                                            date,
+                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: capitalId,
+                                            accountName: capitalAccount.name,
+                                            currency: item.defaultCurrency || 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: Math.abs(stockValue),
+                                            debit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                            credit: stockValue > 0 ? stockValue : 0,
+                                            narration: `Opening Stock - ${item.name}`,
+                                            factoryId: currentFactory?.id || ''
+                                        }
+                                    ];
+                                    await postTransaction(entries);
+                                }
                                 
-                                const entries = [
-                                    {
-                                        date,
-                                        transactionId: `OB-STK-${item.id || item.code}`,
-                                        transactionType: TransactionType.OPENING_BALANCE,
-                                        accountId: finishedGoodsId,
-                                        accountName: 'Inventory - Finished Goods',
-                                        currency: item.defaultCurrency || 'USD',
-                                        exchangeRate: 1,
-                                        fcyAmount: Math.abs(stockValue),
-                                        debit: stockValue > 0 ? stockValue : 0,
-                                        credit: stockValue < 0 ? Math.abs(stockValue) : 0,
-                                        narration: `Opening Stock - ${item.name}`,
-                                        factoryId: currentFactory?.id || ''
-                                    },
-                                    {
-                                        date,
-                                        transactionId: `OB-STK-${item.id || item.code}`,
-                                        transactionType: TransactionType.OPENING_BALANCE,
-                                        accountId: capitalId,
-                                        accountName: 'Capital',
-                                        currency: item.defaultCurrency || 'USD',
-                                        exchangeRate: 1,
-                                        fcyAmount: Math.abs(stockValue),
-                                        debit: stockValue < 0 ? Math.abs(stockValue) : 0,
-                                        credit: stockValue > 0 ? stockValue : 0,
-                                        narration: `Opening Stock - ${item.name}`,
-                                        factoryId: currentFactory?.id || ''
-                                    }
-                                ];
-                                await postTransaction(entries);
-                            }
-                            
-                            // Small delay every 10 items to avoid rate limiting
-                            if (batchItems.indexOf(item) % 10 === 9) {
-                                await new Promise(resolve => setTimeout(resolve, 100));
+                                // Small delay every 10 items to avoid rate limiting
+                                if (batchItems.indexOf(item) % 10 === 9) {
+                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                }
                             }
                         }
                         
@@ -338,8 +451,8 @@ export const DataImportExport: React.FC = () => {
                 }
             }
             
-            // Special handling for large partner imports - use batch writes
-            if (selectedEntity === 'partners' && parsedData.length > 50) {
+            // Special handling for partner imports - use batch writes (both large and small batches)
+            if (selectedEntity === 'partners' && parsedData.length > 0) {
                 // Batch import for large partner lists (210+ partners)
                 const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
                 const validPartners: any[] = [];
@@ -472,6 +585,7 @@ export const DataImportExport: React.FC = () => {
                 }
 
                 // Process in batches with delays to avoid rate limiting
+                let totalLedgerEntriesCreated = 0; // Track total entries across all batches
                 for (let i = 0; i < partnersToImport.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
                     const batchPartners = partnersToImport.slice(i, i + BATCH_SIZE);
@@ -499,6 +613,7 @@ export const DataImportExport: React.FC = () => {
                             }
                         });
                         
+                        console.log(`💾 Saving partner to Firebase: ${partner.name} (code: ${csvId}, Firestore ID: ${partnerRef.id})`);
                         batch.set(partnerRef, partnerDataForSave);
                     }
                     
@@ -508,12 +623,62 @@ export const DataImportExport: React.FC = () => {
                         console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(partnersToImport.length / BATCH_SIZE)} saved: ${batchPartners.length} partners to Firebase`);
                         
                         // Wait for Firebase listener to load partners into state
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        // Increased wait time and add retry logic for better reliability
+                        let retryCount = 0;
+                        const maxRetries = 5;
+                        let allPartnersFound = false;
+                        
+                        while (retryCount < maxRetries && !allPartnersFound) {
+                            await new Promise(resolve => setTimeout(resolve, 1000 + (retryCount * 500))); // Increasing delay
+                            
+                            // Defensive check: ensure state is still available
+                            if (!state || !state.partners) {
+                                console.error('❌ State or state.partners is undefined during partner lookup. DataProvider may have unmounted.');
+                                errors.push('Critical error: Application state became unavailable during import. Please try again.');
+                                break;
+                            }
+                            
+                            // Check if all partners are in state
+                            const foundCount = batchPartners.filter(p => {
+                                const csvId = p.id;
+                                try {
+                                    const found = state.partners.some(sp => {
+                                        const codeMatch = (sp as any).code === csvId;
+                                        const nameMatch = sp.name.toLowerCase().trim() === p.name.toLowerCase().trim();
+                                        if (codeMatch || nameMatch) {
+                                            console.log(`   ✅ Found in state: ${p.name} (looking for code: ${csvId}, found code: ${(sp as any).code || 'N/A'}, found ID: ${sp.id})`);
+                                        }
+                                        return codeMatch || nameMatch;
+                                    });
+                                    if (!found) {
+                                        console.log(`   ⏳ Not yet in state: ${p.name} (code: ${csvId}). Available codes: ${state.partners.slice(0, 3).map((sp: any) => sp.code || sp.id).join(', ')}...`);
+                                    }
+                                    return found;
+                                } catch (err) {
+                                    console.error(`Error checking partner ${p.name}:`, err);
+                                    return false;
+                                }
+                            }).length;
+                            
+                            if (foundCount === batchPartners.length) {
+                                allPartnersFound = true;
+                                console.log(`✅ All ${batchPartners.length} partners loaded into state after ${retryCount + 1} attempt(s)`);
+                            } else {
+                                retryCount++;
+                                console.log(`⏳ Waiting for partners to load... Found ${foundCount}/${batchPartners.length} (attempt ${retryCount}/${maxRetries})`);
+                            }
+                        }
+                        
+                        if (!allPartnersFound) {
+                            console.warn(`⚠️ Not all partners loaded into state after ${maxRetries} attempts. Proceeding with available partners.`);
+                        }
                         
                         // After successful batch commit, handle opening balance ledger entries
                         // Note: Firebase listener will automatically add partners to local state
                         // Process opening balances with a small delay to avoid rate limiting
                         let balanceEntriesCreated = 0;
+                        let partnersNotFound: string[] = [];
+                        
                         for (let pIdx = 0; pIdx < batchPartners.length; pIdx++) {
                             const partner = batchPartners[pIdx];
                             // Handle opening balance if needed (similar to addPartner logic)
@@ -521,18 +686,129 @@ export const DataImportExport: React.FC = () => {
                                 try {
                                     // Find the partner in state by code to get its Firestore document ID
                                     const csvId = partner.id; // This is the CSV id (now stored as code)
-                                    const savedPartner = state.partners.find(p => 
-                                        (p as any).code === csvId || p.name === partner.name
+                                    
+                                    // Defensive check: ensure state is still available
+                                    if (!state || !state.partners || !state.accounts) {
+                                        const errorMsg = `Critical error: Application state became unavailable while creating ledger entries for partner "${partner.name}". DataProvider may have unmounted.`;
+                                        console.error(`❌ ${errorMsg}`);
+                                        errors.push(errorMsg);
+                                        throw new Error(errorMsg);
+                                    }
+                                    
+                                    // Try multiple lookup strategies
+                                    let savedPartner = state.partners.find(p => 
+                                        (p as any).code === csvId
                                     );
                                     
+                                    // If not found by code, try by name (case-insensitive)
                                     if (!savedPartner) {
-                                        console.warn(`⚠️ Could not find partner ${partner.name} in state after save. Skipping opening balance.`);
+                                        savedPartner = state.partners.find(p => 
+                                            p.name.toLowerCase().trim() === partner.name.toLowerCase().trim() &&
+                                            p.type === partner.type
+                                        );
+                                    }
+                                    
+                                    // If still not found, try by ID (in case code wasn't set properly)
+                                    if (!savedPartner) {
+                                        savedPartner = state.partners.find(p => 
+                                            p.id === csvId || (p as any).id === csvId
+                                        );
+                                    }
+                                    
+                                    // FALLBACK: If not found in state, query Firebase directly
+                                    if (!savedPartner) {
+                                        console.warn(`⚠️ Partner "${partner.name}" (code: ${csvId}) not found in state. Querying Firebase directly...`);
+                                        try {
+                                            const partnersQuery = query(
+                                                collection(db, 'partners'),
+                                                where('factoryId', '==', currentFactory?.id || ''),
+                                                where('code', '==', csvId)
+                                            );
+                                            const partnersSnapshot = await getDocs(partnersQuery);
+                                            
+                                            if (!partnersSnapshot.empty) {
+                                                const firebasePartner = partnersSnapshot.docs[0].data();
+                                                savedPartner = {
+                                                    id: partnersSnapshot.docs[0].id,
+                                                    name: firebasePartner.name,
+                                                    type: firebasePartner.type,
+                                                    ...firebasePartner
+                                                } as Partner;
+                                                console.log(`✅ Found partner "${partner.name}" in Firebase directly: ID=${savedPartner.id}, Code=${(savedPartner as any).code || 'N/A'}`);
+                                            } else {
+                                                // Try by name as fallback
+                                                const partnersByNameQuery = query(
+                                                    collection(db, 'partners'),
+                                                    where('factoryId', '==', currentFactory?.id || '')
+                                                );
+                                                const allPartnersSnapshot = await getDocs(partnersByNameQuery);
+                                                const foundByName = allPartnersSnapshot.docs.find(doc => {
+                                                    const data = doc.data();
+                                                    return data.name.toLowerCase().trim() === partner.name.toLowerCase().trim() &&
+                                                           data.type === partner.type;
+                                                });
+                                                
+                                                if (foundByName) {
+                                                    const firebasePartner = foundByName.data();
+                                                    savedPartner = {
+                                                        id: foundByName.id,
+                                                        name: firebasePartner.name,
+                                                        type: firebasePartner.type,
+                                                        ...firebasePartner
+                                                    } as any;
+                                                    console.log(`✅ Found partner "${partner.name}" in Firebase by name: ID=${savedPartner.id}, Code=${(savedPartner as any).code || 'N/A'}`);
+                                                }
+                                            }
+                                        } catch (firebaseError: any) {
+                                            console.error(`❌ Error querying Firebase for partner "${partner.name}":`, firebaseError);
+                                        }
+                                    }
+                                    
+                                    if (!savedPartner) {
+                                        // Enhanced debugging: log what's actually in state
+                                        console.error(`❌ Could not find partner "${partner.name}" (code: ${csvId}, type: ${partner.type})`);
+                                        console.error(`   Available partners in state (${state.partners.length}):`, 
+                                            state.partners.slice(0, 5).map(p => ({
+                                                id: p.id,
+                                                code: (p as any).code || 'N/A',
+                                                name: p.name,
+                                                type: p.type
+                                            }))
+                                        );
+                                        const errorMsg = `Could not find partner "${partner.name}" (code: ${csvId}, type: ${partner.type}) in state after save. Available partners: ${state.partners.length}`;
+                                        console.error(`❌ ${errorMsg}`);
+                                        partnersNotFound.push(`${partner.name} (${csvId})`);
+                                        errors.push(`Partner "${partner.name}" not found in state - ledger entries NOT created. Please check console for details.`);
                                         continue;
                                     }
                                     
+                                    console.log(`✅ Found partner "${partner.name}" in state: ID=${savedPartner.id}, Code=${(savedPartner as any).code || 'N/A'}`);
+                                    
                                     const prevYear = new Date().getFullYear() - 1;
                                     const date = `${prevYear}-12-31`;
-                                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                                    
+                                    // Defensive check: ensure accounts are available
+                                    if (!state.accounts || state.accounts.length === 0) {
+                                        const errorMsg = `Critical error: Accounts not available while creating ledger entries for partner "${partner.name}".`;
+                                        console.error(`❌ ${errorMsg}`);
+                                        errors.push(errorMsg);
+                                        continue;
+                                    }
+                                    
+                                    // Lookup Capital account dynamically (factory-specific, always correct)
+                                    const capitalAccount = state.accounts.find(a => 
+                                        a.name.includes('Capital') || 
+                                        a.name.includes('Owner\'s Capital') ||
+                                        a.code === '301'
+                                    );
+                                    
+                                    if (!capitalAccount) {
+                                        console.error(`❌ Capital account not found for partner ${partner.name}`);
+                                        errors.push(`Missing Capital account. Please ensure Capital account exists in Setup > Chart of Accounts.`);
+                                        continue; // Skip this partner's opening balance
+                                    }
+                                    
+                                    const openingEquityId = capitalAccount.id;
                                     const currency = partner.defaultCurrency || 'USD';
                                     const exchangeRates = getExchangeRates(state.currencies);
                                     const rate = exchangeRates[currency] || 1;
@@ -560,7 +836,7 @@ export const DataImportExport: React.FC = () => {
                                                 transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
                                                 transactionType: TransactionType.OPENING_BALANCE,
                                                 accountId: openingEquityId,
-                                                accountName: 'Opening Equity',
+                                                accountName: capitalAccount.name,
                                                 debit: 0,
                                                 credit: partner.openingBalance,
                                                 narration: `Opening Balance - ${partner.name}`,
@@ -573,18 +849,18 @@ export const DataImportExport: React.FC = () => {
                                         if (partner.openingBalance < 0) {
                                             // Negative: Accounts Payable
                                             entries = [
-                                                {
-                                                    ...commonProps,
-                                                    date,
-                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                    transactionType: TransactionType.OPENING_BALANCE,
-                                                    accountId: openingEquityId,
-                                                    accountName: 'Opening Equity',
-                                                    debit: absBalance,
-                                                    credit: 0,
-                                                    narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
-                                                },
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: openingEquityId,
+                                                accountName: capitalAccount.name,
+                                                debit: absBalance,
+                                                credit: 0,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            },
                                                 {
                                                     ...commonProps,
                                                     date,
@@ -601,18 +877,18 @@ export const DataImportExport: React.FC = () => {
                                         } else {
                                             // Positive: Advance to Supplier
                                             entries = [
-                                                {
-                                                    ...commonProps,
-                                                    date,
-                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                    transactionType: TransactionType.OPENING_BALANCE,
-                                                    accountId: openingEquityId,
-                                                    accountName: 'Opening Equity',
-                                                    debit: 0,
-                                                    credit: absBalance,
-                                                    narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
-                                                },
+                                            {
+                                                ...commonProps,
+                                                date,
+                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                transactionType: TransactionType.OPENING_BALANCE,
+                                                accountId: openingEquityId,
+                                                accountName: capitalAccount.name,
+                                                debit: 0,
+                                                credit: absBalance,
+                                                narration: `Opening Balance - ${partner.name}`,
+                                                factoryId: currentFactory?.id || ''
+                                            },
                                                 {
                                                     ...commonProps,
                                                     date,
@@ -628,22 +904,45 @@ export const DataImportExport: React.FC = () => {
                                             ];
                                         }
                                     }
+                                    
+                                    // Defensive check before posting transaction
+                                    if (!postTransaction) {
+                                        throw new Error('postTransaction function is not available. DataProvider may have unmounted.');
+                                    }
+                                    
                                     await postTransaction(entries);
                                     balanceEntriesCreated++;
+                                    totalLedgerEntriesCreated += entries.length;
+                                    console.log(`✅ Created opening balance ledger entries for partner "${partner.name}" (${entries.length} entries)`);
                                     
                                     // Small delay every 10 partners to avoid Firebase rate limiting
                                     if ((pIdx + 1) % 10 === 0) {
                                         await new Promise(resolve => setTimeout(resolve, 200));
                                     }
                                 } catch (error: any) {
-                                    console.error(`Γ¥î Error creating opening balance for ${partner.name}:`, error);
-                                    errors.push(`Failed to create opening balance for ${partner.name}: ${error.message}`);
+                                    const errorMsg = error?.message || 'Unknown error';
+                                    console.error(`❌ Error creating opening balance for ${partner.name}:`, error);
+                                    
+                                    // Check if it's a DataProvider error
+                                    if (errorMsg.includes('useData') || errorMsg.includes('DataProvider')) {
+                                        errors.push(`CRITICAL: Application state error for partner "${partner.name}". Please refresh and try again.`);
+                                        throw error; // Re-throw to stop processing
+                                    } else {
+                                        errors.push(`Failed to create opening balance for ${partner.name}: ${errorMsg}`);
+                                    }
                                 }
                             }
                         }
                         
                         if (balanceEntriesCreated > 0) {
-                            console.log(`Γ£à Created ${balanceEntriesCreated} opening balance entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+                            console.log(`✅ Created ${balanceEntriesCreated} opening balance entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+                        } else {
+                            console.warn(`⚠️ No opening balance entries created for batch ${Math.floor(i / BATCH_SIZE) + 1}. Check if partners have openingBalance !== 0.`);
+                        }
+                        
+                        if (partnersNotFound.length > 0) {
+                            console.error(`❌ ${partnersNotFound.length} partner(s) not found in state after save:`, partnersNotFound);
+                            errors.push(`${partnersNotFound.length} partner(s) not found in state - ledger entries NOT created: ${partnersNotFound.join(', ')}`);
                         }
                         
                         successCount += batchPartners.length;
@@ -723,9 +1022,11 @@ export const DataImportExport: React.FC = () => {
                     
                     // Validate supplier exists
                     const supplierId = row.supplierId.trim();
-                    const supplier = state.partners.find(p => p.id === supplierId);
+                    const supplier = state.partners.find(p => 
+                        p.id === supplierId || (p as any).code === supplierId
+                    );
                     if (!supplier) {
-                        errors.push(`Row ${index + 2}: Supplier with ID "${supplierId}" not found. Please create supplier first.`);
+                        errors.push(`Row ${index + 2}: Supplier with ID/Code "${supplierId}" not found. Please create supplier first or use the correct Code from Business Partners (CODE column).`);
                         continue;
                     }
                     
@@ -741,9 +1042,11 @@ export const DataImportExport: React.FC = () => {
                     // Validate subSupplier if provided (optional)
                     let subSupplierId = row.subSupplierId?.trim();
                     if (subSupplierId) {
-                        const subSupplier = state.partners.find(p => p.id === subSupplierId);
+                        const subSupplier = state.partners.find(p => 
+                            p.id === subSupplierId || (p as any).code === subSupplierId
+                        );
                         if (!subSupplier) {
-                            errors.push(`Row ${index + 2}: Sub Supplier with ID "${subSupplierId}" not found. Please create sub supplier first or leave blank.`);
+                            errors.push(`Row ${index + 2}: Sub Supplier with ID/Code "${subSupplierId}" not found. Please create sub supplier first or leave blank. Use the Code from Business Partners (CODE column).`);
                             continue;
                         }
                     }
@@ -895,10 +1198,20 @@ export const DataImportExport: React.FC = () => {
                         
                         // Create LogisticsEntry records for Arrived/Cleared containers (offloading data)
                         // This tracks receivedWeight vs invoicedWeight (purchase weight)
+                        let logisticsEntriesCreated = 0;
+                        let logisticsEntriesFailed: string[] = [];
+                        
                         for (const purchase of batchPurchases) {
-                            if ((purchase as any).csvLogisticsData && purchase.containerNumber) {
-                                const logisticsData = (purchase as any).csvLogisticsData;
+                            // Create logistics entries for ALL purchases with container numbers and status Arrived/Cleared
+                            // Not just those with csvLogisticsData (which only exists if receivedWeight was provided)
+                            if (purchase.containerNumber && (purchase.status === 'Arrived' || purchase.status === 'Cleared')) {
                                 try {
+                                    // Get logistics data from CSV if available, otherwise use purchase data
+                                    const logisticsData = (purchase as any).csvLogisticsData;
+                                    const invoicedWeight = logisticsData?.invoicedWeight || purchase.weightPurchased;
+                                    const receivedWeight = logisticsData?.receivedWeight || purchase.weightPurchased; // Default to invoiced if not provided
+                                    const shortageKg = invoicedWeight - receivedWeight;
+                                    
                                     const logisticsEntry: any = {
                                         id: `LOG-${purchase.id}-${Date.now()}`,
                                         purchaseId: purchase.id,
@@ -906,41 +1219,70 @@ export const DataImportExport: React.FC = () => {
                                         containerNumber: purchase.containerNumber,
                                         status: purchase.status,
                                         arrivalDate: purchase.status === 'Arrived' || purchase.status === 'Cleared' ? purchase.date : undefined,
-                                        invoicedWeight: logisticsData.invoicedWeight,
-                                        receivedWeight: logisticsData.receivedWeight,
-                                        shortageKg: logisticsData.shortageKg
+                                        invoicedWeight: invoicedWeight,
+                                        receivedWeight: receivedWeight,
+                                        shortageKg: shortageKg
                                     };
                                     
-                                    // Use saveLogisticsEntry to save offloading data
-                                    saveLogisticsEntry(logisticsEntry);
-                                    console.log(`Γ£à Created LogisticsEntry for purchase ${purchase.batchNumber} (Invoice: ${logisticsData.invoicedWeight}kg, Received: ${logisticsData.receivedWeight}kg, Shortage: ${logisticsData.shortageKg}kg)`);
+                                    // Use saveLogisticsEntry to save offloading data (now async)
+                                    await saveLogisticsEntry(logisticsEntry);
+                                    logisticsEntriesCreated++;
+                                    console.log(`✅ Created LogisticsEntry for purchase ${purchase.batchNumber} (Container: ${purchase.containerNumber}, Invoice: ${invoicedWeight}kg, Received: ${receivedWeight}kg, Shortage: ${shortageKg}kg)`);
+                                    
+                                    // Small delay to avoid rate limiting
+                                    await new Promise(resolve => setTimeout(resolve, 100));
                                 } catch (error: any) {
-                                    console.error(`Γ¥î Error creating LogisticsEntry for purchase ${purchase.batchNumber}:`, error);
-                                    errors.push(`Failed to create LogisticsEntry for batch ${purchase.batchNumber}: ${error.message}`);
+                                    const errorMsg = `Failed to create LogisticsEntry for batch ${purchase.batchNumber} (Container: ${purchase.containerNumber}): ${error.message}`;
+                                    console.error(`❌ ${errorMsg}`);
+                                    logisticsEntriesFailed.push(purchase.batchNumber);
+                                    errors.push(errorMsg);
                                 }
+                            } else if (purchase.containerNumber && purchase.status === 'In Transit') {
+                                // For In Transit purchases, we don't create logistics entries yet (will be created on offloading)
+                                console.log(`ℹ️ Purchase ${purchase.batchNumber} (Container: ${purchase.containerNumber}) is "In Transit" - logistics entry will be created on offloading`);
+                            } else if (!purchase.containerNumber) {
+                                // No container number - no logistics entry needed
+                                console.log(`ℹ️ Purchase ${purchase.batchNumber} has no container number - skipping logistics entry`);
                             }
+                        }
+                        
+                        if (logisticsEntriesCreated > 0) {
+                            console.log(`✅ Created ${logisticsEntriesCreated} logistics entries for batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+                        }
+                        
+                        if (logisticsEntriesFailed.length > 0) {
+                            console.error(`❌ Failed to create ${logisticsEntriesFailed.length} logistics entries: ${logisticsEntriesFailed.join(', ')}`);
                         }
                         
                         // Create opening balance ledger entries for Raw Material Inventory and Capital
                         // BATCHED: Collect all entries first, then post in one batch for speed
+                        
+                        // Lookup Raw Material INVENTORY account dynamically (factory-specific, always correct)
+                        // IMPORTANT: Restrict to ASSET accounts so we don't accidentally pick
+                        // expense accounts like "Raw Material Consumption"
                         const rawMaterialAccount = state.accounts.find(a => 
-                            a.name.includes('Raw Material') || 
-                            a.name.includes('Raw Materials') ||
-                            a.code === '104' || 
-                            a.code === '1200'
+                            a.type === AccountType.ASSET && (
+                                a.name.includes('Inventory - Raw Material') ||
+                                a.name.includes('Inventory - Raw Materials') ||
+                                a.name.includes('Raw Material Inventory') ||
+                                a.code === '104' ||
+                                a.code === '1200'
+                            )
                         );
                         const capitalAccount = state.accounts.find(a => 
                             a.name.includes('Capital') || 
+                            a.name.includes('Owner\'s Capital') ||
                             a.code === '301'
                         );
                         
                         if (!rawMaterialAccount || !capitalAccount) {
-                            console.error('Γ¥î Account lookup failed for purchase ledger entries:', {
-                                rawMaterialAccount: rawMaterialAccount?.name || 'NOT FOUND',
-                                capitalAccount: capitalAccount?.name || 'NOT FOUND'
-                            });
-                            errors.push(`Missing required accounts. Raw Material: ${rawMaterialAccount ? 'Found' : 'NOT FOUND'}, Capital: ${capitalAccount ? 'Found' : 'NOT FOUND'}`);
+                            const missingAccounts = [];
+                            if (!rawMaterialAccount) missingAccounts.push('Inventory - Raw Material (104 or 1200)');
+                            if (!capitalAccount) missingAccounts.push('Capital (301)');
+                            console.error(`❌ Account lookup failed for purchase ledger entries: ${missingAccounts.join(', ')}`);
+                            errors.push(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts. Ledger entries NOT created for ${batchPurchases.length} purchase(s).`);
                         } else {
+                            console.log(`✅ Found required accounts: Raw Material="${rawMaterialAccount.name}" (${rawMaterialAccount.id}), Capital="${capitalAccount.name}" (${capitalAccount.id})`);
                             const rawMaterialInvId = rawMaterialAccount.id;
                             const capitalId = capitalAccount.id;
                             
@@ -998,10 +1340,19 @@ export const DataImportExport: React.FC = () => {
                             if (allLedgerEntries.length > 0) {
                                 try {
                                     await postTransaction(allLedgerEntries);
-                                    console.log(`Γ£à Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchases) in one batch`);
+                                    console.log(`✅ Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchase(s)) in one batch`);
+                                    console.log(`   - ${allLedgerEntries.length / 2} purchase(s) with opening stock ledger entries`);
                                 } catch (error: any) {
-                                    console.error(`Γ¥î Error posting batch ledger entries:`, error);
-                                    errors.push(`Failed to post ledger entries batch: ${error.message}`);
+                                    console.error(`❌ Error posting batch ledger entries:`, error);
+                                    errors.push(`Failed to post ledger entries batch: ${error.message}. ${allLedgerEntries.length} ledger entries were prepared but NOT saved.`);
+                                }
+                            } else {
+                                const purchasesWithValue = batchPurchases.filter(p => (p.totalLandedCost || p.totalCostFCY || 0) > 0).length;
+                                if (purchasesWithValue > 0) {
+                                    console.warn(`⚠️ No ledger entries created for batch ${Math.floor(i / BATCH_SIZE) + 1}, but ${purchasesWithValue} purchase(s) have values. This should not happen.`);
+                                    errors.push(`Warning: ${purchasesWithValue} purchase(s) have values but no ledger entries were created. Please check console for details.`);
+                                } else {
+                                    console.log(`ℹ️ No ledger entries needed for batch ${Math.floor(i / BATCH_SIZE) + 1} - all purchases have zero value`);
                                 }
                             }
                         }
@@ -1021,10 +1372,29 @@ export const DataImportExport: React.FC = () => {
             
             // Handle items/partners with batch writes (even for small batches)
             // This prevents duplicates - items/partners are processed here, NOT in the individual path below
-            if ((selectedEntity === 'items' && parsedData.length <= 100) ||
-                (selectedEntity === 'partners' && parsedData.length <= 50)) {
+            if (selectedEntity === 'items' && parsedData.length <= 100) {
+                
+                // CRITICAL VALIDATION: Re-check for wrong entity type (small batches)
+                const hasTypeField = parsedData.some(row => row.type && 
+                    ['CUSTOMER', 'SUPPLIER', 'VENDOR', 'SUB SUPPLIER', 'CLEARING AGENT'].includes(row.type.toUpperCase().trim())
+                );
+                if (hasTypeField) {
+                    const partnerCount = parsedData.filter(row => row.type && 
+                        ['CUSTOMER', 'SUPPLIER', 'VENDOR', 'SUB SUPPLIER', 'CLEARING AGENT'].includes(row.type.toUpperCase().trim())
+                    ).length;
+                    alert(`❌ CRITICAL ERROR: You selected "Items" but your CSV contains Partner data!\n\nFound ${partnerCount} partner(s) with 'type' field (CUSTOMER, SUPPLIER, etc.).\n\nPlease:\n1. Select "Partners" from the entity dropdown\n2. Re-upload your CSV file\n\nImport cancelled to prevent data corruption.`);
+                    setImporting(false);
+                    return;
+                }
+                
                 const BATCH_SIZE = 500; // Firebase limit is 500 operations per batch
                 const validItems: any[] = [];
+                
+                // Build validation sets for categories and sections (for THIS factory only)
+                const validCategoryIds = new Set(state.categories.map(c => c.id));
+                const validCategoryNames = new Set(state.categories.map(c => c.name.toLowerCase().trim()));
+                const validSectionIds = new Set(state.sections.map(s => s.id));
+                const validSectionNames = new Set(state.sections.map(s => s.name.toLowerCase().trim()));
                 
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
@@ -1034,16 +1404,46 @@ export const DataImportExport: React.FC = () => {
                         continue;
                     }
                     
+                    // Validate category if provided
+                    const categoryCode = row.category?.trim();
+                    if (categoryCode) {
+                        const categoryExists = validCategoryIds.has(categoryCode) || 
+                                              validCategoryNames.has(categoryCode.toLowerCase());
+                        if (!categoryExists) {
+                            errors.push(`Row ${index + 2}: Category "${categoryCode}" does not exist in Setup. Please create this category first or use an existing category.`);
+                            continue; // Skip this item
+                        }
+                    }
+                    
+                    // Validate section if provided
+                    const sectionCode = row.section?.trim();
+                    if (sectionCode) {
+                        const sectionExists = validSectionIds.has(sectionCode) || 
+                                             validSectionNames.has(sectionCode.toLowerCase());
+                        if (!sectionExists) {
+                            errors.push(`Row ${index + 2}: Section "${sectionCode}" does not exist in Setup. Please create this section first or use an existing section.`);
+                            continue; // Skip this item
+                        }
+                    }
+                    
                     const openingStock = parseFloat(row.openingStock) || 0;
+                    const avgCost = parseFloat(row.avgCost) || 0;
+                    
+                    // Validate opening stock has avgCost
+                    if (openingStock > 0 && (avgCost === 0 || isNaN(avgCost))) {
+                        errors.push(`Row ${index + 2}: Item "${row.name}" has opening stock (${openingStock}) but avgCost is missing or zero. Ledger entries will NOT be created. Please provide avgCost to create opening stock ledger entries.`);
+                        // Still import item, but warn about missing ledger entries
+                    }
+                    
                     const item = {
                         id: row.id || `ITEM-${Date.now()}-${index}`,
                         code: row.code || row.id || `ITEM-${Date.now()}-${index}`,
                         name: row.name,
-                        category: row.category || '',
-                        section: row.section || '',
+                        category: categoryCode || '',
+                        section: sectionCode || '',
                         packingType: row.packingType || 'Kg',
                         weightPerUnit: parseFloat(row.weightPerUnit) || 0,
-                        avgCost: parseFloat(row.avgCost) || 0,
+                        avgCost: avgCost,
                         salePrice: parseFloat(row.salePrice) || 0,
                         stockQty: parseFloat(row.stockQty) || 0,
                         openingStock: openingStock,
@@ -1051,6 +1451,28 @@ export const DataImportExport: React.FC = () => {
                         factoryId: currentFactory?.id || ''
                     };
                     validItems.push(item);
+                }
+                
+                // Show validation summary before import
+                if (errors.length > 0) {
+                    const validationErrs = errors.filter(e => e.includes('does not exist') || e.includes('Ledger entries will NOT'));
+                    const otherErrs = errors.filter(e => !validationErrs.includes(e));
+                    
+                    if (validItems.length === 0) {
+                        // Show all errors in modal for user to note
+                        setValidationErrors([...validationErrs, ...otherErrs]);
+                        setValidItemCount(0);
+                        setShowValidationModal(true);
+                        setImporting(false);
+                        return;
+                    }
+                    
+                    // Show validation modal with errors for user to note
+                    setValidationErrors([...validationErrs, ...otherErrs]);
+                    setValidItemCount(validItems.length);
+                    setShowValidationModal(true);
+                    setImporting(false);
+                    return; // Wait for user to review and confirm
                 }
                 
                 // Process in batches with delays to avoid rate limiting
@@ -1080,55 +1502,76 @@ export const DataImportExport: React.FC = () => {
                         
                         // Create opening stock ledger entries directly (don't call addItem - it causes duplicates)
                         // Firebase listener already loaded items to state, we just need to create ledger entries
-                        for (const item of batchItems) {
-                            const openingStock = item.openingStock || 0;
-                            const avgCost = item.avgCost || 0;
+                        
+                        // Lookup accounts dynamically (factory-specific, always correct)
+                        const finishedGoodsAccount = state.accounts.find(a => 
+                            a.name.includes('Finished Goods') || 
+                            a.name.includes('Inventory - Finished Goods') ||
+                            a.code === '105'
+                        );
+                        const capitalAccount = state.accounts.find(a => 
+                            a.name.includes('Capital') || 
+                            a.name.includes('Owner\'s Capital') ||
+                            a.code === '301'
+                        );
+                        
+                        if (!finishedGoodsAccount || !capitalAccount) {
+                            const missingAccounts = [];
+                            if (!finishedGoodsAccount) missingAccounts.push('Inventory - Finished Goods (105)');
+                            if (!capitalAccount) missingAccounts.push('Capital (301)');
+                            console.error(`❌ Required accounts not found: ${missingAccounts.join(', ')}`);
+                            errors.push(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+                            // Continue with other items, but skip ledger entries
+                        } else {
+                            const finishedGoodsId = finishedGoodsAccount.id;
+                            const capitalId = capitalAccount.id;
                             
-                            if (openingStock > 0 && avgCost !== 0) {
-                                const prevYear = new Date().getFullYear() - 1;
-                                const date = `${prevYear}-12-31`;
-                                const stockValue = openingStock * avgCost;
+                            for (const item of batchItems) {
+                                const openingStock = item.openingStock || 0;
+                                const avgCost = item.avgCost || 0;
                                 
-                                // Get account IDs using the same method as addItem
-                                const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
-                                const capitalId = getAccountId('301'); // Capital
+                                if (openingStock > 0 && avgCost !== 0) {
+                                    const prevYear = new Date().getFullYear() - 1;
+                                    const date = `${prevYear}-12-31`;
+                                    const stockValue = openingStock * avgCost;
+                                    
+                                    const entries = [
+                                        {
+                                            date,
+                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: finishedGoodsId,
+                                            accountName: finishedGoodsAccount.name,
+                                            currency: item.defaultCurrency || 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: Math.abs(stockValue),
+                                            debit: stockValue > 0 ? stockValue : 0,
+                                            credit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                            narration: `Opening Stock - ${item.name}`,
+                                            factoryId: currentFactory?.id || ''
+                                        },
+                                        {
+                                            date,
+                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionType: TransactionType.OPENING_BALANCE,
+                                            accountId: capitalId,
+                                            accountName: capitalAccount.name,
+                                            currency: item.defaultCurrency || 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: Math.abs(stockValue),
+                                            debit: stockValue < 0 ? Math.abs(stockValue) : 0,
+                                            credit: stockValue > 0 ? stockValue : 0,
+                                            narration: `Opening Stock - ${item.name}`,
+                                            factoryId: currentFactory?.id || ''
+                                        }
+                                    ];
+                                    await postTransaction(entries);
+                                }
                                 
-                                const entries = [
-                                    {
-                                        date,
-                                        transactionId: `OB-STK-${item.id || item.code}`,
-                                        transactionType: TransactionType.OPENING_BALANCE,
-                                        accountId: finishedGoodsId,
-                                        accountName: 'Inventory - Finished Goods',
-                                        currency: item.defaultCurrency || 'USD',
-                                        exchangeRate: 1,
-                                        fcyAmount: Math.abs(stockValue),
-                                        debit: stockValue > 0 ? stockValue : 0,
-                                        credit: stockValue < 0 ? Math.abs(stockValue) : 0,
-                                        narration: `Opening Stock - ${item.name}`,
-                                        factoryId: currentFactory?.id || ''
-                                    },
-                                    {
-                                        date,
-                                        transactionId: `OB-STK-${item.id || item.code}`,
-                                        transactionType: TransactionType.OPENING_BALANCE,
-                                        accountId: capitalId,
-                                        accountName: 'Capital',
-                                        currency: item.defaultCurrency || 'USD',
-                                        exchangeRate: 1,
-                                        fcyAmount: Math.abs(stockValue),
-                                        debit: stockValue < 0 ? Math.abs(stockValue) : 0,
-                                        credit: stockValue > 0 ? stockValue : 0,
-                                        narration: `Opening Stock - ${item.name}`,
-                                        factoryId: currentFactory?.id || ''
-                                    }
-                                ];
-                                await postTransaction(entries);
-                            }
-                            
-                            // Small delay every 10 items to avoid rate limiting
-                            if (batchItems.indexOf(item) % 10 === 9) {
-                                await new Promise(resolve => setTimeout(resolve, 100));
+                                // Small delay every 10 items to avoid rate limiting
+                                if (batchItems.indexOf(item) % 10 === 9) {
+                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                }
                             }
                         }
                         
@@ -1486,7 +1929,68 @@ export const DataImportExport: React.FC = () => {
                 }
             }
 
-            console.log(`Γ£à Successfully imported ${successCount} ${selectedEntity}`);
+            // Calculate ledger entries created for partners and purchases
+            let ledgerEntriesInfo = '';
+            if (selectedEntity === 'partners' && successCount > 0) {
+                // Count partners with opening balance from the imported data
+                const partnersWithBalance = parsedData.filter((row: any) => {
+                    const balance = row.balance ? parseFloat(row.balance) : 0;
+                    return balance !== 0;
+                }).length;
+                
+                // Count ledger entry errors
+                const ledgerErrors = errors.filter(e => e.includes('not found in state') || e.includes('ledger entries NOT created') || e.includes('CRITICAL')).length;
+                const successfulLedgerEntries = (partnersWithBalance - ledgerErrors) * 2; // Each partner with balance creates 2 ledger entries
+                
+                if (partnersWithBalance > 0) {
+                    if (ledgerErrors === 0) {
+                        ledgerEntriesInfo = ` (${partnersWithBalance} partner(s) with opening balances → ${successfulLedgerEntries} ledger entries created ✅)`;
+                    } else {
+                        ledgerEntriesInfo = ` (${partnersWithBalance} partner(s) with opening balances → ${successfulLedgerEntries} ledger entries created, ${ledgerErrors} partner(s) failed ❌)`;
+                    }
+                } else {
+                    ledgerEntriesInfo = ` (No opening balances - no ledger entries needed)`;
+                }
+            } else if (selectedEntity === 'purchases' && successCount > 0) {
+                // Count purchases with value from the imported data
+                const purchasesWithValue = parsedData.filter((row: any) => {
+                    const totalCost = parseFloat(row.totalCostFCY) || (parseFloat(row.weightPurchased) || 0) * (parseFloat(row.costPerKgFCY) || 0);
+                    return totalCost > 0;
+                }).length;
+                
+                // Count purchases that should have logistics entries (Arrived/Cleared with container)
+                const purchasesWithLogistics = parsedData.filter((row: any) => {
+                    const status = (row.status?.trim() || 'Arrived').toUpperCase();
+                    return (status === 'ARRIVED' || status === 'CLEARED') && row.containerNumber;
+                }).length;
+                
+                const infoParts: string[] = [];
+                if (purchasesWithValue > 0) {
+                    infoParts.push(`${purchasesWithValue} purchase(s) with values - ledger entries should be created`);
+                }
+                if (purchasesWithLogistics > 0) {
+                    infoParts.push(`${purchasesWithLogistics} purchase(s) with containers (Arrived/Cleared) - logistics entries should be created`);
+                }
+                
+                if (infoParts.length > 0) {
+                    ledgerEntriesInfo = ` (${infoParts.join(', ')})`;
+                }
+            }
+            
+            console.log(`✅ Successfully imported ${successCount} ${selectedEntity}${ledgerEntriesInfo}`);
+
+            // Show detailed error message if ledger entries failed
+            if (selectedEntity === 'partners' && errors.some(e => e.includes('not found in state') || e.includes('ledger entries NOT created'))) {
+                const ledgerErrors = errors.filter(e => e.includes('not found in state') || e.includes('ledger entries NOT created'));
+                alert(`⚠️ IMPORT WARNING:\n\n${successCount} partner(s) imported successfully.\n\nHowever, ${ledgerErrors.length} partner(s) had issues creating ledger entries:\n\n${ledgerErrors.slice(0, 5).join('\n')}${ledgerErrors.length > 5 ? `\n... and ${ledgerErrors.length - 5} more` : ''}\n\nPlease check the console for details and verify ledger entries in Accounting > Ledger.`);
+            } else if (selectedEntity === 'purchases' && errors.some(e => e.includes('Missing required accounts') || e.includes('ledger entries NOT created') || e.includes('No ledger entries created') || e.includes('logistics entry'))) {
+                const ledgerErrors = errors.filter(e => e.includes('Missing required accounts') || e.includes('ledger entries NOT created') || e.includes('No ledger entries created') || e.includes('no ledger entries were created'));
+                const logisticsErrors = errors.filter(e => e.includes('logistics entry') || e.includes('LogisticsEntry'));
+                if (ledgerErrors.length > 0 || logisticsErrors.length > 0) {
+                    const allErrors = [...ledgerErrors, ...logisticsErrors];
+                    alert(`⚠️ IMPORT WARNING:\n\n${successCount} purchase(s) imported successfully.\n\nHowever, some issues occurred:\n\n${allErrors.slice(0, 3).join('\n')}${allErrors.length > 3 ? `\n... and ${allErrors.length - 3} more` : ''}\n\nPlease check the console for details and verify:\n- Ledger entries in Accounting > Ledger\n- Logistics entries in Logistics module`);
+                }
+            }
 
             setImportResult({
                 success: successCount,
@@ -1509,10 +2013,24 @@ export const DataImportExport: React.FC = () => {
                 }, 15000);
             }
         } catch (error) {
-            console.error('Γ¥î Import error:', error);
-            alert(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        } finally {
-            setImporting(false);
+            console.error('❌ Import error:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            const errorStack = error instanceof Error ? error.stack : '';
+            console.error('Error stack:', errorStack);
+            
+            // Check if it's a DataProvider error
+            if (errorMessage.includes('useData must be used within a DataProvider') || errorMessage.includes('DataProvider')) {
+                alert(`❌ CRITICAL ERROR: Application state became unavailable during import.\n\nThis usually happens if:\n1. The page was refreshed during import\n2. There was a network error\n3. Firebase connection was lost\n\nError: ${errorMessage}\n\nPlease:\n1. Check your internet connection\n2. Refresh the page\n3. Try importing again with a smaller batch\n\nIf the problem persists, check the browser console (F12) for details.`);
+            } else {
+                alert(`Import failed: ${errorMessage}\n\nPlease check the browser console (F12) for more details.`);
+            }
+            
+            // Ensure importing state is reset even if there's an error
+            try {
+                setImporting(false);
+            } catch (resetError) {
+                console.error('Failed to reset importing state:', resetError);
+            }
         }
     };
 
@@ -1904,6 +2422,89 @@ export const DataImportExport: React.FC = () => {
                     <li>Page will refresh automatically to show new data</li>
                 </ol>
             </div>
+
+            {/* Validation Error Modal */}
+            {showValidationModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+                        <div className="p-6 border-b border-slate-200">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <AlertCircle className="text-amber-600" size={28} />
+                                    <div>
+                                        <h3 className="text-xl font-bold text-slate-900">Validation Results</h3>
+                                        <p className="text-sm text-slate-600 mt-1">
+                                            {validItemCount > 0 
+                                                ? `${validItemCount} item(s) are valid and ready to import`
+                                                : 'No items can be imported due to validation errors'
+                                            }
+                                        </p>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setShowValidationModal(false);
+                                        setValidationErrors([]);
+                                    }}
+                                    className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-6">
+                            <div className="mb-4">
+                                <div className="flex items-center justify-between mb-2">
+                                    <h4 className="font-semibold text-slate-800">
+                                        ⚠️ {validationErrors.length} Validation Error(s) Found:
+                                    </h4>
+                                    <button
+                                        onClick={() => {
+                                            const errorText = validationErrors.join('\n');
+                                            navigator.clipboard.writeText(errorText);
+                                            alert('Errors copied to clipboard!');
+                                        }}
+                                        className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-sm font-medium hover:bg-blue-100 flex items-center gap-2"
+                                    >
+                                        <Copy size={14} />
+                                        Copy All Errors
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-500 mb-4">
+                                    Please note down these errors, fix your CSV file, and upload again.
+                                </p>
+                            </div>
+                            
+                            <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[400px] overflow-y-auto">
+                                <div className="space-y-2">
+                                    {validationErrors.map((error, idx) => (
+                                        <div key={idx} className="bg-white p-3 rounded border border-slate-200 text-sm">
+                                            <div className="flex items-start gap-2">
+                                                <AlertCircle className="text-red-500 shrink-0 mt-0.5" size={16} />
+                                                <span className="text-slate-700 font-mono">{error}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="p-6 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                            <button
+                                onClick={() => {
+                                    setShowValidationModal(false);
+                                    setValidationErrors([]);
+                                    setValidItemCount(0);
+                                }}
+                                className="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 font-semibold"
+                            >
+                                Close & Fix CSV
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

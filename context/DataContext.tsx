@@ -566,7 +566,7 @@ interface DataContextType {
     addPurchase: (purchase: Purchase) => Promise<void>;
     updatePurchase: (purchase: Purchase) => void;
     addBundlePurchase: (purchase: BundlePurchase) => Promise<void>;
-    saveLogisticsEntry: (entry: LogisticsEntry) => void;
+    saveLogisticsEntry: (entry: LogisticsEntry) => Promise<void>;
     addSalesInvoice: (invoice: SalesInvoice) => void;
     updateSalesInvoice: (invoice: SalesInvoice) => void;
     postSalesInvoice: (invoice: SalesInvoice) => Promise<void>;
@@ -1213,7 +1213,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         // Create journal entries
-        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
+        // Use Raw Material INVENTORY (ASSET) account, not consumption expense
+        const inventoryAccount = state.accounts.find(a => 
+            a.type === AccountType.ASSET && (
+                a.name.includes('Inventory - Raw Material') ||
+                a.name.includes('Inventory - Raw Materials') ||
+                a.name.includes('Raw Material Inventory') ||
+                a.code === '104' ||
+                a.code === '1200'
+            )
+        );
         const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
         
         if (!inventoryAccount || !apAccount) {
@@ -1521,9 +1530,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const prevYear = new Date().getFullYear() - 1;
             const date = `${prevYear}-12-31`;
             const stockValue = openingStock * item.avgCost;
-            // Use centralized account mapping
-            const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
-            const capitalId = getAccountId('301'); // Capital
+            
+            // Lookup accounts dynamically (factory-specific, always correct)
+            const finishedGoodsAccount = state.accounts.find(a => 
+                a.name.includes('Finished Goods') || 
+                a.name.includes('Inventory - Finished Goods') ||
+                a.code === '105'
+            );
+            const capitalAccount = state.accounts.find(a => 
+                a.name.includes('Capital') || 
+                a.name.includes('Owner\'s Capital') ||
+                a.code === '301'
+            );
+            
+            if (!finishedGoodsAccount || !capitalAccount) {
+                const missingAccounts = [];
+                if (!finishedGoodsAccount) missingAccounts.push('Inventory - Finished Goods (105)');
+                if (!capitalAccount) missingAccounts.push('Capital (301)');
+                console.error(`❌ Required accounts not found: ${missingAccounts.join(', ')}`);
+                alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+                return; // Don't create item if accounts are missing
+            }
+            
+            const finishedGoodsId = finishedGoodsAccount.id;
+            const capitalId = capitalAccount.id;
             
             // For positive stock value: Debit Inventory (asset increase), Credit Capital (equity increase)
             // For negative stock value: Credit Inventory (asset decrease), Debit Capital (equity decrease)
@@ -1533,7 +1563,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     transactionId: `OB-STK-${item.id}`,
                     transactionType: TransactionType.OPENING_BALANCE,
                     accountId: finishedGoodsId,
-                    accountName: 'Inventory - Finished Goods',
+                    accountName: finishedGoodsAccount.name,
                     currency: 'USD',
                     exchangeRate: 1,
                     fcyAmount: Math.abs(stockValue),
@@ -1547,7 +1577,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     transactionId: `OB-STK-${item.id}`,
                     transactionType: TransactionType.OPENING_BALANCE,
                     accountId: capitalId,
-                    accountName: 'Capital',
+                    accountName: capitalAccount.name,
                     currency: 'USD',
                     exchangeRate: 1,
                     fcyAmount: Math.abs(stockValue),
@@ -1638,7 +1668,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .catch((error) => console.error('❌ Error saving original opening:', error));
         
         // Create accounting entries for raw material consumption
-        const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
+        // Always use the INVENTORY (ASSET) account, not the expense account
+        const rawMaterialInvId = state.accounts.find(a => 
+            a.type === AccountType.ASSET && (
+                a.name.includes('Inventory - Raw Material') ||
+                a.name.includes('Inventory - Raw Materials') ||
+                a.name.includes('Raw Material Inventory') ||
+                a.code === '104' ||
+                a.code === '1200'
+            )
+        )?.id;
         const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
         
         if (rawMaterialInvId && wipId) {
@@ -2068,7 +2107,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dispatch({ type: 'ADD_PRODUCTION', payload: productionEntries });
         await postTransaction(journalEntries);
     };
-    const saveLogisticsEntry = (entry: LogisticsEntry) => {
+    const saveLogisticsEntry = async (entry: LogisticsEntry): Promise<void> => {
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, logistics entry not saved to database');
             return;
@@ -2081,9 +2120,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Save to Firebase
         const { purchaseId, ...entryData } = entryWithFactory;
-        addDoc(collection(db, 'logisticsEntries'), { ...entryData, purchaseId, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Logistics entry saved to Firebase'))
-            .catch((error) => console.error('❌ Error saving logistics entry:', error));
+        try {
+            await addDoc(collection(db, 'logisticsEntries'), { ...entryData, purchaseId, createdAt: serverTimestamp() });
+            console.log(`✅ Logistics entry saved to Firebase (Purchase: ${purchaseId}, Container: ${entry.containerNumber})`);
+        } catch (error: any) {
+            console.error(`❌ Error saving logistics entry (Purchase: ${purchaseId}, Container: ${entry.containerNumber}):`, error);
+            throw error; // Re-throw so caller can handle it
+        }
     };
     const addSalesInvoice = (invoice: SalesInvoice) => {
         if (!isFirestoreLoaded) {
@@ -2132,16 +2175,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
-        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
-        const discountAccount = state.accounts.find(a => a.name.includes('Discount'));
-        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold'));
-        const finishedGoodsAccount = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'));
+        // Lookup accounts dynamically (factory-specific, always correct)
+        const revenueAccount = state.accounts.find(a => 
+            a.name.includes('Sales Revenue') ||
+            a.code === '401'
+        );
+        const discountAccount = state.accounts.find(a => 
+            a.name.includes('Discount') ||
+            a.code === '501'
+        );
+        const cogsAccount = state.accounts.find(a => 
+            a.name.includes('Cost of Goods Sold') ||
+            a.code === '5000' ||
+            a.code === '503'
+        );
+        const finishedGoodsAccount = state.accounts.find(a => 
+            a.name.includes('Inventory - Finished Goods') ||
+            a.name.includes('Finished Goods') ||
+            a.code === '105' ||
+            a.code === '1202'
+        );
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
         
-        const revenueId = revenueAccount?.id || '401';
-        const discountId = discountAccount?.id || '501';
-        const cogsId = cogsAccount?.id || '5000';
-        const finishedGoodsId = finishedGoodsAccount?.id || '1202';
+        if (!revenueAccount || !cogsAccount || !finishedGoodsAccount) {
+            const missingAccounts = [];
+            if (!revenueAccount) missingAccounts.push('Sales Revenue (401)');
+            if (!cogsAccount) missingAccounts.push('Cost of Goods Sold (5000 or 503)');
+            if (!finishedGoodsAccount) missingAccounts.push('Inventory - Finished Goods (105 or 1202)');
+            alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+            return;
+        }
+        
+        const revenueId = revenueAccount.id;
+        const discountId = discountAccount?.id; // Optional account
+        const cogsId = cogsAccount.id;
+        const finishedGoodsId = finishedGoodsAccount.id;
         
         // Debit the CUSTOMER's account directly (not general AR) - Sales are in USD, but store with customer's currency for display
         const customerCurrency = (invoice as any).customerCurrency || invoice.currency || 'USD';
@@ -2149,9 +2217,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency using invoice's saved rate
         const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}`, factoryId: invoice.factoryId } ];
         const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => sum + item.total, 0);
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
-        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
-        if (invoice.discount > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: revenueAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: revenueAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
+        if (invoice.discount > 0 && discountId && discountAccount) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: discountAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory
         const totalCOGS = invoice.items.reduce((sum, item) => {
@@ -2164,9 +2232,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (totalCOGS > 0) {
             // Debit COGS (Expense increases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'Cost of Goods Sold', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: cogsAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
             // Credit Finished Goods Inventory (Asset decreases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: finishedGoodsAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
         }
         
         invoice.additionalCosts.forEach(cost => { 
@@ -2191,14 +2259,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 .catch((error) => console.error('❌ Error saving direct sale:', error));
         }
         const transactionId = `DS-${invoice.invoiceNo}`;
-        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
-        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold - Direct Sales'));
-        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
+        // Lookup accounts dynamically (factory-specific, always correct)
+        const revenueAccount = state.accounts.find(a => 
+            a.name.includes('Sales Revenue') ||
+            a.code === '401'
+        );
+        const cogsAccount = state.accounts.find(a => 
+            a.name.includes('Cost of Goods Sold - Direct Sales') ||
+            a.name.includes('Cost of Goods Sold') ||
+            a.code === '503'
+        );
+        const inventoryAccount = state.accounts.find(a => 
+            a.type === AccountType.ASSET && (
+                a.name.includes('Inventory - Raw Material') ||
+                a.name.includes('Inventory - Raw Materials') ||
+                a.name.includes('Raw Material Inventory') ||
+                a.code === '104' ||
+                a.code === '1200'
+            )
+        );
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
         
-        const revenueId = revenueAccount?.id || '401';
-        const cogsId = cogsAccount?.id || '503';
-        const rawMatInventoryId = inventoryAccount?.id || '104';
+        if (!revenueAccount || !cogsAccount || !inventoryAccount) {
+            const missingAccounts = [];
+            if (!revenueAccount) missingAccounts.push('Sales Revenue (401)');
+            if (!cogsAccount) missingAccounts.push('Cost of Goods Sold - Direct Sales (503)');
+            if (!inventoryAccount) missingAccounts.push('Inventory - Raw Material (104)');
+            alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+            return;
+        }
+        
+        const revenueId = revenueAccount.id;
+        const cogsId = cogsAccount.id;
+        const rawMatInventoryId = inventoryAccount.id;
         
         // Debit the CUSTOMER's account directly (not general AR) - Sales are in USD, store with customer's currency for display
         const customerCurrency = (invoice as any).customerCurrency || 'USD';
@@ -2206,12 +2299,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency
         const entries: Omit<LedgerEntry, 'id'>[] = [
             { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Direct Sale: ${invoice.invoiceNo}`, factoryId: invoice.factoryId },
-            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }
+            { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: revenueAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: invoice.netTotal, debit: 0, credit: invoice.netTotal, narration: `Direct Sale Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }
         ];
         const totalSoldKg = invoice.items.reduce((sum, i) => sum + i.totalKg, 0);
         const totalCostUSD = totalSoldKg * batchLandedCostPerKg;
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'COGS - Direct Sales', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)`, factoryId: invoice.factoryId });
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: cogsAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: totalCostUSD, credit: 0, narration: `Cost of Direct Sale: ${invoice.invoiceNo} (${totalSoldKg}kg)`, factoryId: invoice.factoryId });
+        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: rawMatInventoryId, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: totalCostUSD, debit: 0, credit: totalCostUSD, narration: `Inventory Consumption: Direct Sale ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
         await postTransaction(entries);
     };
     const addOngoingOrder = (order: OngoingOrder) => {
@@ -2464,15 +2557,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const fcyAmt = Math.abs(balanceDifference) * rate;
                 
                 // Find Capital or Opening Equity account
-                const capitalId = getAccountId('301') || state.accounts.find(a => a.name.includes('Capital') || a.name.includes('Opening Equity'))?.id;
-                
-                if (!capitalId) {
-                    console.warn('⚠️ Could not find Capital/Equity account for balance adjustment');
+                // Lookup Capital account dynamically (factory-specific, always correct)
+                const capitalAccount = state.accounts.find(a => 
+                    a.name.includes('Capital') || 
+                    a.name.includes('Owner\'s Capital') ||
+                    a.name.includes('Opening Equity') ||
+                    a.code === '301'
+                );
+                if (!capitalAccount) {
+                    console.error('❌ Capital account not found');
+                    alert('Capital account not found. Please ensure Capital account exists in Setup > Chart of Accounts.');
                     return;
                 }
-                
-                const capitalAccount = state.accounts.find(a => a.id === capitalId);
-                const capitalAccountName = capitalAccount?.name || 'Capital';
+                const capitalId = capitalAccount.id;
+                const capitalAccountName = capitalAccount.name;
                 
                 // Determine if this is an asset or liability/equity account
                 const isAssetOrExpense = [AccountType.ASSET, AccountType.EXPENSE].includes(account.type);
