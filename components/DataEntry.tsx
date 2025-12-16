@@ -3485,7 +3485,7 @@ export const DataEntry: React.FC = () => {
                                                          <label className="block text-xs font-semibold text-slate-500 mb-1">Rate/Unit (USD)</label>
                                                          <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="0.00" value={siItemRate} onChange={e => setSiItemRate(e.target.value)} />
                                                      </div>
-                                                     <div className="md:col-span-2 flex items-end"><button onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
+                                                     <div className="md:col-span-2 flex items-end"><button type="button" onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
                                                  </div>
                                              </div>
                                              <table className="w-full text-sm text-left border border-slate-200 rounded-lg overflow-hidden">
@@ -3494,6 +3494,18 @@ export const DataEntry: React.FC = () => {
                                                      {siCart.map(item => ( <tr key={item.id} className="hover:bg-slate-50"><td className="px-4 py-2">{item.itemName}</td><td className="px-4 py-2 text-right">{item.qty}</td><td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td><td className="px-4 py-2 text-right">{item.rate.toFixed(2)}</td><td className="px-4 py-2 text-right font-bold">{item.total.toFixed(2)}</td><td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr> ))}
                                                      {siCart.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 italic">No items added</td></tr>}
                                                  </tbody>
+                                                 {siCart.length > 0 && (
+                                                     <tfoot className="bg-slate-100 font-bold text-slate-800 border-t-2 border-slate-300">
+                                                         <tr>
+                                                             <td className="px-4 py-3">Total</td>
+                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)}</td>
+                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.totalKg) || 0), 0).toFixed(2)}</td>
+                                                             <td className="px-4 py-3 text-right">-</td>
+                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.total) || 0), 0).toFixed(2)}</td>
+                                                             <td className="px-4 py-3 text-center">-</td>
+                                                         </tr>
+                                                     </tfoot>
+                                                 )}
                                              </table>
                                         </div>
                                         
