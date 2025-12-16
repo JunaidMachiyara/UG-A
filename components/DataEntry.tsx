@@ -1440,8 +1440,12 @@ export const DataEntry: React.FC = () => {
     const saveInvoice = () => {
         const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
         
-        // All sales are in USD, no conversion needed
-        const costsTotal = siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / 1)), 0); 
+        // Calculate additional costs: convert to invoice currency (USD)
+        const costsTotal = siCosts.reduce((s, c) => {
+            // Convert cost amount from its currency to invoice currency (USD)
+            const amountInInvoiceCurrency = (c.amount || 0) / (c.exchangeRate || 1);
+            return s + amountInInvoiceCurrency;
+        }, 0); 
         
         const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
 
@@ -4102,7 +4106,7 @@ export const DataEntry: React.FC = () => {
                                                 <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name}</td>
                                                 <td className="px-3 py-2 text-center">{item.qty || 0}</td>
                                                 <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
-                                                <td className="px-3 py-2 text-right font-mono">{(item.ratePerUnit || 0).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{(item.rate || 0).toFixed(2)}</td>
                                                 <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
                                             </tr>
                                         ))}
@@ -4130,14 +4134,28 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     )}
                                     {siCosts.length > 0 && (
-                                        <div className="flex justify-between text-sm text-blue-600">
-                                            <span>Additional Costs</span>
-                                            <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0).toFixed(2)}</span>
+                                        <div className="space-y-1">
+                                            {siCosts.map((cost, idx) => {
+                                                const amountInInvoiceCurrency = (cost.amount || 0) / (cost.exchangeRate || 1);
+                                                const costLabel = cost.costType + 
+                                                    (cost.providerId ? ` (${state.partners.find(p => p.id === cost.providerId)?.name})` : '') +
+                                                    (!cost.providerId && (cost as any).customDescription ? ` (${(cost as any).customDescription})` : '');
+                                                return (
+                                                    <div key={idx} className="flex justify-between text-sm text-blue-600">
+                                                        <span>{costLabel}</span>
+                                                        <span className="font-mono">+{amountInInvoiceCurrency.toFixed(2)}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                            <div className="flex justify-between text-sm font-bold text-blue-700 pt-1 border-t border-blue-200">
+                                                <span>Total Additional Costs</span>
+                                                <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0).toFixed(2)}</span>
+                                            </div>
                                         </div>
                                     )}
                                     <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
                                         <span>Net Total</span>
-                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0)).toFixed(2)}</span>
+                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0)).toFixed(2)}</span>
                                     </div>
                                 </div>
                             </div>

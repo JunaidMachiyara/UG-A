@@ -99,9 +99,13 @@ export const Accounting: React.FC = () => {
         .map(a => ({ id: a.id, name: `${a.code} - ${a.name}` })), 
     [state.accounts]);
 
-    const allAccounts = useMemo(() => 
-        state.accounts.map(a => ({ id: a.id, name: `${a.code} - ${a.name}` })), 
-    [state.accounts]);
+    const allAccounts = useMemo(() => {
+        // Include Chart of Accounts
+        const accounts = state.accounts.map(a => ({ id: a.id, name: `${a.code} - ${a.name}` }));
+        // Include Partners (they are accounts in the ledger system)
+        const partners = state.partners.map(p => ({ id: p.id, name: `${p.name} (${p.type})` }));
+        return [...accounts, ...partners];
+    }, [state.accounts, state.partners]);
 
     const payees = useMemo(() => {
         // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
