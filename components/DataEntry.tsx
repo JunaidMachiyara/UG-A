@@ -2036,6 +2036,7 @@ export const DataEntry: React.FC = () => {
         ];
     }
     const currentSubModuleDef = subModules.find(s => s.id === activeSubModule);
+    // Suppliers that have purchases (for filtering stock availability) - ONLY these should appear in Original Opening
     const suppliersWithStock = useMemo(() => {
         const ids = Array.from(new Set(state.purchases.map(p => p.supplierId)));
         return state.partners.filter(p => ids.includes(p.id));
