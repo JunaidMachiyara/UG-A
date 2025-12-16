@@ -234,3 +234,4 @@ const capitalId = capitalAccount.id; // Use actual account ID
 - Show detailed error list in modal (not just alert)
 - Allow user to note/copy errors before proceeding
 - Don't auto-proceed if validation errors exist
+

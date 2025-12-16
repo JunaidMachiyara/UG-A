@@ -237,3 +237,4 @@ const savedPartner = state.partners.find(p =>
 **The system is FULLY CAPABLE of handling bulk CSV imports with opening balances. All ledger entries are properly created, batched, and posted to Firebase with factory isolation maintained.**
 
 **You can proceed with confidence for your fresh start!** 🚀
+

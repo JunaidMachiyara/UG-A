@@ -210,3 +210,4 @@ const capitalId = capitalAccount.id; // Current factory's account ID
 - No more mismatches
 
 **This is the PERMANENT fix that will prevent this issue from happening again.**
+

@@ -173,3 +173,4 @@ if (openingStock > 0) {
 3. ✅ Opening stock ledger entries will be **guaranteed** if avgCost is provided
 4. ✅ Clear warnings if openingStock exists but avgCost is missing
 5. ✅ All validation errors will be **visible and actionable**
+

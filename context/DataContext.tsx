@@ -2238,10 +2238,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         
         invoice.additionalCosts.forEach(cost => { 
-            const amountUSD = cost.amount / cost.exchangeRate; 
-            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
-            // Credit the PROVIDER's account directly
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); 
+            const amountUSD = cost.amount / cost.exchangeRate;
+            
+            // For Customs/Other (no providerId), post to general Accounts Payable
+            // For Freight/Clearing/Commission (with providerId), post to provider's account
+            if (cost.providerId) {
+                const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+                // Credit the PROVIDER's account directly
+                entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+            } else {
+                // Customs/Other: Post to general Accounts Payable account
+                const apAccount = state.accounts.find(a => 
+                    a.name.includes('Accounts Payable') ||
+                    a.name.includes('Accounts Payable - Other') ||
+                    a.code === '2001' ||
+                    a.code === '201'
+                );
+                
+                if (apAccount) {
+                    const customDescription = (cost as any).customDescription || cost.costType;
+                    entries.push({ 
+                        date: invoice.date, 
+                        transactionId, 
+                        transactionType: TransactionType.SALES_INVOICE, 
+                        accountId: apAccount.id, 
+                        accountName: apAccount.name, 
+                        currency: cost.currency, 
+                        exchangeRate: cost.exchangeRate, 
+                        fcyAmount: cost.amount, 
+                        debit: 0, 
+                        credit: amountUSD, 
+                        narration: `${cost.costType} Payable: ${customDescription} (${invoice.invoiceNo})`, 
+                        factoryId: invoice.factoryId 
+                    });
+                } else {
+                    console.error(`❌ Accounts Payable account not found for ${cost.costType} cost in invoice ${invoice.invoiceNo}`);
+                }
+            }
         });
         await postTransaction(entries);
     };

@@ -247,6 +247,7 @@ export const DataEntry: React.FC = () => {
     const [lastInvoiceForCustomer, setLastInvoiceForCustomer] = useState<SalesInvoice | null>(null);
     const [siCostType, setSiCostType] = useState<any>('Freight');
     const [siCostProvider, setSiCostProvider] = useState('');
+    const [siCostCustomText, setSiCostCustomText] = useState(''); // For Customs/Other text input
     const [siCostAmount, setSiCostAmount] = useState('');
     const [siCostCurrency, setSiCostCurrency] = useState<Currency>('USD');
     const [siCostRate, setSiCostRate] = useState(1);
@@ -1375,18 +1376,32 @@ export const DataEntry: React.FC = () => {
         if (!siCostAmount) return;
         const amount = parseFloat(siCostAmount);
         
-        const newCost: InvoiceAdditionalCost = {
+        const newCost: InvoiceAdditionalCost & { customDescription?: string } = {
             id: Math.random().toString(36).substr(2, 9),
             costType: siCostType,
-            providerId: siCostProvider,
+            providerId: (siCostType === 'Customs' || siCostType === 'Other') ? undefined : siCostProvider, // Only set providerId for Freight/Clearing/Commission
             amount: amount,
             currency: siCostCurrency,
-            exchangeRate: siCostRate
+            exchangeRate: siCostRate,
+            customDescription: (siCostType === 'Customs' || siCostType === 'Other') ? siCostCustomText : undefined // Store custom text for Customs/Other
         };
         setSiCosts([...siCosts, newCost]);
         setSiCostAmount('');
         setSiCostProvider('');
+        setSiCostCustomText(''); // Clear custom text
     };
+    
+    // Filter providers based on cost type (for Sales Invoice Additional Costs)
+    const filteredSiProviders = useMemo(() => {
+        if (siCostType === 'Freight') {
+            return state.partners.filter(p => p.type === PartnerType.FREIGHT_FORWARDER || p.type === 'FREIGHT_FORWARDER');
+        } else if (siCostType === 'Clearing') {
+            return state.partners.filter(p => p.type === PartnerType.CLEARING_AGENT || p.type === 'CLEARING_AGENT');
+        } else if (siCostType === 'Commission') {
+            return state.partners.filter(p => p.type === PartnerType.COMMISSION_AGENT || p.type === 'COMMISSION_AGENT');
+        }
+        return []; // Customs and Other don't need provider dropdown
+    }, [siCostType, state.partners]);
 
     // Load Last Invoice as Proforma
     const loadLastInvoiceAsProforma = () => {
@@ -2037,9 +2052,14 @@ export const DataEntry: React.FC = () => {
     }
     const currentSubModuleDef = subModules.find(s => s.id === activeSubModule);
     // Suppliers that have purchases (for filtering stock availability) - ONLY these should appear in Original Opening
+    // IMPORTANT: Purchases now store supplierId as the CSV ID/CODE (e.g. SUP-5001),
+    // while partners use Firestore document ID + code field. We must match on BOTH.
     const suppliersWithStock = useMemo(() => {
-        const ids = Array.from(new Set(state.purchases.map(p => p.supplierId)));
-        return state.partners.filter(p => ids.includes(p.id));
+        const supplierIdsOrCodes = new Set(state.purchases.map(p => p.supplierId).filter(Boolean));
+        return state.partners.filter(p => 
+            supplierIdsOrCodes.has(p.id) || 
+            supplierIdsOrCodes.has((p as any).code)
+        );
     }, [state.purchases, state.partners]);
 
     // SI Totals
@@ -3368,9 +3388,13 @@ export const DataEntry: React.FC = () => {
                                             </div>
                                             <div>
                                                 <label className="block text-sm font-medium text-slate-600 mb-1">Packing Color</label>
-                                                <select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siColor} onChange={e => setSiColor(e.target.value)}>
-                                                    <option value="">None</option><option value="Blue">Blue</option><option value="Red">Red</option><option value="Green">Green</option><option value="White">White</option><option value="Yellow">Yellow</option>
-                                                </select>
+                                                <textarea 
+                                                    className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 resize-y min-h-[80px]" 
+                                                    value={siColor} 
+                                                    onChange={e => setSiColor(e.target.value)}
+                                                    placeholder="Enter packing color details..."
+                                                    rows={3}
+                                                />
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label>
@@ -3455,22 +3479,71 @@ export const DataEntry: React.FC = () => {
                                             <h4 className="font-bold text-slate-700 mb-4">Additional Costs (Pass-through)</h4>
                                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                                 <div className="flex flex-wrap md:flex-nowrap gap-3">
-                                                    <div className="w-full md:w-32"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostType} onChange={e => setSiCostType(e.target.value)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Customs">Customs</option><option value="Other">Other</option></select></div>
+                                                    <div className="w-full md:w-32">
+                                                        <select 
+                                                            className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" 
+                                                            value={siCostType} 
+                                                            onChange={e => {
+                                                                setSiCostType(e.target.value);
+                                                                setSiCostProvider(''); // Reset provider when type changes
+                                                                setSiCostCustomText(''); // Reset custom text
+                                                            }}
+                                                        >
+                                                            <option value="Freight">Freight</option>
+                                                            <option value="Clearing">Clearing</option>
+                                                            <option value="Commission">Commission</option>
+                                                            <option value="Customs">Customs</option>
+                                                            <option value="Other">Other</option>
+                                                        </select>
+                                                    </div>
                                                     <div className="w-full md:w-1/3">
-                                                        <EntitySelector 
-                                                            entities={state.partners.filter(p => [PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT, PartnerType.VENDOR].includes(p.type))} 
-                                                            selectedId={siCostProvider} 
-                                                            onSelect={setSiCostProvider} 
-                                                            placeholder="Provider (Optional)" 
-                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
-                                                        />
+                                                        {(siCostType === 'Customs' || siCostType === 'Other') ? (
+                                                            <input
+                                                                type="text"
+                                                                className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
+                                                                placeholder={`${siCostType} Description...`}
+                                                                value={siCostCustomText}
+                                                                onChange={e => setSiCostCustomText(e.target.value)}
+                                                            />
+                                                        ) : (
+                                                            <EntitySelector 
+                                                                entities={filteredSiProviders} 
+                                                                selectedId={siCostProvider} 
+                                                                onSelect={setSiCostProvider} 
+                                                                placeholder={`Select ${siCostType === 'Freight' ? 'Freight Forwarder' : siCostType === 'Clearing' ? 'Clearing Agent' : 'Commission Agent'}...`} 
+                                                                onQuickAdd={() => {
+                                                                    const type = siCostType === 'Freight' ? PartnerType.FREIGHT_FORWARDER :
+                                                                                 siCostType === 'Clearing' ? PartnerType.CLEARING_AGENT :
+                                                                                 PartnerType.COMMISSION_AGENT;
+                                                                    openQuickAdd(setupConfigs.partnerConfig, { type });
+                                                                }}
+                                                            />
+                                                        )}
                                                     </div>
                                                     <div className="w-1/2 md:w-24"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostCurrency} onChange={e => setSiCostCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                     <div className="w-1/2 md:w-32"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Amount" value={siCostAmount} onChange={e => setSiCostAmount(e.target.value)} /></div>
-                                                    <button onClick={handleAddSiCost} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700">Add</button>
+                                                    <button 
+                                                        onClick={handleAddSiCost} 
+                                                        disabled={!siCostAmount || ((siCostType === 'Freight' || siCostType === 'Clearing' || siCostType === 'Commission') && !siCostProvider)}
+                                                        className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                                                    >
+                                                        Add
+                                                    </button>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    {siCosts.map(c => ( <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200"><span>{c.costType} {c.providerId && `(${state.partners.find(p=>p.id===c.providerId)?.name})`}</span><div className="flex gap-4 font-mono"><span>{c.amount} {c.currency}</span><button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}
+                                                    {siCosts.map(c => ( 
+                                                        <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200">
+                                                            <span>
+                                                                {c.costType} 
+                                                                {c.providerId && ` (${state.partners.find(p=>p.id===c.providerId)?.name})`}
+                                                                {!c.providerId && (c as any).customDescription && ` (${(c as any).customDescription})`}
+                                                            </span>
+                                                            <div className="flex gap-4 font-mono">
+                                                                <span>{c.amount} {c.currency}</span>
+                                                                <button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
                                         </div>
