@@ -1438,60 +1438,79 @@ export const DataEntry: React.FC = () => {
     };
 
     const saveInvoice = () => {
-        const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
-        
-        // Calculate additional costs: convert to invoice currency (USD)
-        const costsTotal = siCosts.reduce((s, c) => {
-            // Convert cost amount from its currency to invoice currency (USD)
-            const amountInInvoiceCurrency = (c.amount || 0) / (c.exchangeRate || 1);
-            return s + amountInInvoiceCurrency;
-        }, 0); 
-        
-        const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
+        try {
+            // Validate required fields
+            if (!siCustomer) {
+                alert("Please select a customer.");
+                return;
+            }
+            if (siCart.length === 0) {
+                alert("Please add at least one item to the invoice.");
+                return;
+            }
+            if (!siInvoiceNo || !siInvoiceNo.trim()) {
+                alert("Please enter an invoice number.");
+                return;
+            }
+            
+            const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
+            
+            // Calculate additional costs: convert to invoice currency (USD)
+            const costsTotal = siCosts.reduce((s, c) => {
+                // Convert cost amount from its currency to invoice currency (USD)
+                const amountInInvoiceCurrency = (c.amount || 0) / (c.exchangeRate || 1);
+                return s + amountInInvoiceCurrency;
+            }, 0); 
+            
+            const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
 
-        const newInvoice: SalesInvoice = {
-            id: siId || Math.random().toString(36).substr(2, 9),
-            invoiceNo: siInvoiceNo,
-            date: siDate,
-            status: 'Unposted',
-            customerId: siCustomer,
-            logoId: siLogo,
-            packingColor: siColor,
-            containerNumber: siContainer,
-            divisionId: siDivision,
-            subDivisionId: siSubDivision,
-            currency: 'USD', // All sales in USD for accounting
-            exchangeRate: 1, // USD base
-            customerCurrency: siCurrency, // Store customer's currency for ledger display
-            customerExchangeRate: siExchangeRate, // Store customer's exchange rate for ledger display
-            discount: parseFloat(siDiscount || '0'),
-            surcharge: parseFloat(siSurcharge || '0'),
-            items: siCart,
-            additionalCosts: siCosts,
-            grossTotal,
-              netTotal,
-              factoryId: state.currentFactory?.id || ''
-        };
+            const newInvoice: SalesInvoice = {
+                id: siId || Math.random().toString(36).substr(2, 9),
+                invoiceNo: siInvoiceNo.trim(),
+                date: siDate,
+                status: 'Unposted',
+                customerId: siCustomer,
+                logoId: siLogo,
+                packingColor: siColor,
+                containerNumber: siContainer,
+                divisionId: siDivision,
+                subDivisionId: siSubDivision,
+                currency: 'USD', // All sales in USD for accounting
+                exchangeRate: 1, // USD base
+                customerCurrency: siCurrency, // Store customer's currency for ledger display
+                customerExchangeRate: siExchangeRate, // Store customer's exchange rate for ledger display
+                discount: parseFloat(siDiscount || '0'),
+                surcharge: parseFloat(siSurcharge || '0'),
+                items: siCart,
+                additionalCosts: siCosts,
+                grossTotal,
+                netTotal,
+                factoryId: state.currentFactory?.id || ''
+            };
 
-        if (siId) {
-            updateSalesInvoice(newInvoice);
-        } else {
-            addSalesInvoice(newInvoice);
-        }
-        
-        // Reset
-        setShowSiSummary(false);
-        setSiId('');
-        setSiCustomer('');
-        setSiContainer('');
-        setSiCart([]);
-        setSiCosts([]);
-        alert("Invoice Saved Successfully!");
-        
-        // Increment ID if create mode
-        if (!siId) {
-            const num = parseInt(siInvoiceNo.replace('SINV-', ''));
-            if (!isNaN(num)) setSiInvoiceNo(`SINV-${num + 1}`);
+            if (siId) {
+                updateSalesInvoice(newInvoice);
+            } else {
+                addSalesInvoice(newInvoice);
+            }
+            
+            // Reset
+            setShowSiSummary(false);
+            setSiId('');
+            setSiCustomer('');
+            setSiContainer('');
+            setSiCart([]);
+            setSiCosts([]);
+            alert("Invoice Saved Successfully!");
+            
+            // Increment ID if create mode
+            if (!siId) {
+                const num = parseInt(siInvoiceNo.replace('SINV-', ''));
+                if (!isNaN(num)) setSiInvoiceNo(`SINV-${num + 1}`);
+            }
+        } catch (error: any) {
+            console.error('Error saving invoice:', error);
+            alert(`Error saving invoice: ${error.message || 'Unknown error'}`);
         }
     };
 

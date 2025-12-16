@@ -2129,23 +2129,59 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
     const addSalesInvoice = (invoice: SalesInvoice) => {
-        if (!isFirestoreLoaded) {
-            console.warn('⚠️ Firebase not loaded, sales invoice not saved to database');
-            return;
+        try {
+            const invoiceWithFactory = {
+                ...invoice,
+                factoryId: currentFactory?.id || ''
+            };
+            
+            // Update local state immediately (optimistic update)
+            dispatch({ type: 'ADD_SALES_INVOICE', payload: invoiceWithFactory });
+            
+            // Save to Firebase if loaded
+            if (isFirestoreLoaded) {
+                const { id, ...invoiceData } = invoiceWithFactory;
+                addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+                    .then(() => console.log('✅ Sales invoice saved to Firebase'))
+                    .catch((error) => {
+                        console.error('❌ Error saving sales invoice to Firebase:', error);
+                        // Keep the optimistic update - user can see the invoice even if Firebase save fails
+                    });
+            } else {
+                console.warn('⚠️ Firebase not loaded, sales invoice saved to local state only');
+            }
+        } catch (error) {
+            console.error('❌ Error in addSalesInvoice:', error);
+            throw error; // Re-throw so caller can handle it
         }
-        
+    };
+    const updateSalesInvoice = (invoice: SalesInvoice) => {
         const invoiceWithFactory = {
             ...invoice,
             factoryId: currentFactory?.id || ''
         };
         
-        // Save to Firebase
-        const { id, ...invoiceData } = invoiceWithFactory;
-        addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Sales invoice saved to Firebase'))
-            .catch((error) => console.error('❌ Error saving sales invoice:', error));
+        // Update local state immediately
+        dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoiceWithFactory });
+        
+        // Save to Firebase if loaded
+        if (isFirestoreLoaded) {
+            const invoiceRef = doc(db, 'salesInvoices', invoice.id);
+            const { id, ...invoiceData } = invoiceWithFactory;
+            updateDoc(invoiceRef, { ...invoiceData, updatedAt: serverTimestamp() })
+                .then(() => console.log('✅ Sales invoice updated in Firebase'))
+                .catch((error) => {
+                    console.error('❌ Error updating sales invoice:', error);
+                    // Revert local state update if Firebase update fails
+                    const originalInvoice = state.salesInvoices.find(inv => inv.id === invoice.id);
+                    if (originalInvoice) {
+                        dispatch({ type: 'UPDATE_SALES_INVOICE', payload: originalInvoice });
+                    }
+                });
+        } else {
+            console.warn('⚠️ Firebase not loaded, sales invoice updated in local state only');
+        }
     };
-    const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
     const updatePurchase = (purchase: Purchase) => dispatch({ type: 'UPDATE_PURCHASE', payload: purchase });
     const postSalesInvoice = async (invoice: SalesInvoice) => {
         // Prevent double posting - check if entries already exist
