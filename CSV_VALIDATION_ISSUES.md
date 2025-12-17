@@ -174,3 +174,9 @@ if (openingStock > 0) {
 4. ✅ Clear warnings if openingStock exists but avgCost is missing
 5. ✅ All validation errors will be **visible and actionable**
 
+
+
+
+
+
+

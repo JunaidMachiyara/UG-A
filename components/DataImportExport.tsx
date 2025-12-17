@@ -1096,9 +1096,36 @@ export const DataImportExport: React.FC = () => {
                         continue;
                     }
                     
-                    // Optional fields
-                    const divisionId = row.divisionId?.trim() || undefined;
-                    const subDivisionId = row.subDivisionId?.trim() || undefined;
+                    // Optional fields - lookup by code
+                    let divisionId = undefined;
+                    if (row.divisionId?.trim()) {
+                        const divisionCode = row.divisionId.trim();
+                        const division = state.divisions.find(d => 
+                            d.factoryId === currentFactory?.id && 
+                            (d.code || d.id) === divisionCode
+                        );
+                        if (division) {
+                            divisionId = division.code || division.id; // Store code, not Firebase ID
+                        } else {
+                            errors.push(`Row ${index + 2}: Division Code "${divisionCode}" not found. Please create the division first or use correct code.`);
+                            continue;
+                        }
+                    }
+                    
+                    let subDivisionId = undefined;
+                    if (row.subDivisionId?.trim()) {
+                        const subDivisionCode = row.subDivisionId.trim();
+                        const subDivision = state.subDivisions.find(sd => 
+                            sd.factoryId === currentFactory?.id && 
+                            (sd.code || sd.id) === subDivisionCode
+                        );
+                        if (subDivision) {
+                            subDivisionId = subDivision.code || subDivision.id; // Store code, not Firebase ID
+                        } else {
+                            errors.push(`Row ${index + 2}: SubDivision Code "${subDivisionCode}" not found. Please create the subDivision first or use correct code.`);
+                            continue;
+                        }
+                    }
                     
                     // receivedWeight (offloading weight) - only for Arrived/Cleared containers
                     // - If status is "Arrived" or "Cleared" and receivedWeight is blank, use weightPurchased (assume no shortage)
@@ -1717,33 +1744,54 @@ export const DataImportExport: React.FC = () => {
                                 break;
                             }
                             case 'divisions': {
-                                // Auto-generate ID if not provided
-                                let divisionId = row.id;
-                                if (!divisionId || divisionId.trim() === '') {
+                                // CSV id field becomes code field
+                                const divisionCode = row.id || row.code || '';
+                                
+                                // Check for duplicate code (per factory)
+                                if (divisionCode && divisionCode.trim() !== '') {
+                                    const trimmedCode = divisionCode.trim();
+                                    const existingDivision = state.divisions.find(d => 
+                                        d.factoryId === state.currentFactory?.id && 
+                                        (d.code || d.id) === trimmedCode
+                                    );
+                                    if (existingDivision) {
+                                        errors.push(`Row ${index + 2}: Division Code "${trimmedCode}" already exists. Skipping.`);
+                                        continue;
+                                    }
+                                }
+                                
+                                // Auto-generate code if not provided
+                                let finalCode = divisionCode.trim();
+                                if (!finalCode) {
                                     const prefix = 'DIV';
-                                    const existingIds = state.divisions
+                                    const existingCodes = state.divisions
+                                        .filter(d => d.factoryId === state.currentFactory?.id)
                                         .map((d: any) => {
-                                            const match = d.id?.match(/^DIV-(\d+)$/);
+                                            const code = d.code || d.id;
+                                            const match = code?.match(/^DIV-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0)
                                         .sort((a, b) => b - a);
-                                    const processedIds = parsedData.slice(0, index)
-                                        .filter((r: any) => r.id && r.id.match(/^DIV-(\d+)$/))
+                                    const processedCodes = parsedData.slice(0, index)
+                                        .filter((r: any) => (r.id || r.code) && (r.id || r.code).match(/^DIV-(\d+)$/))
                                         .map((r: any) => {
-                                            const match = r.id.match(/^DIV-(\d+)$/);
+                                            const code = r.id || r.code;
+                                            const match = code.match(/^DIV-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0);
-                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
-                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
-                                    divisionId = `${prefix}-${nextNumber}`;
+                                    const allCodes = [...existingCodes, ...processedCodes].sort((a, b) => b - a);
+                                    const nextNumber = allCodes.length > 0 ? allCodes[0] + 1 : 1001;
+                                    finalCode = `${prefix}-${String(nextNumber).padStart(3, '0')}`;
                                 }
+                                
                                 // Location is optional (can be blank)
                                 const division = {
-                                    id: divisionId,
+                                    code: finalCode,
                                     name: row.name,
-                                    location: row.location || ''
+                                    location: row.location || '',
+                                    factoryId: state.currentFactory?.id || ''
                                 };
                                 addDivision(division);
                                 successCount++;
@@ -1751,35 +1799,68 @@ export const DataImportExport: React.FC = () => {
                             }
                             case 'subDivisions': {
                                 if (!row.divisionId) {
-                                    errors.push(`Row ${index + 2}: SubDivision missing required field 'divisionId'`);
+                                    errors.push(`Row ${index + 2}: SubDivision missing required field 'divisionId' (Division Code)`);
                                     continue;
                                 }
-                                // Auto-generate ID if not provided
-                                let subDivisionId = row.id;
-                                if (!subDivisionId || subDivisionId.trim() === '') {
-                                    const prefix = 'SDIV';
-                                    const existingIds = state.subDivisions
+                                
+                                // Lookup parent division by code (not Firebase ID)
+                                const parentDivisionCode = row.divisionId.trim();
+                                const parentDivision = state.divisions.find(d => 
+                                    d.factoryId === state.currentFactory?.id && 
+                                    (d.code || d.id) === parentDivisionCode
+                                );
+                                if (!parentDivision) {
+                                    errors.push(`Row ${index + 2}: Division Code "${parentDivisionCode}" not found. Please create the division first.`);
+                                    continue;
+                                }
+                                
+                                // CSV id field becomes code field
+                                const subDivisionCode = row.id || row.code || '';
+                                
+                                // Check for duplicate code (per factory)
+                                if (subDivisionCode && subDivisionCode.trim() !== '') {
+                                    const trimmedCode = subDivisionCode.trim();
+                                    const existingSubDivision = state.subDivisions.find(sd => 
+                                        sd.factoryId === state.currentFactory?.id && 
+                                        (sd.code || sd.id) === trimmedCode
+                                    );
+                                    if (existingSubDivision) {
+                                        errors.push(`Row ${index + 2}: SubDivision Code "${trimmedCode}" already exists. Skipping.`);
+                                        continue;
+                                    }
+                                }
+                                
+                                // Auto-generate code if not provided
+                                let finalCode = subDivisionCode.trim();
+                                if (!finalCode) {
+                                    const prefix = 'SUBDIV';
+                                    const existingCodes = state.subDivisions
+                                        .filter(sd => sd.factoryId === state.currentFactory?.id)
                                         .map((sd: any) => {
-                                            const match = sd.id?.match(/^SDIV-(\d+)$/);
+                                            const code = sd.code || sd.id;
+                                            const match = code?.match(/^SUBDIV-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0)
                                         .sort((a, b) => b - a);
-                                    const processedIds = parsedData.slice(0, index)
-                                        .filter((r: any) => r.id && r.id.match(/^SDIV-(\d+)$/))
+                                    const processedCodes = parsedData.slice(0, index)
+                                        .filter((r: any) => (r.id || r.code) && (r.id || r.code).match(/^SUBDIV-(\d+)$/))
                                         .map((r: any) => {
-                                            const match = r.id.match(/^SDIV-(\d+)$/);
+                                            const code = r.id || r.code;
+                                            const match = code.match(/^SUBDIV-(\d+)$/);
                                             return match ? parseInt(match[1]) : 0;
                                         })
                                         .filter(n => n > 0);
-                                    const allIds = [...existingIds, ...processedIds].sort((a, b) => b - a);
-                                    const nextNumber = allIds.length > 0 ? allIds[0] + 1 : 1001;
-                                    subDivisionId = `${prefix}-${nextNumber}`;
+                                    const allCodes = [...existingCodes, ...processedCodes].sort((a, b) => b - a);
+                                    const nextNumber = allCodes.length > 0 ? allCodes[0] + 1 : 1001;
+                                    finalCode = `${prefix}-${String(nextNumber).padStart(3, '0')}`;
                                 }
+                                
                                 const subDivision = {
-                                    id: subDivisionId,
+                                    code: finalCode,
                                     name: row.name,
-                                    divisionId: row.divisionId
+                                    divisionId: parentDivisionCode, // Store division code, not Firebase ID
+                                    factoryId: state.currentFactory?.id || ''
                                 };
                                 addSubDivision(subDivision);
                                 successCount++;
@@ -2041,6 +2122,7 @@ export const DataImportExport: React.FC = () => {
             case 'items':
                 data = state.items.map(item => ({
                     id: item.id,
+                    code: item.code, // Include user-assigned code
                     name: item.name,
                     category: item.category,
                     section: item.section,
@@ -2077,16 +2159,16 @@ export const DataImportExport: React.FC = () => {
                 break;
             case 'divisions':
                 data = state.divisions.map(d => ({
-                    id: d.id,
+                    id: d.code || d.id, // Export code, fallback to id for backward compatibility
                     name: d.name,
                     location: d.location || ''
                 }));
                 break;
             case 'subDivisions':
                 data = state.subDivisions.map(sd => ({
-                    id: sd.id,
+                    id: sd.code || sd.id, // Export code, fallback to id for backward compatibility
                     name: sd.name,
-                    divisionId: sd.divisionId
+                    divisionId: sd.divisionId // This is the division code
                 }));
                 break;
             case 'originalTypes':

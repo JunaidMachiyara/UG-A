@@ -80,8 +80,11 @@ export const Accounting: React.FC = () => {
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
     const [filterType, setFilterType] = useState('');
+    const [filterAccountId, setFilterAccountId] = useState('');
+    const [filterVoucherId, setFilterVoucherId] = useState('');
     const [filterMinAmount, setFilterMinAmount] = useState('');
     const [filterMaxAmount, setFilterMaxAmount] = useState('');
+    const [voucherToDelete, setVoucherToDelete] = useState('');
 
     // --- Auth Modal State ---
     const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -106,6 +109,16 @@ export const Accounting: React.FC = () => {
         const partners = state.partners.map(p => ({ id: p.id, name: `${p.name} (${p.type})` }));
         return [...accounts, ...partners];
     }, [state.accounts, state.partners]);
+
+    const uniqueVouchers = useMemo(() => {
+        // Get unique voucher IDs from ledger
+        return Array.from(new Set(state.ledger.map(e => e.transactionId)))
+            .map(tid => ({
+                id: tid,
+                name: tid
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [state.ledger]);
 
     const payees = useMemo(() => {
         // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
@@ -448,11 +461,13 @@ export const Accounting: React.FC = () => {
             if (filterDateFrom && entry.date < filterDateFrom) return false;
             if (filterDateTo && entry.date > filterDateTo) return false;
             if (filterType && entry.transactionType !== filterType) return false;
+            if (filterAccountId && entry.accountId !== filterAccountId) return false;
+            if (filterVoucherId && entry.transactionId !== filterVoucherId) return false;
             if (filterMinAmount && entry.fcyAmount < parseFloat(filterMinAmount)) return false;
             if (filterMaxAmount && entry.fcyAmount > parseFloat(filterMaxAmount)) return false;
             return true;
         }).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    }, [state.ledger, filterDateFrom, filterDateTo, filterType, filterMinAmount, filterMaxAmount]);
+    }, [state.ledger, filterDateFrom, filterDateTo, filterType, filterAccountId, filterVoucherId, filterMinAmount, filterMaxAmount]);
 
     // --- Secure Action Handlers ---
     const initiateAction = (type: 'DELETE' | 'EDIT', transactionId: string) => {
@@ -1078,8 +1093,13 @@ export const Accounting: React.FC = () => {
                         </div>
                         <div>
                             <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Type</label>
-                            <select className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-32" value={filterType} onChange={e => setFilterType(e.target.value)}>
+                            <select
+                                className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-40"
+                                value={filterType}
+                                onChange={e => setFilterType(e.target.value)}
+                            >
                                 <option value="">All Types</option>
+                                <option value={TransactionType.SALES_INVOICE}>Sales Invoice (SI)</option>
                                 <option value={TransactionType.RECEIPT_VOUCHER}>Receipt (RV)</option>
                                 <option value={TransactionType.PAYMENT_VOUCHER}>Payment (PV)</option>
                                 <option value={TransactionType.EXPENSE_VOUCHER}>Expense (EV)</option>
@@ -1087,6 +1107,24 @@ export const Accounting: React.FC = () => {
                                 <option value={TransactionType.JOURNAL_VOUCHER}>Journal (JV)</option>
                                 <option value={TransactionType.INTERNAL_TRANSFER}>Transfer (TR)</option>
                             </select>
+                        </div>
+                        <div className="w-48">
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Account</label>
+                            <EntitySelector
+                                entities={allAccounts}
+                                selectedId={filterAccountId}
+                                onSelect={(id) => setFilterAccountId(id || '')}
+                                placeholder="All Accounts"
+                            />
+                        </div>
+                        <div className="w-48">
+                            <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Voucher</label>
+                            <EntitySelector
+                                entities={uniqueVouchers}
+                                selectedId={filterVoucherId}
+                                onSelect={(id) => setFilterVoucherId(id || '')}
+                                placeholder="All Vouchers"
+                            />
                         </div>
                         <div>
                             <label className="block text-[10px] uppercase text-slate-400 font-bold mb-1">Min Amount</label>
@@ -1099,6 +1137,67 @@ export const Accounting: React.FC = () => {
                         <div className="flex-1 text-right">
                             <span className="text-xs text-slate-400">Showing {filteredLedger.length} records</span>
                         </div>
+                    </div>
+
+                    {/* Delete Voucher Section */}
+                    <div className="bg-white p-4 rounded-xl border-2 border-red-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-3">
+                            <Trash2 className="text-red-600" size={20} />
+                            <h4 className="font-bold text-slate-800">Delete Voucher</h4>
+                        </div>
+                        <div className="flex gap-3 items-end">
+                            <div className="flex-1">
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">Select Voucher to Delete</label>
+                                <EntitySelector
+                                    entities={uniqueVouchers}
+                                    selectedId={voucherToDelete}
+                                    onSelect={(voucherId) => setVoucherToDelete(voucherId || '')}
+                                    placeholder="Select voucher to delete..."
+                                />
+                            </div>
+                            <button
+                                onClick={async () => {
+                                    if (!voucherToDelete) {
+                                        alert('Please select a voucher to delete.');
+                                        return;
+                                    }
+
+                                    const pin = prompt(`Enter Supervisor PIN (7860) to delete voucher "${voucherToDelete}":`);
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    const confirmText = prompt(
+                                        `⚠️ WARNING: This will delete ALL ledger entries for voucher "${voucherToDelete}".\n\n` +
+                                        `This action cannot be undone.\n\n` +
+                                        `Type "DELETE ${voucherToDelete}" to confirm:`
+                                    );
+
+                                    if (confirmText !== `DELETE ${voucherToDelete}`) {
+                                        alert('Confirmation text does not match. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    try {
+                                        // Use deleteTransaction which handles archiving and deletion
+                                        await deleteTransaction(voucherToDelete, 'Manual deletion via General Ledger', 'Admin');
+                                        setVoucherToDelete(''); // Clear selection
+                                        alert(`✅ Successfully deleted all ledger entries for voucher "${voucherToDelete}".\n\nPlease refresh the page (F5) to see updated data.`);
+                                    } catch (error: any) {
+                                        console.error(`❌ Error deleting voucher ${voucherToDelete}:`, error);
+                                        alert(`❌ Error deleting voucher: ${error.message || 'Unknown error'}`);
+                                    }
+                                }}
+                                disabled={!voucherToDelete}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                <Trash2 size={16} /> Delete Voucher
+                            </button>
+                        </div>
+                        <p className="text-xs text-red-600 mt-2">
+                            ⚠️ This will delete ALL ledger entries for the selected voucher. Requires Supervisor PIN (7860).
+                        </p>
                     </div>
 
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -1135,9 +1234,9 @@ export const Accounting: React.FC = () => {
                                         <td className="px-6 py-4 text-right font-mono">{entry.credit > 0 ? entry.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                                         <td className="px-6 py-4 max-w-xs truncate text-slate-500">{entry.narration}</td>
                                         <td className="px-6 py-4 text-center">
-                                            <div className="flex justify-center gap-2 opacity-20 group-hover:opacity-100 transition-opacity">
-                                                <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="Edit Voucher"><Edit2 size={16} /></button>
-                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded" title="Delete Voucher"><Trash2 size={16} /></button>
+                                            <div className="flex justify-center gap-2">
+                                                <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
+                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
                                             </div>
                                         </td>
                                     </tr>

@@ -393,7 +393,9 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'ADD_ITEM': return { ...state, items: [...state.items, action.payload] };
         case 'ADD_ACCOUNT': return { ...state, accounts: [...state.accounts, action.payload] };
         case 'ADD_DIVISION': return { ...state, divisions: [...state.divisions, action.payload] };
+        case 'UPDATE_DIVISION': return { ...state, divisions: state.divisions.map(d => d.id === action.payload.id ? action.payload : d) };
         case 'ADD_SUB_DIVISION': return { ...state, subDivisions: [...state.subDivisions, action.payload] };
+        case 'UPDATE_SUB_DIVISION': return { ...state, subDivisions: state.subDivisions.map(sd => sd.id === action.payload.id ? action.payload : sd) };
         case 'ADD_LOGO': return { ...state, logos: [...state.logos, action.payload] };
         case 'ADD_WAREHOUSE': return { ...state, warehouses: [...state.warehouses, action.payload] };
         case 'ADD_EMPLOYEE': return { ...state, employees: [...state.employees, action.payload] };
@@ -2794,20 +2796,204 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
     const addDivision = (division: Division) => {
-        const divisionWithFactory = { ...division, factoryId: currentFactory?.id || '' };
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, division saved to local state only');
+            const divisionWithFactory = { ...division, factoryId: currentFactory?.id || '', code: division.code || division.id || '' };
+            dispatch({ type: 'ADD_DIVISION', payload: divisionWithFactory });
+            return;
+        }
+
+        // Use code field, fallback to id for backward compatibility
+        const divisionCode = division.code || division.id || '';
+        
+        // Check for duplicate code (per factory)
+        if (divisionCode) {
+            const existingDivision = state.divisions.find(d => 
+                d.factoryId === currentFactory?.id && 
+                (d.code || d.id) === divisionCode.trim()
+            );
+            if (existingDivision) {
+                alert(`Division Code "${divisionCode}" already exists for this factory. Please use a different code.`);
+                return;
+            }
+        }
+
+        // Auto-generate code if not provided
+        let finalCode = divisionCode.trim();
+        if (!finalCode) {
+            const prefix = 'DIV';
+            const existingCodes = state.divisions
+                .filter(d => d.factoryId === currentFactory?.id)
+                .map(d => {
+                    const code = d.code || d.id;
+                    const match = code?.match(/^DIV-(\d+)$/);
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => n > 0)
+                .sort((a, b) => b - a);
+            const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
+            finalCode = `${prefix}-${String(nextNumber).padStart(3, '0')}`;
+        }
+
+        const divisionWithFactory = { 
+            ...division, 
+            factoryId: currentFactory?.id || '',
+            code: finalCode
+        };
+        
+        // Update local state immediately (optimistic update)
         dispatch({ type: 'ADD_DIVISION', payload: divisionWithFactory });
+        
+        // Save to Firebase (Firebase will auto-generate document ID)
         const { id: _, ...divisionData } = divisionWithFactory;
         addDoc(collection(db, 'divisions'), { ...divisionData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Division saved'))
-            .catch((error) => console.error('❌ Error saving division:', error));
+            .then(() => console.log('✅ Division saved to Firebase'))
+            .catch((error) => {
+                console.error('❌ Error saving division to Firebase:', error);
+                // Keep optimistic update - user can see the division even if Firebase save fails
+            });
     };
     const addSubDivision = (subDivision: SubDivision) => {
-        const subDivisionWithFactory = { ...subDivision, factoryId: currentFactory?.id || '' };
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, subDivision saved to local state only');
+            const subDivisionWithFactory = { ...subDivision, factoryId: currentFactory?.id || '', code: subDivision.code || subDivision.id || '' };
+            dispatch({ type: 'ADD_SUB_DIVISION', payload: subDivisionWithFactory });
+            return;
+        }
+
+        // Use code field, fallback to id for backward compatibility
+        const subDivisionCode = subDivision.code || subDivision.id || '';
+        
+        // Check for duplicate code (per factory)
+        if (subDivisionCode) {
+            const existingSubDivision = state.subDivisions.find(sd => 
+                sd.factoryId === currentFactory?.id && 
+                (sd.code || sd.id) === subDivisionCode.trim()
+            );
+            if (existingSubDivision) {
+                alert(`Sub-Division Code "${subDivisionCode}" already exists for this factory. Please use a different code.`);
+                return;
+            }
+        }
+
+        // Auto-generate code if not provided
+        let finalCode = subDivisionCode.trim();
+        if (!finalCode) {
+            const prefix = 'SUBDIV';
+            const existingCodes = state.subDivisions
+                .filter(sd => sd.factoryId === currentFactory?.id)
+                .map(sd => {
+                    const code = sd.code || sd.id;
+                    const match = code?.match(/^SUBDIV-(\d+)$/);
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => n > 0)
+                .sort((a, b) => b - a);
+            const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
+            finalCode = `${prefix}-${String(nextNumber).padStart(3, '0')}`;
+        }
+
+        const subDivisionWithFactory = { 
+            ...subDivision, 
+            factoryId: currentFactory?.id || '',
+            code: finalCode
+        };
+        
+        // Update local state immediately (optimistic update)
         dispatch({ type: 'ADD_SUB_DIVISION', payload: subDivisionWithFactory });
+        
+        // Save to Firebase (Firebase will auto-generate document ID)
         const { id: _, ...subDivisionData } = subDivisionWithFactory;
         addDoc(collection(db, 'subDivisions'), { ...subDivisionData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ SubDivision saved'))
-            .catch((error) => console.error('❌ Error saving subDivision:', error));
+            .then(() => console.log('✅ SubDivision saved to Firebase'))
+            .catch((error) => {
+                console.error('❌ Error saving subDivision to Firebase:', error);
+                // Keep optimistic update - user can see the subDivision even if Firebase save fails
+            });
+    };
+    const updateDivision = (id: string, division: Division) => {
+        const divisionWithFactory = { 
+            ...division, 
+            id, // Preserve the Firebase document ID
+            factoryId: currentFactory?.id || '',
+            code: division.code || division.id || ''
+        };
+        
+        // Check for duplicate code (per factory, excluding current division)
+        if (divisionWithFactory.code) {
+            const existingDivision = state.divisions.find(d => 
+                d.id !== id &&
+                d.factoryId === currentFactory?.id && 
+                (d.code || d.id) === divisionWithFactory.code.trim()
+            );
+            if (existingDivision) {
+                alert(`Division Code "${divisionWithFactory.code}" already exists for this factory. Please use a different code.`);
+                return;
+            }
+        }
+        
+        // Update local state immediately
+        dispatch({ type: 'UPDATE_DIVISION', payload: divisionWithFactory });
+        
+        // Save to Firebase if loaded
+        if (isFirestoreLoaded) {
+            const divisionRef = doc(db, 'divisions', id);
+            const { id: _, ...divisionData } = divisionWithFactory;
+            updateDoc(divisionRef, { ...divisionData, updatedAt: serverTimestamp() })
+                .then(() => console.log('✅ Division updated in Firebase'))
+                .catch((error) => {
+                    console.error('❌ Error updating division in Firebase:', error);
+                    // Revert local state update if Firebase update fails
+                    const originalDivision = state.divisions.find(d => d.id === id);
+                    if (originalDivision) {
+                        dispatch({ type: 'UPDATE_DIVISION', payload: originalDivision });
+                    }
+                });
+        } else {
+            console.warn('⚠️ Firebase not loaded, division updated in local state only');
+        }
+    };
+    const updateSubDivision = (id: string, subDivision: SubDivision) => {
+        const subDivisionWithFactory = { 
+            ...subDivision, 
+            id, // Preserve the Firebase document ID
+            factoryId: currentFactory?.id || '',
+            code: subDivision.code || subDivision.id || ''
+        };
+        
+        // Check for duplicate code (per factory, excluding current subDivision)
+        if (subDivisionWithFactory.code) {
+            const existingSubDivision = state.subDivisions.find(sd => 
+                sd.id !== id &&
+                sd.factoryId === currentFactory?.id && 
+                (sd.code || sd.id) === subDivisionWithFactory.code.trim()
+            );
+            if (existingSubDivision) {
+                alert(`Sub-Division Code "${subDivisionWithFactory.code}" already exists for this factory. Please use a different code.`);
+                return;
+            }
+        }
+        
+        // Update local state immediately
+        dispatch({ type: 'UPDATE_SUB_DIVISION', payload: subDivisionWithFactory });
+        
+        // Save to Firebase if loaded
+        if (isFirestoreLoaded) {
+            const subDivisionRef = doc(db, 'subDivisions', id);
+            const { id: _, ...subDivisionData } = subDivisionWithFactory;
+            updateDoc(subDivisionRef, { ...subDivisionData, updatedAt: serverTimestamp() })
+                .then(() => console.log('✅ SubDivision updated in Firebase'))
+                .catch((error) => {
+                    console.error('❌ Error updating subDivision in Firebase:', error);
+                    // Revert local state update if Firebase update fails
+                    const originalSubDivision = state.subDivisions.find(sd => sd.id === id);
+                    if (originalSubDivision) {
+                        dispatch({ type: 'UPDATE_SUB_DIVISION', payload: originalSubDivision });
+                    }
+                });
+        } else {
+            console.warn('⚠️ Firebase not loaded, subDivision updated in local state only');
+        }
     };
     const addLogo = (logo: Logo) => {
         const logoWithFactory = { ...logo, factoryId: currentFactory?.id || '' };
@@ -3348,7 +3534,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addAccount,
             updateAccount,
             addDivision,
+            updateDivision,
             addSubDivision,
+            updateSubDivision,
             addLogo,
             addWarehouse,
             addEmployee,

@@ -33,7 +33,8 @@ import {
     ShieldAlert, 
     ChevronRight,
     ExternalLink,
-    Truck
+    Truck,
+    History
 } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
 import { EntitySelector } from './EntitySelector';
@@ -246,11 +247,18 @@ const InventoryIntelligence: React.FC = () => {
             const margin = (item.salePrice || 0) - item.avgCost;
             const marginPct = item.avgCost > 0 ? (margin / item.avgCost) * 100 : 0;
             
-            const salesFreq = state.salesInvoices.filter(inv => inv.items.some(i => i.itemId === item.id)).length;
+            // Calculate sales frequency from invoices (if headers exist)
+            const salesFreq = state.salesInvoices.filter(inv => inv.status === 'Posted' && inv.items.some(i => i.itemId === item.id)).length;
             
             // Net production change (includes re-baling consumption as negative and production as positive)
             const totalProduced = state.productions.filter(p => p.itemId === item.id).reduce((s, p) => s + p.qtyProduced, 0);
-            const totalSold = state.salesInvoices.reduce((s, inv) => s + inv.items.filter(i => i.itemId === item.id).reduce((is, ii) => is + ii.qty, 0), 0);
+            
+            // Calculate totalSold from invoices (primary source)
+            // NOTE: If invoice headers are missing, this will be 0 even if sales occurred
+            // This is why SINV-1005/1006 showed 0 sold quantities - they had missing headers
+            const totalSold = state.salesInvoices
+                .filter(inv => inv.status === 'Posted')
+                .reduce((s, inv) => s + inv.items.filter(i => i.itemId === item.id).reduce((is, ii) => is + ii.qty, 0), 0);
             const ratio = totalProduced > 0 ? totalSold / totalProduced : 0;
 
             let score = 0;
@@ -364,6 +372,103 @@ const InventoryIntelligence: React.FC = () => {
                             </ResponsiveContainer>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Stock Movement Report */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                    <div>
+                        <h4 className="font-bold text-slate-800 flex items-center gap-2 text-lg"><History className="text-purple-600" /> Stock Movement Report</h4>
+                        <p className="text-sm text-slate-500">Track inventory changes: Opening Stock → Quantity Sold → Current Stock</p>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-white text-slate-500 uppercase font-bold text-xs border-b border-slate-200">
+                            <tr>
+                                <th className="px-6 py-4">Item Code</th>
+                                <th className="px-6 py-4">Item Name</th>
+                                <th className="px-6 py-4 text-right">Opening Stock</th>
+                                <th className="px-6 py-4 text-right">Quantity Sold</th>
+                                <th className="px-6 py-4 text-right">Current Stock</th>
+                                <th className="px-6 py-4 text-center">Invoices</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {(() => {
+                                const itemsWithMovements = state.items
+                                    .map(item => {
+                                        // Calculate total sold from posted invoices
+                                        const totalSold = state.salesInvoices
+                                            .filter(inv => inv.status === 'Posted')
+                                            .reduce((sum, inv) => 
+                                                sum + inv.items
+                                                    .filter(si => si.itemId === item.id)
+                                                    .reduce((itemSum, si) => itemSum + si.qty, 0), 0
+                                            );
+                                        
+                                        // Get invoices that sold this item
+                                        const invoicesWithItem = state.salesInvoices
+                                            .filter(inv => inv.status === 'Posted' && inv.items.some(si => si.itemId === item.id))
+                                            .map(inv => inv.invoiceNo);
+                                        
+                                        // Opening stock = current stock + total sold
+                                        const openingStock = item.stockQty + totalSold;
+                                        
+                                        return {
+                                            item,
+                                            totalSold,
+                                            invoicesWithItem,
+                                            openingStock
+                                        };
+                                    })
+                                    .filter(data => data.totalSold > 0 || data.item.stockQty > 0)
+                                    .sort((a, b) => b.totalSold - a.totalSold);
+                                
+                                if (itemsWithMovements.length === 0) {
+                                    return (
+                                        <tr>
+                                            <td colSpan={6} className="p-8 text-center text-slate-400">
+                                                No stock movements found. Items will appear here once they are sold via Sales Invoices.
+                                            </td>
+                                        </tr>
+                                    );
+                                }
+                                
+                                return itemsWithMovements.map(({ item, totalSold, invoicesWithItem, openingStock }) => (
+                                    <tr key={item.id} className="hover:bg-slate-50">
+                                        <td className="px-6 py-3 font-mono text-slate-700">{item.id}</td>
+                                        <td className="px-6 py-3 font-medium text-slate-700">{item.name}</td>
+                                        <td className="px-6 py-3 text-right font-mono text-slate-600">
+                                            {openingStock.toLocaleString()} <span className="text-xs text-slate-400">units</span>
+                                        </td>
+                                        <td className="px-6 py-3 text-right font-mono text-red-600 font-semibold">
+                                            -{totalSold.toLocaleString()} <span className="text-xs text-slate-400">units</span>
+                                        </td>
+                                        <td className="px-6 py-3 text-right font-mono text-emerald-600 font-bold">
+                                            {item.stockQty.toLocaleString()} <span className="text-xs text-slate-400">units</span>
+                                        </td>
+                                        <td className="px-6 py-3 text-center">
+                                            <div className="flex flex-col gap-1">
+                                                {invoicesWithItem.slice(0, 3).map(invNo => (
+                                                    <span key={invNo} className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                                                        {invNo}
+                                                    </span>
+                                                ))}
+                                                {invoicesWithItem.length > 3 && (
+                                                    <span className="text-xs text-slate-400">+{invoicesWithItem.length - 3} more</span>
+                                                )}
+                                                {invoicesWithItem.length === 0 && (
+                                                    <span className="text-xs text-slate-400">-</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ));
+                            })()}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 

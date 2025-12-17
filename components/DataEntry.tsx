@@ -253,6 +253,7 @@ export const DataEntry: React.FC = () => {
     const [siCostRate, setSiCostRate] = useState(1);
 
     const [showSiSummary, setShowSiSummary] = useState(false);
+    const [viewingInvoice, setViewingInvoice] = useState<SalesInvoice | null>(null);
 
     // --- Direct Sales State ---
         // --- Produced Production Report State ---
@@ -1370,6 +1371,111 @@ export const DataEntry: React.FC = () => {
         setSiItemId('');
         setSiItemQty('');
         setSiItemRate('');
+    };
+
+    // Import Sales Invoice items from CSV (code, qty, rate)
+    const handleSiItemsCsvImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                const rows: any[] = (results.data || []) as any[];
+                if (!rows.length) {
+                    alert('CSV file is empty or has no data rows.');
+                    return;
+                }
+
+                const importedItems: SalesInvoiceItem[] = [];
+                const errors: string[] = [];
+
+                rows.forEach((row, index) => {
+                    const rowNumber = index + 2; // Header is row 1
+
+                    const rawCode = (row.code || row.itemCode || row.ItemCode || row.id || '').toString().trim();
+                    const rawName = (row.name || row.itemName || '').toString().trim();
+                    const qtyRaw = row.qty ?? row.Qty ?? row.quantity ?? row.Quantity ?? '';
+                    const rateRaw = row.rate ?? row.Rate ?? row.price ?? row.Price ?? '';
+
+                    const qty = parseFloat(qtyRaw);
+                    if (!rawCode && !rawName) {
+                        errors.push(`Row ${rowNumber}: Missing item code/name.`);
+                        return;
+                    }
+                    if (!qty || isNaN(qty) || qty <= 0) {
+                        errors.push(`Row ${rowNumber}: Invalid qty for "${rawCode || rawName}".`);
+                        return;
+                    }
+
+                    const item = state.items.find(i => 
+                        (rawCode && (i.code === rawCode || i.id === rawCode)) ||
+                        (!rawCode && rawName && i.name.toLowerCase() === rawName.toLowerCase())
+                    );
+
+                    if (!item) {
+                        errors.push(`Row ${rowNumber}: Item not found for code/name "${rawCode || rawName}".`);
+                        return;
+                    }
+
+                    let rate = parseFloat(rateRaw);
+                    if (!rate || isNaN(rate) || rate <= 0) {
+                        rate = item.salePrice || 0;
+                    }
+                    if (!rate || isNaN(rate) || rate <= 0) {
+                        errors.push(`Row ${rowNumber}: Missing rate and item "${item.name}" has no Sale Price.`);
+                        return;
+                    }
+
+                    importedItems.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        itemId: item.id,
+                        itemName: item.name,
+                        qty,
+                        rate,
+                        total: qty * rate,
+                        totalKg: qty * item.weightPerUnit
+                    });
+                });
+
+                if (!importedItems.length) {
+                    alert(`No valid items imported from CSV.\n\nIssues:\n${errors.slice(0, 10).join('\n')}`);
+                    return;
+                }
+
+                setSiCart(prev => [...prev, ...importedItems]);
+
+                let message = `Imported ${importedItems.length} item(s) from CSV.`;
+                if (errors.length > 0) {
+                    message += `\n\nSkipped ${errors.length} row(s):\n${errors.slice(0, 10).join('\n')}`;
+                    if (errors.length > 10) {
+                        message += '\n...';
+                    }
+                }
+                alert(message);
+            },
+            error: (error) => {
+                console.error('Error parsing Sales Invoice items CSV:', error);
+                alert(`Error parsing CSV: ${error.message}`);
+            }
+        });
+
+        // Allow uploading the same file again if needed
+        event.target.value = '';
+    };
+
+    // Download simple CSV template for Sales Invoice items
+    const downloadSiItemsTemplate = () => {
+        const header = ['code', 'qty', 'rate'];
+        const sample = ['ITEM-1001', '10', '25.00'];
+        const csv = [header.join(','), sample.join(',')].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sales_invoice_items_template.csv';
+        a.click();
     };
 
     const handleAddSiCost = () => {
@@ -3461,7 +3567,28 @@ export const DataEntry: React.FC = () => {
                                         
                                         {/* Item Cart */}
                                         <div className="border-t border-slate-200 pt-6">
-                                             <h4 className="font-bold text-slate-700 mb-4">Item Entry</h4>
+                                             <div className="flex items-center justify-between mb-4">
+                                                 <h4 className="font-bold text-slate-700">Item Entry</h4>
+                                                 <div className="flex gap-2">
+                                                     <button
+                                                         type="button"
+                                                         onClick={downloadSiItemsTemplate}
+                                                         className="px-3 py-1.5 bg-slate-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-700 flex items-center gap-1.5"
+                                                         title="Download CSV template"
+                                                     >
+                                                         <Download size={14} /> Download CSV Template
+                                                     </button>
+                                                     <label className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer">
+                                                         <Upload size={14} /> Import Items from CSV
+                                                         <input
+                                                             type="file"
+                                                             accept=".csv"
+                                                             onChange={handleSiItemsCsvImport}
+                                                             className="hidden"
+                                                         />
+                                                     </label>
+                                                 </div>
+                                             </div>
                                              <div className="bg-slate-100 p-3 rounded-lg mb-4">
                                                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
                                                      <div className="md:col-span-6">
@@ -3597,7 +3724,15 @@ export const DataEntry: React.FC = () => {
                                                 {state.salesInvoices.map(inv => (
                                                     <tr key={inv.id} className="hover:bg-slate-50">
                                                         <td className="px-4 py-3">{inv.date}</td>
-                                                        <td className="px-4 py-3 font-mono font-bold text-blue-600">{inv.invoiceNo}</td>
+                                                        <td className="px-4 py-3">
+                                                            <button
+                                                                onClick={() => setViewingInvoice(inv)}
+                                                                className="font-mono font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                                                title="Click to view invoice details"
+                                                            >
+                                                                {inv.invoiceNo}
+                                                            </button>
+                                                        </td>
                                                         <td className="px-4 py-3">{state.partners.find(p => p.id === inv.customerId)?.name}</td>
                                                         <td className="px-4 py-3 text-right font-mono">{inv.netTotal.toLocaleString()} {inv.currency}</td>
                                                         <td className="px-4 py-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${inv.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{inv.status}</span></td>
@@ -4204,6 +4339,143 @@ export const DataEntry: React.FC = () => {
                                 className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold flex items-center gap-2"
                             >
                                 <CheckCircle size={18} /> Confirm & Save Invoice
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Invoice Review Modal (Read-Only) */}
+            {viewingInvoice && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-200 bg-gradient-to-r from-blue-600 to-blue-700 text-white flex justify-between items-center">
+                            <div>
+                                <h3 className="text-2xl font-bold">Sales Invoice Review</h3>
+                                <p className="text-sm text-blue-100 mt-1">Invoice #{viewingInvoice.invoiceNo} - {viewingInvoice.status}</p>
+                            </div>
+                            <button
+                                onClick={() => setViewingInvoice(null)}
+                                className="text-white hover:text-blue-100 p-2 rounded-lg hover:bg-blue-500/20"
+                                title="Close"
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
+                        
+                        <div className="p-6 space-y-6">
+                            {/* Invoice Header */}
+                            <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Invoice Number</p>
+                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.invoiceNo}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Date</p>
+                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.date}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Customer</p>
+                                    <p className="text-lg font-bold text-slate-800">{state.partners.find(p => p.id === viewingInvoice.customerId)?.name}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 font-semibold uppercase">Container</p>
+                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.containerNumber || 'N/A'}</p>
+                                </div>
+                                {viewingInvoice.divisionId && (
+                                    <div>
+                                        <p className="text-xs text-slate-500 font-semibold uppercase">Division</p>
+                                        <p className="text-lg font-bold text-slate-800">{state.divisions.find(d => d.id === viewingInvoice.divisionId)?.name || 'N/A'}</p>
+                                    </div>
+                                )}
+                                {viewingInvoice.packingColor && (
+                                    <div>
+                                        <p className="text-xs text-slate-500 font-semibold uppercase">Packing Color</p>
+                                        <p className="text-lg font-bold text-slate-800">{viewingInvoice.packingColor}</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Items Table */}
+                            <div>
+                                <h4 className="font-bold text-slate-700 mb-3">Items</h4>
+                                <table className="w-full text-sm">
+                                    <thead className="bg-slate-100 text-slate-600">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Item</th>
+                                            <th className="px-3 py-2 text-center">Qty</th>
+                                            <th className="px-3 py-2 text-center">Kg</th>
+                                            <th className="px-3 py-2 text-right">Rate</th>
+                                            <th className="px-3 py-2 text-right">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {viewingInvoice.items.map((item, idx) => (
+                                            <tr key={idx}>
+                                                <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name || item.itemName}</td>
+                                                <td className="px-3 py-2 text-center">{item.qty || 0}</td>
+                                                <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{(item.rate || 0).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Summary */}
+                            <div className="bg-slate-50 p-4 rounded-lg">
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600">Gross Total</span>
+                                        <span className="font-mono font-bold">{viewingInvoice.currency} {viewingInvoice.grossTotal.toFixed(2)}</span>
+                                    </div>
+                                    {viewingInvoice.discount > 0 && (
+                                        <div className="flex justify-between text-sm text-red-600">
+                                            <span>Discount</span>
+                                            <span className="font-mono">-{viewingInvoice.discount.toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    {viewingInvoice.surcharge > 0 && (
+                                        <div className="flex justify-between text-sm text-emerald-600">
+                                            <span>Surcharge</span>
+                                            <span className="font-mono">+{viewingInvoice.surcharge.toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    {viewingInvoice.additionalCosts && viewingInvoice.additionalCosts.length > 0 && (
+                                        <div className="space-y-1">
+                                            {viewingInvoice.additionalCosts.map((cost, idx) => {
+                                                const amountInInvoiceCurrency = (cost.amount || 0) / (cost.exchangeRate || 1);
+                                                const costLabel = cost.costType + 
+                                                    (cost.providerId ? ` (${state.partners.find(p => p.id === cost.providerId)?.name})` : '') +
+                                                    (!cost.providerId && (cost as any).customDescription ? ` (${(cost as any).customDescription})` : '');
+                                                return (
+                                                    <div key={idx} className="flex justify-between text-sm text-blue-600">
+                                                        <span>{costLabel}</span>
+                                                        <span className="font-mono">+{amountInInvoiceCurrency.toFixed(2)}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                            <div className="flex justify-between text-sm font-bold text-blue-700 pt-1 border-t border-blue-200">
+                                                <span>Total Additional Costs</span>
+                                                <span className="font-mono">+{viewingInvoice.additionalCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0).toFixed(2)}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
+                                        <span>Net Total</span>
+                                        <span className="font-mono">{viewingInvoice.currency} {viewingInvoice.netTotal.toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end">
+                            <button
+                                onClick={() => setViewingInvoice(null)}
+                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold"
+                            >
+                                Close
                             </button>
                         </div>
                     </div>

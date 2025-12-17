@@ -69,6 +69,10 @@ export const GenericForm: React.FC<{
         // Apply overrides
         if (initialOverrides) {
             Object.assign(initialData, initialOverrides);
+            // Backward compatibility: If editing and code field is missing but id exists, use id as code
+            if (initialOverrides.id && !initialOverrides.code && config.fields.find(f => f.name === 'code')) {
+                initialData.code = initialOverrides.id;
+            }
         }
         return initialData;
     });
@@ -87,6 +91,10 @@ export const GenericForm: React.FC<{
                 }
             });
             Object.assign(updatedData, initialOverrides);
+            // Backward compatibility: If editing and code field is missing but id exists, use id as code
+            if (initialOverrides.id && !initialOverrides.code && config.fields.find(f => f.name === 'code')) {
+                updatedData.code = initialOverrides.id;
+            }
             setFormData(updatedData);
         }
     }, [initialOverrides, config, data]);
@@ -135,6 +143,7 @@ export const GenericForm: React.FC<{
                 return;
             }
         }
+        
         
         // If editing (has id in formData), call onUpdate, otherwise call onSave
         if (formData.id && config.onUpdate) {
@@ -487,7 +496,9 @@ export const useSetupConfigs = () => {
         addAccount, 
         deleteEntity, 
         addDivision,
+        updateDivision,
         addSubDivision,
+        updateSubDivision,
         addLogo,
         addWarehouse,
         addOriginalType,
@@ -651,38 +662,50 @@ export const useSetupConfigs = () => {
         title: 'Divisions (Business Units)',
         entityKey: 'divisions',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs text-slate-500">{r.code || r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location/HQ', key: 'location' }
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Division ID', 
-                type: 'text', 
+            {
+                name: 'code',
+                label: 'Division Code',
+                type: 'text',
                 required: false,
-                placeholder: 'Auto-generated (e.g., DIV-1001)',
-                readOnly: true,
+                placeholder: 'Enter Code (e.g., DIV-001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    if (value && value.trim() !== '') {
+                        const trimmedCode = value.trim();
+                        const existing = allData.find((d: any) => (d.code || d.id) === trimmedCode && d.id !== formData.id);
+                        if (existing) {
+                            return `Division Code "${trimmedCode}" already exists. Please use a different code.`;
+                        }
+                    }
+                    return null;
+                },
                 compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^DIV-\d+$/)) {
-                        return formData.id;
+                    if (formData.code && formData.code.trim() !== '') {
+                        return formData.code.trim();
                     }
                     const prefix = 'DIV';
-                    const existingIds = allData
+                    const existingCodes = allData
                         .map((d: any) => {
-                            const match = d.id?.match(/^DIV-(\d+)$/);
+                            const code = d.code || d.id;
+                            const match = code?.match(/^DIV-(\d+)$/);
                             return match ? parseInt(match[1]) : 0;
                         })
                         .filter(n => n > 0)
                         .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
+                    const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
+                    return `${prefix}-${String(nextNumber).padStart(3, '0')}`;
                 }
             },
             { name: 'name', label: 'Division Name', type: 'text', required: true },
             { name: 'location', label: 'Location/HQ', type: 'text', required: false }
         ],
         onSave: (data) => addDivision(data),
+        onUpdate: (id, data) => updateDivision(id, data),
         onDelete: (id) => deleteEntity('divisions', id)
     };
 
@@ -690,32 +713,46 @@ export const useSetupConfigs = () => {
         title: 'Sub-Divisions',
         entityKey: 'subDivisions',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs text-slate-500">{r.code || r.id}</span> },
             { header: 'Name', key: 'name' },
-            { header: 'Parent Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || r.divisionId }
+            { header: 'Parent Division', key: 'divisionId', render: (r) => {
+                const division = state.divisions.find(d => (d.code || d.id) === r.divisionId || d.id === r.divisionId);
+                return division?.name || r.divisionId;
+            }}
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Sub-Division ID', 
-                type: 'text', 
+            {
+                name: 'code',
+                label: 'Sub-Division Code',
+                type: 'text',
                 required: false,
-                placeholder: 'Auto-generated (e.g., SDIV-1001)',
-                readOnly: true,
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^SDIV-\d+$/)) {
-                        return formData.id;
+                placeholder: 'Enter Code (e.g., SUBDIV-001) or leave blank for auto-generation',
+                readOnly: false,
+                validate: (value: string, formData: any, allData: any[]) => {
+                    if (value && value.trim() !== '') {
+                        const trimmedCode = value.trim();
+                        const existing = allData.find((sd: any) => (sd.code || sd.id) === trimmedCode && sd.id !== formData.id);
+                        if (existing) {
+                            return `Sub-Division Code "${trimmedCode}" already exists. Please use a different code.`;
+                        }
                     }
-                    const prefix = 'SDIV';
-                    const existingIds = allData
+                    return null;
+                },
+                compute: (formData, allData) => {
+                    if (formData.code && formData.code.trim() !== '') {
+                        return formData.code.trim();
+                    }
+                    const prefix = 'SUBDIV';
+                    const existingCodes = allData
                         .map((sd: any) => {
-                            const match = sd.id?.match(/^SDIV-(\d+)$/);
+                            const code = sd.code || sd.id;
+                            const match = code?.match(/^SUBDIV-(\d+)$/);
                             return match ? parseInt(match[1]) : 0;
                         })
                         .filter(n => n > 0)
                         .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
+                    const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
+                    return `${prefix}-${String(nextNumber).padStart(3, '0')}`;
                 }
             },
             { name: 'name', label: 'Sub-Division Name', type: 'text', required: true },
@@ -723,11 +760,12 @@ export const useSetupConfigs = () => {
                 name: 'divisionId', 
                 label: 'Parent Division', 
                 type: 'select', 
-                options: () => state.divisions.map(d => ({ label: d.name, value: d.id })),
+                options: () => state.divisions.map(d => ({ label: d.name, value: d.code || d.id })),
                 required: true 
             }
         ],
         onSave: (data) => addSubDivision(data),
+        onUpdate: (id, data) => updateSubDivision(id, data),
         onDelete: (id) => deleteEntity('subDivisions', id)
     };
 
@@ -1006,14 +1044,15 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            // Treat the business ID as a Code for display
+            { header: 'Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
         fields: [
             { 
                 name: 'id', 
-                label: 'Original Product ID / Code', 
+                label: 'Original Product Code', 
                 type: 'text', 
                 required: false,
                 placeholder: 'Enter ID (e.g., ORP-1001) or leave blank for auto-generation',

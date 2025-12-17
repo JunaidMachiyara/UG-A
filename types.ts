@@ -191,15 +191,19 @@ export interface Item {
 }
 
 export interface Division {
-    id: string;
+    id: string; // Firebase document ID (auto-generated)
+    code: string; // Business code (user-assignable, e.g., DIV-001)
     name: string;
     location: string;
+    factoryId: string;
 }
 
 export interface SubDivision {
-    id: string;
-    divisionId: string;
+    id: string; // Firebase document ID (auto-generated)
+    code: string; // Business code (user-assignable, e.g., SUBDIV-001)
+    divisionId: string; // References Division code (not Firebase ID)
     name: string;
+    factoryId: string;
 }
 
 export interface Logo {

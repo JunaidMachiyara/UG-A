@@ -235,3 +235,9 @@ const capitalId = capitalAccount.id; // Use actual account ID
 - Allow user to note/copy errors before proceeding
 - Don't auto-proceed if validation errors exist
 
+
+
+
+
+
+

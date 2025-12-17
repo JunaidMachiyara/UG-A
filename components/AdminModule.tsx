@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { UserRole, TransactionType, LedgerEntry, PartnerType } from '../types';
+import { UserRole, TransactionType, LedgerEntry, PartnerType, SalesInvoice } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search, CheckSquare } from 'lucide-react';
-import { collection, writeBatch, doc, getDocs, query, where, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, writeBatch, doc, getDocs, getDoc, query, where, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { getExchangeRates } from '../context/DataContext';
 import { getAccountId } from '../services/accountMap';
@@ -58,6 +58,17 @@ export const AdminModule: React.FC = () => {
     const [deletingFactoryItems, setDeletingFactoryItems] = useState(false);
     const [deleteItemsResult, setDeleteItemsResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
     const [activeTab, setActiveTab] = useState<'admin' | 'csv-validator' | 'import-export'>('admin');
+    const [scanningLedger, setScanningLedger] = useState(false);
+    const [ledgerScanResult, setLedgerScanResult] = useState<{
+        duplicates: { transactionId: string; count: number; invoiceNo: string; entryCounts: number[] }[];
+        missingHeaders: { transactionId: string; invoiceNo: string; date: string; customerId: string; netTotal: number; factoryId: string }[];
+        allInvoices: { transactionId: string; invoiceNo: string; entryCount: number; hasHeader: boolean }[];
+        totalSITransactions: number;
+    } | null>(null);
+    const [removingDuplicates, setRemovingDuplicates] = useState(false);
+    const [rebuildingInvoices, setRebuildingInvoices] = useState(false);
+    const [deletingAllSalesInvoices, setDeletingAllSalesInvoices] = useState(false);
+    const [deleteAllSIResult, setDeleteAllSIResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
 
     const CONFIRMATION_TEXT = 'DELETE ALL DATA';
     const ADMIN_PIN = '1234'; // You should change this to a secure PIN
@@ -1461,6 +1472,840 @@ export const AdminModule: React.FC = () => {
                                 <p className="text-xs text-emerald-600 mt-2">
                                     Page will refresh automatically in 5 seconds...
                                 </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Invoice Diagnostics & Factory Fix */}
+            <div className="bg-white border-2 border-indigo-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb  -4">
+                    <div className="bg-indigo-100 p-3 rounded-lg">
+                        <FileText className="text-indigo-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Invoice Diagnostics &amp; Factory Fix</h3>
+                        <p className="text-sm text-slate-600">
+                            Scan all <strong>Sales Invoices</strong> in Firestore (ignoring factory filters) to find invoices without a valid
+                            <code className="font-mono text-xs ml-1 mr-1">factoryId</code> and assign them to the current factory.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                    <button
+                        onClick={async () => {
+                            const pin = prompt('Enter Supervisor PIN (7860) to scan invoices:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            try {
+                                const allInvoicesSnap = await getDocs(collection(db, 'salesInvoices'));
+                                if (allInvoicesSnap.empty) {
+                                    alert('No sales invoices found in Firestore.');
+                                    return;
+                                }
+
+                                const currentFactoryId = currentFactory?.id || '';
+                                const orphanInvoices: { id: string; invoiceNo: string; date: string; factoryId?: string }[] = [];
+
+                                allInvoicesSnap.forEach(docSnap => {
+                                    const data = docSnap.data() as any;
+                                    const factoryId = data.factoryId;
+                                    if (!factoryId || factoryId === '' || factoryId === 'undefined') {
+                                        orphanInvoices.push({
+                                            id: docSnap.id,
+                                            invoiceNo: data.invoiceNo || '(no number)',
+                                            date: data.date || '(no date)',
+                                            factoryId: factoryId
+                                        });
+                                    }
+                                });
+
+                                const totalCount = allInvoicesSnap.size;
+                                if (orphanInvoices.length === 0) {
+                                    alert(`Scanned ${totalCount} sales invoices.\n\n✅ No orphan invoices without factoryId were found.`);
+                                    return;
+                                }
+
+                                const listPreview = orphanInvoices
+                                    .slice(0, 20)
+                                    .map(inv => `- ${inv.invoiceNo} (Date: ${inv.date}, Firestore ID: ${inv.id}, factoryId: ${inv.factoryId || 'N/A'})`)
+                                    .join('\n');
+
+                                const confirmFix = confirm(
+                                    `Scanned ${totalCount} sales invoices.\n` +
+                                    `Found ${orphanInvoices.length} invoices without a valid factoryId.\n\n` +
+                                    `${listPreview}${orphanInvoices.length > 20 ? `\n... and ${orphanInvoices.length > 20 ? `\n... and ${orphanInvoices.length - 20} more` : ''}` : ''}\n\n` +
+                                    `Do you want to assign ALL of these invoices to the CURRENT factory (${currentFactory?.name || 'N/A'})?`
+                                );
+
+                                if (!confirmFix || !currentFactoryId) {
+                                    return;
+                                }
+
+                                let updatedCount = 0;
+                                for (const inv of orphanInvoices) {
+                                    await updateDoc(doc(db, 'salesInvoices', inv.id), {
+                                        factoryId: currentFactoryId,
+                                        updatedAt: new Date()
+                                    });
+                                    updatedCount++;
+                                }
+
+                                alert(
+                                    `✅ Assigned ${updatedCount} orphan invoices to factory "${currentFactory?.name}".\n\n` +
+                                    `Please refresh the page. These invoices will now appear under Sales Invoices (View / Update) and in the ledger for this factory.`
+                                );
+                            } catch (error: any) {
+                                console.error('❌ Error scanning/fixing invoices:', error);
+                                alert(`Error scanning/fixing invoices: ${error.message || 'Unknown error'}`);
+                            }
+                        }}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold"
+                    >
+                        Scan &amp; Fix Orphan Invoices
+                    </button>
+                </div>
+            </div>
+
+            {/* Invoice Ledger Duplicate Detection & Rebuild */}
+            <div className="bg-white border-2 border-red-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-red-100 p-3 rounded-lg">
+                        <AlertTriangle className="text-red-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Invoice Ledger Duplicate Detection &amp; Rebuild</h3>
+                        <p className="text-sm text-slate-600">
+                            Scan <strong>ALL ledger entries</strong> from Firestore to detect duplicate Sales Invoice postings and rebuild missing invoice headers.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                    <button
+                        onClick={async () => {
+                            const pin = prompt('Enter Supervisor PIN (7860) to scan ledger:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            setScanningLedger(true);
+                            setLedgerScanResult(null);
+
+                            try {
+                                // Scan ALL ledger entries from Firestore (no factory filter)
+                                const allLedgerSnap = await getDocs(collection(db, 'ledger'));
+                                console.log(`📊 Scanned ${allLedgerSnap.size} total ledger entries from Firestore`);
+
+                                // Filter for Sales Invoice transactions
+                                const siEntries: LedgerEntry[] = [];
+                                allLedgerSnap.forEach(docSnap => {
+                                    const data = docSnap.data() as any;
+                                    if (data.transactionType === TransactionType.SALES_INVOICE || 
+                                        (data.transactionType === 'SI' || data.transactionType === 'Sales Invoice')) {
+                                        siEntries.push({
+                                            id: docSnap.id,
+                                            ...data,
+                                            date: data.date || '',
+                                            transactionId: data.transactionId || '',
+                                            transactionType: TransactionType.SALES_INVOICE,
+                                            accountId: data.accountId || '',
+                                            accountName: data.accountName || '',
+                                            currency: data.currency || 'USD',
+                                            exchangeRate: data.exchangeRate || 1,
+                                            fcyAmount: data.fcyAmount || 0,
+                                            debit: data.debit || 0,
+                                            credit: data.credit || 0,
+                                            narration: data.narration || '',
+                                            factoryId: data.factoryId || ''
+                                        } as LedgerEntry);
+                                    }
+                                });
+
+                                console.log(`📋 Found ${siEntries.length} Sales Invoice ledger entries`);
+
+                                // Group by transactionId
+                                const byTransactionId: Record<string, LedgerEntry[]> = {};
+                                siEntries.forEach(entry => {
+                                    if (!byTransactionId[entry.transactionId]) {
+                                        byTransactionId[entry.transactionId] = [];
+                                    }
+                                    byTransactionId[entry.transactionId].push(entry);
+                                });
+
+                                // Detect duplicates (same transactionId appearing multiple times with different entry sets)
+                                // A normal SI transaction has 4-8 entries (Customer debit, Revenue credit, COGS debit, Inventory credit, Additional costs)
+                                // If we see 2x or more entries, the invoice was likely posted multiple times
+                                const duplicates: { transactionId: string; count: number; invoiceNo: string; entryCounts: number[] }[] = [];
+                                Object.keys(byTransactionId).forEach(transactionId => {
+                                    const entries = byTransactionId[transactionId];
+                                    
+                                    // Normal SI has 4-8 entries. If we see >12, it's likely duplicated (2x posting)
+                                    // If we see >20, it's likely 3x or more postings
+                                    if (entries.length > 12) {
+                                        const invoiceNo = transactionId.replace('INV-', '').replace('DS-', '');
+                                        
+                                        // Group entries by creation timestamp to detect distinct posting sets
+                                        // Entries from the same posting should have similar timestamps
+                                        const entriesWithTime = entries.map(e => ({
+                                            entry: e,
+                                            time: e.id // Use Firestore doc ID as proxy (they're sequential)
+                                        }));
+                                        
+                                        // Estimate duplicate count: normal SI has ~6 entries, so divide by 6
+                                        const estimatedDuplicateCount = Math.max(2, Math.floor(entries.length / 6));
+                                        
+                                        duplicates.push({
+                                            transactionId,
+                                            count: estimatedDuplicateCount,
+                                            invoiceNo,
+                                            entryCounts: [entries.length]
+                                        });
+                                    }
+                                });
+
+                                // Find missing invoice headers (ledger entries exist but no invoice document)
+                                const allInvoicesSnap = await getDocs(collection(db, 'salesInvoices'));
+                                const existingInvoiceNos = new Set<string>();
+                                allInvoicesSnap.forEach(docSnap => {
+                                    const data = docSnap.data() as any;
+                                    if (data.invoiceNo) {
+                                        existingInvoiceNos.add(data.invoiceNo);
+                                    }
+                                });
+
+                                // Build list of ALL invoices found (for reference)
+                                const allInvoices: { transactionId: string; invoiceNo: string; entryCount: number; hasHeader: boolean }[] = [];
+                                Object.keys(byTransactionId).forEach(transactionId => {
+                                    const entries = byTransactionId[transactionId];
+                                    const invoiceNo = transactionId.replace('INV-', '').replace('DS-', '');
+                                    allInvoices.push({
+                                        transactionId,
+                                        invoiceNo,
+                                        entryCount: entries.length,
+                                        hasHeader: existingInvoiceNos.has(invoiceNo)
+                                    });
+                                });
+                                allInvoices.sort((a, b) => {
+                                    // Sort by invoice number (extract numeric part)
+                                    const aNum = parseInt(a.invoiceNo.replace(/[^\d]/g, '')) || 0;
+                                    const bNum = parseInt(b.invoiceNo.replace(/[^\d]/g, '')) || 0;
+                                    return aNum - bNum;
+                                });
+
+                                const missingHeaders: { transactionId: string; invoiceNo: string; date: string; customerId: string; netTotal: number; factoryId: string }[] = [];
+                                Object.keys(byTransactionId).forEach(transactionId => {
+                                    const entries = byTransactionId[transactionId];
+                                    if (entries.length === 0) return;
+
+                                    // Extract invoice number from transactionId (INV-SINV-1005 or DS-1001)
+                                    const invoiceNo = transactionId.replace('INV-', '').replace('DS-', '');
+                                    
+                                    // Skip if invoice header already exists
+                                    if (existingInvoiceNos.has(invoiceNo)) {
+                                        return;
+                                    }
+
+                                    // Find customer entry (debit entry with customer accountId)
+                                    const customerEntry = entries.find(e => {
+                                        // Customer entry is the debit entry that's not COGS, not revenue, not inventory
+                                        return e.debit > 0 && 
+                                               !e.accountName.toLowerCase().includes('revenue') &&
+                                               !e.accountName.toLowerCase().includes('cogs') &&
+                                               !e.accountName.toLowerCase().includes('cost of goods') &&
+                                               !e.accountName.toLowerCase().includes('inventory') &&
+                                               !e.accountName.toLowerCase().includes('finished goods');
+                                    });
+
+                                    if (!customerEntry) {
+                                        console.warn(`⚠️ Could not find customer entry for ${transactionId}`);
+                                        return;
+                                    }
+
+                                    // Get date from first entry
+                                    const date = entries[0].date || '';
+                                    const customerId = customerEntry.accountId;
+                                    const netTotal = customerEntry.debit; // Customer debit = net total
+                                    const factoryId = customerEntry.factoryId || currentFactory?.id || '';
+
+                                    missingHeaders.push({
+                                        transactionId,
+                                        invoiceNo,
+                                        date,
+                                        customerId,
+                                        netTotal,
+                                        factoryId
+                                    });
+                                });
+
+                                setLedgerScanResult({
+                                    duplicates,
+                                    missingHeaders,
+                                    allInvoices,
+                                    totalSITransactions: Object.keys(byTransactionId).length
+                                });
+
+                                const summary = `📊 Scan Complete:\n\n` +
+                                    `Total SI Transactions Found: ${Object.keys(byTransactionId).length}\n` +
+                                    `All Invoices: ${allInvoices.map(a => a.invoiceNo).join(', ')}\n\n` +
+                                    `⚠️ Duplicates (Same Invoice Posted Multiple Times): ${duplicates.length}\n` +
+                                    (duplicates.length > 0 ? duplicates.map(d => `- ${d.invoiceNo}: Posted ${d.count}x times (${d.entryCounts[0]} total entries)`).join('\n') + '\n\n' : '✅ No duplicates found\n\n') +
+                                    `📝 Missing Invoice Headers: ${missingHeaders.length}\n` +
+                                    (missingHeaders.length > 0 ? missingHeaders.slice(0, 10).map(m => `- ${m.invoiceNo} (Date: ${m.date}, Net: $${m.netTotal.toFixed(2)})`).join('\n') + (missingHeaders.length > 10 ? `\n... and ${missingHeaders.length - 10} more` : '') : '✅ All invoices have headers');
+
+                                alert(summary);
+                            } catch (error: any) {
+                                console.error('❌ Error scanning ledger:', error);
+                                alert(`Error scanning ledger: ${error.message || 'Unknown error'}`);
+                            } finally {
+                                setScanningLedger(false);
+                            }
+                        }}
+                        disabled={scanningLedger}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+                    >
+                        {scanningLedger ? 'Scanning...' : 'Scan Ledger for Duplicates & Missing Headers'}
+                    </button>
+
+                    {ledgerScanResult && (
+                        <div className="mt-4 space-y-4">
+                            {/* All Invoices Found Section */}
+                            <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4">
+                                <h4 className="font-bold text-blue-900 mb-2">
+                                    📋 All Invoices Found in Ledger ({ledgerScanResult.allInvoices.length}):
+                                </h4>
+                                <p className="text-xs text-blue-700 mb-2">
+                                    These are ALL invoices that have ledger entries. If you see gaps (e.g., 1005, 1006 but no 1001-1004), 
+                                    it means those invoice numbers were never posted or were deleted.
+                                </p>
+                                <div className="max-h-40 overflow-y-auto">
+                                    <div className="flex flex-wrap gap-2">
+                                        {ledgerScanResult.allInvoices.map(inv => (
+                                            <span 
+                                                key={inv.transactionId} 
+                                                className={`text-xs px-2 py-1 rounded ${
+                                                    inv.hasHeader 
+                                                        ? 'bg-green-100 text-green-700 border border-green-300' 
+                                                        : 'bg-amber-100 text-amber-700 border border-amber-300'
+                                                }`}
+                                                title={inv.hasHeader ? 'Has header document' : 'Missing header document'}
+                                            >
+                                                {inv.invoiceNo} {inv.hasHeader ? '✓' : '⚠'} ({inv.entryCount} entries)
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Duplicates Section */}
+                            {ledgerScanResult.duplicates.length > 0 && (
+                                <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
+                                    <h4 className="font-bold text-red-900 mb-2">
+                                        ⚠️ Found {ledgerScanResult.duplicates.length} Invoice(s) with Duplicate Ledger Entries:
+                                    </h4>
+                                    <ul className="list-disc list-inside text-sm text-red-800 mb-3">
+                                        {ledgerScanResult.duplicates.map(d => (
+                                            <li key={d.transactionId}>
+                                                <strong>{d.invoiceNo}</strong> ({d.transactionId}): ~{d.count} duplicate sets detected
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <button
+                                        onClick={async () => {
+                                            if (!confirm(`⚠️ This will DELETE duplicate ledger entries for ${ledgerScanResult.duplicates.length} invoice(s).\n\nOnly the FIRST set of entries will be kept. This cannot be undone.\n\nContinue?`)) {
+                                                return;
+                                            }
+
+                                            const pin = prompt('Enter Supervisor PIN (7860) to remove duplicates:');
+                                            if (pin !== SUPERVISOR_PIN) {
+                                                alert('Invalid PIN. Operation cancelled.');
+                                                return;
+                                            }
+
+                                            setRemovingDuplicates(true);
+
+                                            try {
+                                                let removedCount = 0;
+                                                const batch = writeBatch(db);
+                                                let batchCount = 0;
+
+                                                for (const dup of ledgerScanResult.duplicates) {
+                                                    // Get all entries for this transaction
+                                                    const allEntriesSnap = await getDocs(
+                                                        query(collection(db, 'ledger'), where('transactionId', '==', dup.transactionId))
+                                                    );
+
+                                                    const entries: { id: string; createdAt: any; accountName: string; debit: number }[] = [];
+                                                    allEntriesSnap.forEach(docSnap => {
+                                                        const data = docSnap.data();
+                                                        entries.push({
+                                                            id: docSnap.id,
+                                                            createdAt: data.createdAt,
+                                                            accountName: data.accountName || '',
+                                                            debit: data.debit || 0
+                                                        });
+                                                    });
+
+                                                    // Sort by creation time (oldest first)
+                                                    entries.sort((a, b) => {
+                                                        if (!a.createdAt || !b.createdAt) return 0;
+                                                        return a.createdAt.toMillis() - b.createdAt.toMillis();
+                                                    });
+
+                                                    // Find customer debit entries (one per posting set)
+                                                    // Customer entry is the debit entry that's not COGS, not revenue, not inventory
+                                                    const customerEntries = entries.filter(e => 
+                                                        e.debit > 0 && 
+                                                        !e.accountName.toLowerCase().includes('revenue') &&
+                                                        !e.accountName.toLowerCase().includes('cogs') &&
+                                                        !e.accountName.toLowerCase().includes('cost of goods') &&
+                                                        !e.accountName.toLowerCase().includes('inventory') &&
+                                                        !e.accountName.toLowerCase().includes('finished goods') &&
+                                                        !e.accountName.toLowerCase().includes('discount')
+                                                    );
+
+                                                    // Keep entries up to and including the first customer entry's set
+                                                    // A normal SI has ~6 entries per set, so keep first 6-8 entries
+                                                    const entriesToKeep = customerEntries.length > 0 
+                                                        ? Math.min(entries.findIndex(e => e.id === customerEntries[0].id) + 8, entries.length)
+                                                        : 8; // Fallback: keep first 8 if we can't find customer entry
+                                                    
+                                                    const entriesToDelete = entries.slice(entriesToKeep);
+
+                                                    for (const entryToDelete of entriesToDelete) {
+                                                        const entryRef = doc(db, 'ledger', entryToDelete.id);
+                                                        batch.delete(entryRef);
+                                                        batchCount++;
+                                                        removedCount++;
+
+                                                        if (batchCount >= 400) {
+                                                            await batch.commit();
+                                                            batchCount = 0;
+                                                        }
+                                                    }
+                                                }
+
+                                                if (batchCount > 0) {
+                                                    await batch.commit();
+                                                }
+
+                                                alert(`✅ Removed ${removedCount} duplicate ledger entries.\n\nPlease refresh the page to see updated ledger.`);
+                                                setLedgerScanResult(null);
+                                            } catch (error: any) {
+                                                console.error('❌ Error removing duplicates:', error);
+                                                alert(`Error removing duplicates: ${error.message || 'Unknown error'}`);
+                                            } finally {
+                                                setRemovingDuplicates(false);
+                                            }
+                                        }}
+                                        disabled={removingDuplicates}
+                                        className="px-3 py-1.5 bg-red-700 hover:bg-red-800 text-white rounded text-xs font-semibold disabled:opacity-50"
+                                    >
+                                        {removingDuplicates ? 'Removing...' : 'Remove Duplicate Entries'}
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Missing Headers Section */}
+                            {ledgerScanResult.missingHeaders.length > 0 && (
+                                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+                                    <h4 className="font-bold text-amber-900 mb-2">
+                                        📝 Found {ledgerScanResult.missingHeaders.length} Invoice(s) with Missing Headers:
+                                    </h4>
+                                    <ul className="list-disc list-inside text-sm text-amber-800 mb-3 max-h-40 overflow-y-auto">
+                                        {ledgerScanResult.missingHeaders.slice(0, 20).map(m => (
+                                            <li key={m.transactionId}>
+                                                <strong>{m.invoiceNo}</strong>: Date {m.date}, Net ${m.netTotal.toFixed(2)}
+                                            </li>
+                                        ))}
+                                        {ledgerScanResult.missingHeaders.length > 20 && (
+                                            <li className="text-amber-600 italic">... and {ledgerScanResult.missingHeaders.length - 20} more</li>
+                                        )}
+                                    </ul>
+                                    <button
+                                        onClick={async () => {
+                                            if (!confirm(`This will CREATE ${ledgerScanResult.missingHeaders.length} invoice header document(s) in Firestore based on ledger entries.\n\nThese invoices will appear in Sales Invoices (View / Update) but will have minimal details (no items list).\n\nContinue?`)) {
+                                                return;
+                                            }
+
+                                            const pin = prompt('Enter Supervisor PIN (7860) to rebuild invoices:');
+                                            if (pin !== SUPERVISOR_PIN) {
+                                                alert('Invalid PIN. Operation cancelled.');
+                                                return;
+                                            }
+
+                                            setRebuildingInvoices(true);
+
+                                            try {
+                                                if (!currentFactory?.id) {
+                                                    alert('❌ Error: No factory selected. Please select a factory first.');
+                                                    setRebuildingInvoices(false);
+                                                    return;
+                                                }
+
+                                                const batch = writeBatch(db);
+                                                let batchCount = 0;
+                                                let createdCount = 0;
+
+                                                for (const missing of ledgerScanResult.missingHeaders) {
+                                                    // CRITICAL: Always use current factory ID (invoices are filtered by factoryId)
+                                                    // Even if ledger entry has a different factoryId, we assign to current factory
+                                                    const targetFactoryId = currentFactory.id;
+                                                    
+                                                    // Create minimal invoice header
+                                                    const invoiceRef = doc(collection(db, 'salesInvoices'));
+                                                    const minimalInvoice: any = {
+                                                        invoiceNo: missing.invoiceNo,
+                                                        date: missing.date,
+                                                        status: 'Posted', // Already posted (ledger entries exist)
+                                                        customerId: missing.customerId,
+                                                        factoryId: targetFactoryId, // CRITICAL: Must match current factory
+                                                        currency: 'USD',
+                                                        exchangeRate: 1,
+                                                        customerCurrency: 'USD',
+                                                        customerExchangeRate: 1,
+                                                        discount: 0,
+                                                        surcharge: 0,
+                                                        items: [], // Empty - we can't reconstruct items from ledger alone
+                                                        additionalCosts: [],
+                                                        grossTotal: missing.netTotal, // Approximate
+                                                        netTotal: missing.netTotal,
+                                                        logoId: '',
+                                                        createdAt: serverTimestamp()
+                                                    };
+
+                                                    batch.set(invoiceRef, minimalInvoice);
+                                                    batchCount++;
+                                                    createdCount++;
+
+                                                    if (batchCount >= 400) {
+                                                        await batch.commit();
+                                                        batchCount = 0;
+                                                    }
+                                                }
+
+                                                if (batchCount > 0) {
+                                                    await batch.commit();
+                                                }
+
+                                                // Verify invoices were created
+                                                const verifyQuery = query(
+                                                    collection(db, 'salesInvoices'),
+                                                    where('factoryId', '==', currentFactory?.id || '')
+                                                );
+                                                const verifySnap = await getDocs(verifyQuery);
+                                                const createdInvoiceNos = ledgerScanResult.missingHeaders.map(m => m.invoiceNo);
+                                                const foundInvoices = verifySnap.docs
+                                                    .map(doc => doc.data().invoiceNo)
+                                                    .filter(no => createdInvoiceNos.includes(no));
+                                                
+                                                const factoryWarning = ledgerScanResult.missingHeaders.some(m => 
+                                                    m.factoryId && m.factoryId !== '' && m.factoryId !== currentFactory?.id
+                                                ) 
+                                                    ? `\n\n⚠️ Note: Some invoices were assigned to a different factory. Make sure you're viewing the correct factory.`
+                                                    : '';
+                                                
+                                                const verificationMsg = foundInvoices.length === createdCount
+                                                    ? `✅ Verified: All ${createdCount} invoices are now in Firestore.`
+                                                    : `⚠️ Warning: Created ${createdCount} invoices, but only ${foundInvoices.length} found with current factory filter.`;
+                                                
+                                                alert(`${verificationMsg}\n\n` +
+                                                    `Factory ID used: ${currentFactory?.id || 'N/A'}\n` +
+                                                    `Current Factory: ${currentFactory?.name || 'N/A'}\n` +
+                                                    `Created invoices: ${createdInvoiceNos.join(', ')}\n\n` +
+                                                    `Please REFRESH THE PAGE (F5 or Ctrl+R) to see these invoices in Sales Invoices (View / Update).` +
+                                                    factoryWarning);
+                                                setLedgerScanResult(null);
+                                            } catch (error: any) {
+                                                console.error('❌ Error rebuilding invoices:', error);
+                                                alert(`Error rebuilding invoices: ${error.message || 'Unknown error'}`);
+                                            } finally {
+                                                setRebuildingInvoices(false);
+                                            }
+                                        }}
+                                        disabled={rebuildingInvoices}
+                                        className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold disabled:opacity-50"
+                                    >
+                                        {rebuildingInvoices ? 'Rebuilding...' : 'Rebuild Missing Invoice Headers'}
+                                    </button>
+                                </div>
+                            )}
+
+                            {ledgerScanResult.duplicates.length === 0 && ledgerScanResult.missingHeaders.length === 0 && (
+                                <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
+                                    <p className="text-green-800 font-semibold">✅ No issues found! All invoices have proper headers and no duplicates detected.</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Delete All Sales Invoices (Option 2) */}
+            <div className="bg-white border-2 border-orange-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-orange-100 p-3 rounded-lg">
+                        <Trash2 className="text-orange-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Delete All Sales Invoices (Preserve Opening Balances)</h3>
+                        <p className="text-sm text-slate-600">
+                            Delete <strong>ALL Sales Invoices</strong> and their ledger entries for the current factory. 
+                            This will <strong>reverse inventory reductions</strong> and <strong>restore customer balances</strong>.
+                            <br />
+                            <strong className="text-green-700">✅ Opening balances (partners & items) will be preserved.</strong>
+                        </p>
+                    </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                    <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-amber-900 mb-2">
+                            ⚠️ This will delete:
+                        </p>
+                        <ul className="list-disc list-inside text-xs text-amber-800 mb-2 space-y-1">
+                            <li>All Sales Invoices (Posted and Unposted) for current factory</li>
+                            <li>All ledger entries with <code className="bg-amber-100 px-1 rounded">transactionType = SALES_INVOICE</code></li>
+                            <li>Inventory reductions will be reversed (stock restored)</li>
+                            <li>Customer AR balances will be reversed</li>
+                        </ul>
+                        <p className="text-sm font-semibold text-green-700 mt-2">
+                            ✅ This will NOT delete:
+                        </p>
+                        <ul className="list-disc list-inside text-xs text-green-800 mb-2 space-y-1">
+                            <li>Opening balance ledger entries (<code className="bg-green-100 px-1 rounded">transactionType = OPENING_BALANCE</code>)</li>
+                            <li>Partner opening balances (stored in partner documents)</li>
+                            <li>Item opening stock entries</li>
+                            <li>Purchases, Productions, or other transactions</li>
+                        </ul>
+                        <p className="text-xs text-amber-700 mt-2">
+                            <strong>Requires Supervisor PIN (7860)</strong>
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            if (!currentFactory?.id) {
+                                alert('❌ Please select a factory first.');
+                                return;
+                            }
+
+                            const pin = prompt('Enter Supervisor PIN (7860) to delete ALL Sales Invoices:');
+                            if (pin !== SUPERVISOR_PIN) {
+                                alert('Invalid PIN. Operation cancelled.');
+                                return;
+                            }
+
+                            const confirmText = prompt(
+                                `⚠️ WARNING: This will delete ALL Sales Invoices for factory "${currentFactory.name}".\n\n` +
+                                `This action:\n` +
+                                `- Deletes all Sales Invoice documents\n` +
+                                `- Deletes all SALES_INVOICE ledger entries\n` +
+                                `- Restores inventory stock\n` +
+                                `- Reverses customer balances\n\n` +
+                                `Opening balances will be preserved.\n\n` +
+                                `Type "DELETE ALL SALES INVOICES" to confirm:`
+                            );
+
+                            if (confirmText !== 'DELETE ALL SALES INVOICES') {
+                                alert('Confirmation text does not match. Operation cancelled.');
+                                return;
+                            }
+
+                            setDeletingAllSalesInvoices(true);
+                            setDeleteAllSIResult(null);
+
+                            try {
+                                const errors: string[] = [];
+                                let deletedInvoices = 0;
+                                let deletedLedgerEntries = 0;
+                                let restoredStockItems = 0;
+                                let restoredCustomerBalances = 0;
+
+                                // Step 1: Get all sales invoices for current factory
+                                const invoicesQuery = query(
+                                    collection(db, 'salesInvoices'),
+                                    where('factoryId', '==', currentFactory.id)
+                                );
+                                const invoicesSnap = await getDocs(invoicesQuery);
+                                
+                                if (invoicesSnap.empty) {
+                                    setDeleteAllSIResult({
+                                        success: true,
+                                        message: 'No sales invoices found for this factory.',
+                                        deleted: 0,
+                                        errors: []
+                                    });
+                                    setDeletingAllSalesInvoices(false);
+                                    return;
+                                }
+
+                                const invoices: any[] = [];
+                                invoicesSnap.forEach(docSnap => {
+                                    invoices.push({ id: docSnap.id, ...docSnap.data() });
+                                });
+
+                                console.log(`📋 Found ${invoices.length} sales invoices to delete`);
+
+                                // Step 2: Process each invoice (delete ledger entries, restore stock/balances, then delete invoice)
+                                for (let i = 0; i < invoices.length; i++) {
+                                    const invoice = invoices[i];
+                                    
+                                    try {
+                                        // Delete ledger entries for this invoice
+                                        const transactionId = invoice.invoiceNo.startsWith('DS-') 
+                                            ? `DS-${invoice.invoiceNo}` 
+                                            : `INV-${invoice.invoiceNo}`;
+                                        
+                                        // Query ALL ledger entries for this transactionId (regardless of factoryId)
+                                        // This ensures old entries without factoryId are also deleted
+                                        const ledgerQuery = query(
+                                            collection(db, 'ledger'),
+                                            where('transactionId', '==', transactionId)
+                                        );
+                                        const ledgerSnap = await getDocs(ledgerQuery);
+                                        
+                                        const batch = writeBatch(db);
+                                        let batchCount = 0;
+
+                                        // Delete ledger entries
+                                        ledgerSnap.forEach(docSnap => {
+                                            batch.delete(docSnap.ref);
+                                            batchCount++;
+                                            deletedLedgerEntries++;
+                                        });
+
+                                        // Restore inventory stock (if invoice was posted)
+                                        if (invoice.status === 'Posted' && invoice.items && invoice.items.length > 0) {
+                                            for (const soldItem of invoice.items) {
+                                                if (soldItem.itemId && soldItem.qty) {
+                                                    try {
+                                                        const itemRef = doc(db, 'items', soldItem.itemId);
+                                                        const itemDoc = await getDoc(itemRef);
+                                                        
+                                                        if (itemDoc.exists()) {
+                                                            const currentStock = itemDoc.data().stockQty || 0;
+                                                            batch.update(itemRef, { stockQty: currentStock + soldItem.qty });
+                                                            batchCount++;
+                                                            restoredStockItems++;
+                                                        }
+                                                    } catch (error: any) {
+                                                        errors.push(`Failed to restore stock for item ${soldItem.itemId}: ${error.message}`);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Restore customer balance (if invoice was posted)
+                                        if (invoice.status === 'Posted' && invoice.customerId && invoice.netTotal) {
+                                            try {
+                                                const customerRef = doc(db, 'partners', invoice.customerId);
+                                                const customerDoc = await getDoc(customerRef);
+                                                
+                                                if (customerDoc.exists()) {
+                                                    const currentBalance = customerDoc.data().balance || 0;
+                                                    batch.update(customerRef, { balance: currentBalance - invoice.netTotal });
+                                                    batchCount++;
+                                                    restoredCustomerBalances++;
+                                                }
+                                            } catch (error: any) {
+                                                errors.push(`Failed to restore balance for customer ${invoice.customerId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        // Delete the invoice document
+                                        const invoiceRef = doc(db, 'salesInvoices', invoice.id);
+                                        batch.delete(invoiceRef);
+                                        batchCount++;
+                                        deletedInvoices++;
+
+                                        // Commit batch (Firebase limit is 500 operations per batch)
+                                        if (batchCount > 0) {
+                                            await batch.commit();
+                                        }
+
+                                        // Small delay every 10 invoices to avoid rate limiting
+                                        if ((i + 1) % 10 === 0) {
+                                            await new Promise(resolve => setTimeout(resolve, 200));
+                                        }
+
+                                        console.log(`✅ Deleted invoice ${invoice.invoiceNo} (${i + 1}/${invoices.length})`);
+                                    } catch (error: any) {
+                                        console.error(`❌ Error processing invoice ${invoice.invoiceNo}:`, error);
+                                        errors.push(`Invoice ${invoice.invoiceNo}: ${error.message || 'Unknown error'}`);
+                                    }
+                                }
+
+                                // Step 3: Update local state (remove deleted invoices from state)
+                                // This will happen automatically via Firebase listener, but we can also dispatch
+                                // Note: The Firebase listener will update state automatically
+
+                                const successMsg = `✅ Successfully deleted ${deletedInvoices} sales invoice(s).\n\n` +
+                                    `- Deleted ${deletedLedgerEntries} ledger entries\n` +
+                                    `- Restored stock for ${restoredStockItems} item(s)\n` +
+                                    `- Restored balances for ${restoredCustomerBalances} customer(s)\n\n` +
+                                    (errors.length > 0 ? `⚠️ ${errors.length} error(s) occurred (see console for details).\n\n` : '') +
+                                    `Please refresh the page (F5) to see updated data.`;
+
+                                setDeleteAllSIResult({
+                                    success: errors.length === 0,
+                                    message: successMsg,
+                                    deleted: deletedInvoices,
+                                    errors
+                                });
+
+                                alert(successMsg);
+                            } catch (error: any) {
+                                console.error('❌ Error deleting all sales invoices:', error);
+                                setDeleteAllSIResult({
+                                    success: false,
+                                    message: `Error: ${error.message || 'Unknown error'}`,
+                                    deleted: 0,
+                                    errors: [error.message || 'Unknown error']
+                                });
+                                alert(`❌ Error deleting sales invoices: ${error.message || 'Unknown error'}`);
+                            } finally {
+                                setDeletingAllSalesInvoices(false);
+                            }
+                        }}
+                        disabled={deletingAllSalesInvoices || !currentFactory}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+                    >
+                        {deletingAllSalesInvoices ? 'Deleting...' : `Delete All Sales Invoices (${state.salesInvoices.filter(inv => inv.factoryId === currentFactory?.id).length} found)`}
+                    </button>
+
+                    {deleteAllSIResult && (
+                        <div className={`mt-4 p-4 rounded-lg border-2 ${
+                            deleteAllSIResult.success 
+                                ? 'bg-green-50 border-green-300' 
+                                : 'bg-red-50 border-red-300'
+                        }`}>
+                            <p className={`font-semibold ${
+                                deleteAllSIResult.success ? 'text-green-800' : 'text-red-800'
+                            }`}>
+                                {deleteAllSIResult.success ? '✅ Success' : '❌ Errors Occurred'}
+                            </p>
+                            <p className="text-sm text-slate-700 mt-2 whitespace-pre-line">
+                                {deleteAllSIResult.message}
+                            </p>
+                            {deleteAllSIResult.errors.length > 0 && (
+                                <div className="mt-2">
+                                    <p className="text-xs font-semibold text-red-700">Errors:</p>
+                                    <ul className="list-disc list-inside text-xs text-red-600 mt-1">
+                                        {deleteAllSIResult.errors.slice(0, 10).map((err, idx) => (
+                                            <li key={idx}>{err}</li>
+                                        ))}
+                                        {deleteAllSIResult.errors.length > 10 && (
+                                            <li>... and {deleteAllSIResult.errors.length - 10} more errors</li>
+                                        )}
+                                    </ul>
+                                </div>
                             )}
                         </div>
                     )}
