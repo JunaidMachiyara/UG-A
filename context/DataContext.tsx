@@ -12,13 +12,15 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 
 // Firestore cannot store `undefined`. Even with `ignoreUndefinedProperties`, it's safer to
 // proactively remove undefined values, especially for nested objects/arrays.
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
     if (value === null || typeof value !== 'object') return false;
     const proto = Object.getPrototypeOf(value);
     return proto === Object.prototype || proto === null;
-};
+}
 
-const stripUndefinedDeep = <T,>(value: T): T => {
+// NOTE: In `.tsx`, generic arrow functions like `const fn = <T,>(...) => ...`
+// can be parsed as JSX by Babel. Use a function declaration to keep Vite dev happy.
+function stripUndefinedDeep<T>(value: T): T {
     if (value === undefined) return value;
     if (Array.isArray(value)) {
         return value
@@ -34,7 +36,7 @@ const stripUndefinedDeep = <T,>(value: T): T => {
         return out as any;
     }
     return value;
-};
+}
 
 type Action =
     | { type: 'POST_TRANSACTION'; payload: { entries: Omit<LedgerEntry, 'id'>[] } }
