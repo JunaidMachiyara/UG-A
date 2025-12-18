@@ -590,6 +590,8 @@ interface DataContextType {
     addOriginalOpening: (opening: OriginalOpening) => Promise<void>;
     deleteOriginalOpening: (id: string) => void;
     addProduction: (productions: ProductionEntry[]) => Promise<void>;
+    deleteProduction: (id: string) => Promise<void>;
+    deleteProductionsForDate: (date: string) => Promise<number>;
     postBaleOpening: (stagedItems: { itemId: string, qty: number, date: string }[]) => Promise<void>;
     addPurchase: (purchase: Purchase) => Promise<void>;
     updatePurchase: (purchase: Purchase) => void;
@@ -2119,6 +2121,61 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => window.location.reload(), 500);
     };
 
+    const deleteProductionsForDate = async (date: string): Promise<number> => {
+        const factoryId = currentFactory?.id || '';
+        const productionsForDate = state.productions.filter(p => p.date === date && p.factoryId === factoryId);
+        if (productionsForDate.length === 0) return 0;
+
+        // 1) Delete ALL ledger transactions for production on that date (use ledger transaction IDs, not production doc IDs)
+        const productionTxnIds = Array.from(new Set(
+            state.ledger
+                .filter(e => e.factoryId === factoryId && e.date === date && e.transactionType === TransactionType.PRODUCTION)
+                .map(e => e.transactionId)
+        ));
+
+        for (const txnId of productionTxnIds) {
+            await deleteTransaction(txnId, `Delete Production (${date})`, CURRENT_USER?.name || 'Admin');
+        }
+
+        // 2) Reverse item stock changes for those production entries
+        // (production adds qtyProduced to stock; deleting should subtract it back out)
+        const qtyByItem = new Map<string, number>();
+        productionsForDate.forEach(p => {
+            qtyByItem.set(p.itemId, (qtyByItem.get(p.itemId) || 0) + (p.qtyProduced || 0));
+        });
+
+        const itemEntries = Array.from(qtyByItem.entries());
+        const ITEM_BATCH_SIZE = 500;
+        for (let i = 0; i < itemEntries.length; i += ITEM_BATCH_SIZE) {
+            const batch = writeBatch(db);
+            for (const [itemId, qtyDelta] of itemEntries.slice(i, i + ITEM_BATCH_SIZE)) {
+                const item = state.items.find(it => it.id === itemId);
+                if (!item) continue;
+                batch.update(doc(db, 'items', itemId), { stockQty: (item.stockQty || 0) - qtyDelta });
+            }
+            await batch.commit();
+        }
+
+        // 3) Delete production documents (these are already Firestore doc IDs in state)
+        const PROD_BATCH_SIZE = 500;
+        for (let i = 0; i < productionsForDate.length; i += PROD_BATCH_SIZE) {
+            const batch = writeBatch(db);
+            productionsForDate.slice(i, i + PROD_BATCH_SIZE).forEach(p => {
+                batch.delete(doc(db, 'productions', p.id));
+            });
+            await batch.commit();
+        }
+
+        // Optimistically update local state (listeners will also reconcile)
+        dispatch({ type: 'LOAD_PRODUCTIONS', payload: state.productions.filter(p => p.date !== date) });
+
+        // Single refresh (do NOT refresh per entry)
+        console.log('🔄 Refreshing page to update Balance Sheet...');
+        setTimeout(() => window.location.reload(), 500);
+
+        return productionsForDate.length;
+    };
+
     const postBaleOpening = async (stagedItems: { itemId: string, qty: number, date: string }[]) => {
         if (stagedItems.length === 0) return;
         const transactionId = generateId(); const expenseId = state.accounts.find(a => a.name.includes('Cost of Goods'))?.id || '501'; const fgInvId = state.accounts.find(a => a.name.includes('Finished Goods'))?.id || '105';
@@ -3591,6 +3648,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             deleteOriginalOpening,
             addProduction,
             deleteProduction,
+            deleteProductionsForDate,
             postBaleOpening,
             addPurchase,
             updatePurchase,

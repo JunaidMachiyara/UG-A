@@ -47,7 +47,7 @@ type ModuleType = 'production' | 'purchase' | 'sales';
 const SUPERVISOR_PIN = '7860';
 
 export const DataEntry: React.FC = () => {
-    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
+    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, deleteProductionsForDate, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
     const location = useLocation();
     const setupConfigs = useSetupConfigs();
     
@@ -953,6 +953,42 @@ export const DataEntry: React.FC = () => {
             alert('✅ Production deleted successfully! Ledger entries reversed.');
         }
     }
+
+    const [deletingProdDay, setDeletingProdDay] = useState(false);
+    const handleDeleteAllProductionForDate = async () => {
+        const prodsForDate = state.productions.filter(p => p.date === prodDate);
+        if (prodsForDate.length === 0) {
+            alert(`No production entries found for ${prodDate}.`);
+            return;
+        }
+
+        const pin = prompt(`Enter Supervisor PIN to delete ALL production entries for ${prodDate}:`);
+        if (pin !== SUPERVISOR_PIN) {
+            alert('❌ Invalid PIN! Deletion cancelled.');
+            return;
+        }
+
+        const ok = window.confirm(
+            `Delete ALL ${prodsForDate.length} production entries for ${prodDate}?\n\n` +
+            `This will:\n` +
+            `- Remove production rows\n` +
+            `- Reverse ALL production ledger entries for that date\n` +
+            `- Reduce Finished Goods stock accordingly\n\n` +
+            `This cannot be undone.`
+        );
+        if (!ok) return;
+
+        setDeletingProdDay(true);
+        try {
+            const deletedCount = await deleteProductionsForDate(prodDate);
+            alert(`✅ Deleted ${deletedCount} production entries for ${prodDate}.`);
+        } catch (error: any) {
+            console.error('❌ Error deleting production for date:', error);
+            alert(`❌ Failed to delete production for ${prodDate}: ${error?.message || 'Unknown error'}`);
+        } finally {
+            setDeletingProdDay(false);
+        }
+    };
 
     const handleDeleteSalesInvoice = (id: string) => {
         const pin = prompt('Enter Master Key to delete sales invoice:');
@@ -3934,7 +3970,56 @@ export const DataEntry: React.FC = () => {
                                         })}</div> )}</div>
                                         <div className="border-t border-slate-200 pt-4 mt-auto"><div className="flex justify-between text-sm mb-4 font-medium text-slate-700"><span>Total Units:</span><span>{stagedProds.reduce((sum, p) => sum + p.qtyProduced, 0)}</span></div><button onClick={() => setShowProdSummary(true)} disabled={stagedProds.length === 0} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2"><Save size={18} /> Finalize & Save</button></div>
                                     </div>
-                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200"><h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><History size={16} className="text-slate-400" /> Saved Entries ({prodDate})</h4><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Weight</th><th className="px-4 py-2">Serials</th><th className="px-4 py-2 text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{state.productions.filter(p => p.date === prodDate).map(p => ( <tr key={p.id} className="hover:bg-slate-50"><td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td><td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td><td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td><td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td><td className="px-4 py-2 text-right"><button onClick={() => handleDeleteProduction(p.id)} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete"><Trash2 size={14} /></button></td></tr> ))} {state.productions.filter(p => p.date === prodDate).length === 0 && ( <tr><td colSpan={5} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td></tr> )}</tbody></table></div></div>
+                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200">
+                                    <div className="flex items-center justify-between gap-3 mb-4">
+                                        <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                                            <History size={16} className="text-slate-400" /> Saved Entries ({prodDate})
+                                        </h4>
+                                        <button
+                                            type="button"
+                                            onClick={handleDeleteAllProductionForDate}
+                                            disabled={deletingProdDay || state.productions.filter(p => p.date === prodDate).length === 0}
+                                            className="px-3 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
+                                            title="Delete ALL production entries for this date"
+                                        >
+                                            <Trash2 size={14} />
+                                            {deletingProdDay ? 'Deleting...' : `Delete All (${state.productions.filter(p => p.date === prodDate).length})`}
+                                        </button>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
+                                                <tr>
+                                                    <th className="px-4 py-2">Item</th>
+                                                    <th className="px-4 py-2">Qty</th>
+                                                    <th className="px-4 py-2">Weight</th>
+                                                    <th className="px-4 py-2">Serials</th>
+                                                    <th className="px-4 py-2 text-right">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {state.productions.filter(p => p.date === prodDate).map(p => (
+                                                    <tr key={p.id} className="hover:bg-slate-50">
+                                                        <td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td>
+                                                        <td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td>
+                                                        <td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td>
+                                                        <td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td>
+                                                        <td className="px-4 py-2 text-right">
+                                                            <button onClick={() => handleDeleteProduction(p.id)} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete">
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {state.productions.filter(p => p.date === prodDate).length === 0 && (
+                                                    <tr>
+                                                        <td colSpan={5} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
                             </div>
                         )}
 
