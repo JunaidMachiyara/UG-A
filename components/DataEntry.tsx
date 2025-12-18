@@ -4018,9 +4018,72 @@ export const DataEntry: React.FC = () => {
             {/* Production Summary Modal */}
             {showProdSummary && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><CheckCircle className="text-emerald-500" /> Confirm Production</h3><button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button></div>
-                        <div className="p-6"><p className="text-sm text-slate-500 mb-4">Please review the staged items before saving. Compare with yesterday's output to ensure consistency.</p><table className="w-full text-sm text-left mb-6"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-3">Item</th><th className="px-4 py-3 text-right">Qty (Today)</th><th className="px-4 py-3 text-right">Yesterday</th><th className="px-4 py-3 text-right">Variance</th></tr></thead><tbody className="divide-y divide-slate-100">{stagedProds.map(p => { const yesterdayQty = getYesterdayProduction(p.itemId); const variance = p.qtyProduced - yesterdayQty; return ( <tr key={p.id}><td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td><td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td><td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td><td className={`px-4 py-3 text-right ${variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'}`}>{variance > 0 ? '+' : ''}{variance}</td></tr> ); })}</tbody></table><div className="flex justify-end gap-3"><button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">Cancel</button><button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">Save & Continue</button></div></div>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <CheckCircle className="text-emerald-500" /> Confirm Production
+                            </h3>
+                            <button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto">
+                            <p className="text-sm text-slate-500 mb-4">
+                                Please review the staged items before saving. Compare with yesterday's output to ensure consistency.
+                            </p>
+
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                <div className="max-h-[55vh] overflow-y-auto">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-slate-50 text-slate-500 uppercase text-xs sticky top-0 z-10 border-b border-slate-200">
+                                            <tr>
+                                                <th className="px-4 py-3">Item</th>
+                                                <th className="px-4 py-3 text-right">Qty (Today)</th>
+                                                <th className="px-4 py-3 text-right">Yesterday</th>
+                                                <th className="px-4 py-3 text-right">Variance</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {stagedProds.map(p => {
+                                                const yesterdayQty = getYesterdayProduction(p.itemId);
+                                                const variance = p.qtyProduced - yesterdayQty;
+                                                return (
+                                                    <tr key={p.id}>
+                                                        <td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td>
+                                                        <td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td>
+                                                        <td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td>
+                                                        <td
+                                                            className={`px-4 py-3 text-right ${
+                                                                variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'
+                                                            }`}
+                                                        >
+                                                            {variance > 0 ? '+' : ''}
+                                                            {variance}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                            <button
+                                onClick={() => setShowProdSummary(false)}
+                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleFinalizeProduction}
+                                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm"
+                            >
+                                Save & Continue
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
