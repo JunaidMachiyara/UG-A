@@ -1,3 +1,11 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4 entrypoint */
+@import "tailwindcss";
+
+/* Tell Tailwind where to scan for classnames (repo is not under /src only). */
+@source "../index.html";
+@source "../App.tsx";
+@source "../index.tsx";
+@source "../components/**/*.{ts,tsx}";
+@source "../context/**/*.{ts,tsx}";
+@source "../hooks/**/*.{ts,tsx}";
+@source "../services/**/*.{ts,tsx}";
