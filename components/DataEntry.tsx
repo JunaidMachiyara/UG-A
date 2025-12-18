@@ -240,6 +240,18 @@ export const DataEntry: React.FC = () => {
     const [siItemRate, setSiItemRate] = useState('');
     const [siCart, setSiCart] = useState<SalesInvoiceItem[]>([]);
     
+    const siSelectedItem = useMemo(() => state.items.find(i => i.id === siItemId), [siItemId, state.items]);
+    const siStockUnitLabel = useMemo(() => {
+        if (!siSelectedItem) return '';
+        const qty = siSelectedItem.stockQty ?? 0;
+        const pt = siSelectedItem.packingType;
+        if (pt === PackingType.KG) return 'Kg';
+        // simple pluralization for display
+        if (qty === 1) return pt;
+        if (pt === PackingType.BOX) return 'Boxes';
+        return `${pt}s`;
+    }, [siSelectedItem]);
+    
     // SI Additional Costs
     const [siCosts, setSiCosts] = useState<InvoiceAdditionalCost[]>([]);
     
@@ -1294,6 +1306,7 @@ export const DataEntry: React.FC = () => {
             containerNumber: bpContainer,
             divisionId: bpDivision,
             subDivisionId: bpSubDivision,
+            factoryId: state.currentFactory?.id || '',
             currency: bpCurrency,
             exchangeRate: bpExchangeRate,
             items: bpCart,
@@ -3603,6 +3616,26 @@ export const DataEntry: React.FC = () => {
                                                             formatSelected={formatItemSelected}
                                                             searchFields={['code', 'name', 'category']}
                                                         />
+                                                        {siSelectedItem && (
+                                                            <div className="mt-1 rounded-lg border border-slate-200 bg-white/70 px-2 py-1 text-[11px] leading-4 text-slate-600">
+                                                                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                                                                    <div className="flex items-baseline gap-1.5">
+                                                                        <span className="text-slate-500">In Stock:</span>
+                                                                        <span className="font-semibold text-slate-700">
+                                                                            {(siSelectedItem.stockQty ?? 0).toLocaleString()} {siStockUnitLabel}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="flex items-baseline gap-1.5">
+                                                                        <span className="text-slate-500">Package Size:</span>
+                                                                        <span className="font-semibold text-slate-700">
+                                                                            {siSelectedItem.packingType === PackingType.KG
+                                                                                ? '1 Kg (by weight)'
+                                                                                : `${(siSelectedItem.weightPerUnit ?? 0).toLocaleString()} Kg / ${siSelectedItem.packingType}`}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                      </div>
                                                      <div className="md:col-span-2">
                                                          <label className="block text-xs font-semibold text-slate-500 mb-1">Qty</label>
