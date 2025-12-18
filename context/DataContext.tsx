@@ -10,6 +10,32 @@ import { getAccountId } from '../services/accountMap';
 // Helper for simple ID generation
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// Firestore cannot store `undefined`. Even with `ignoreUndefinedProperties`, it's safer to
+// proactively remove undefined values, especially for nested objects/arrays.
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+    if (value === null || typeof value !== 'object') return false;
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+};
+
+const stripUndefinedDeep = <T,>(value: T): T => {
+    if (value === undefined) return value;
+    if (Array.isArray(value)) {
+        return value
+            .map(v => stripUndefinedDeep(v))
+            .filter(v => v !== undefined) as any;
+    }
+    if (isPlainObject(value)) {
+        const out: Record<string, unknown> = {};
+        Object.entries(value).forEach(([k, v]) => {
+            const cleaned = stripUndefinedDeep(v);
+            if (cleaned !== undefined) out[k] = cleaned;
+        });
+        return out as any;
+    }
+    return value;
+};
+
 type Action =
     | { type: 'POST_TRANSACTION'; payload: { entries: Omit<LedgerEntry, 'id'>[] } }
     | { type: 'RESTORE_STATE'; payload: AppState }
@@ -2143,7 +2169,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Save to Firebase if loaded
             if (isFirestoreLoaded) {
                 const { id, ...invoiceData } = invoiceWithFactory;
-                addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+                const cleanedInvoiceData = stripUndefinedDeep(invoiceData);
+                addDoc(collection(db, 'salesInvoices'), { ...cleanedInvoiceData, createdAt: serverTimestamp() })
                     .then(() => console.log('✅ Sales invoice saved to Firebase'))
                     .catch((error) => {
                         console.error('❌ Error saving sales invoice to Firebase:', error);
@@ -2170,7 +2197,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (isFirestoreLoaded) {
             const invoiceRef = doc(db, 'salesInvoices', invoice.id);
             const { id, ...invoiceData } = invoiceWithFactory;
-            updateDoc(invoiceRef, { ...invoiceData, updatedAt: serverTimestamp() })
+            const cleanedInvoiceData = stripUndefinedDeep(invoiceData);
+            updateDoc(invoiceRef, { ...cleanedInvoiceData, updatedAt: serverTimestamp() })
                 .then(() => console.log('✅ Sales invoice updated in Firebase'))
                 .catch((error) => {
                     console.error('❌ Error updating sales invoice:', error);
@@ -2325,7 +2353,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 factoryId: currentFactory?.id || ''
             };
             const { id, ...invoiceData } = invoiceWithFactory;
-            addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+            const cleanedInvoiceData = stripUndefinedDeep(invoiceData);
+            addDoc(collection(db, 'salesInvoices'), { ...cleanedInvoiceData, createdAt: serverTimestamp() })
                 .then(() => console.log('✅ Direct Sale saved to Firebase'))
                 .catch((error) => console.error('❌ Error saving direct sale:', error));
         }
