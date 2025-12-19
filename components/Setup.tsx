@@ -1044,7 +1044,8 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-600 font-medium">{r.id}</span> },
+            // Display the business code the user assigned (stored in the `id` field)
+            { header: 'Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-600 font-medium">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
