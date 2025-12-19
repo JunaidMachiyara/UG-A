@@ -2628,9 +2628,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const addOriginalProduct = (prod: OriginalProduct) => {
         const prodWithFactory = { ...prod, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_ORIGINAL_PRODUCT', payload: prodWithFactory });
-        const { id: _, ...prodData } = prodWithFactory;
-        addDoc(collection(db, 'originalProducts'), { ...prodData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ OriginalProduct saved'))
+
+        // Use the business Code (id) as the Firestore document ID so UI can display it.
+        const { id, ...prodData } = prodWithFactory;
+        const cleanedData = stripUndefinedDeep(prodData);
+        setDoc(doc(db, 'originalProducts', id), { ...cleanedData, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
+            .then(() => console.log('✅ OriginalProduct saved with ID:', id))
             .catch((error) => console.error('❌ Error saving originalProduct:', error));
     };
     const addCategory = (cat: Category) => {
