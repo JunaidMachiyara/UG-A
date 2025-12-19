@@ -28,10 +28,9 @@ import {
     ArrowLeftRight,
     RefreshCw,
     DollarSign,
-    Upload,
-    Download,
     Anchor,
     Printer,
+    Download,
     ChevronDown,
     Search,
     Edit2,
@@ -47,7 +46,7 @@ type ModuleType = 'production' | 'purchase' | 'sales';
 const SUPERVISOR_PIN = '7860';
 
 export const DataEntry: React.FC = () => {
-    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, deleteProductionsForDate, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
+    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
     const location = useLocation();
     const setupConfigs = useSetupConfigs();
     
@@ -138,13 +137,6 @@ export const DataEntry: React.FC = () => {
     const [ooBatch, setOoBatch] = useState('');
     const [ooQty, setOoQty] = useState('');
     const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
-    
-    // --- CSV Upload State for Original Opening ---
-    const [ooCsvFile, setOoCsvFile] = useState<File | null>(null);
-    const [ooCsvPreview, setOoCsvPreview] = useState<any[]>([]);
-    const [ooCsvErrors, setOoCsvErrors] = useState<string[]>([]);
-    const [showOoCsvModal, setShowOoCsvModal] = useState(false);
-    const [ooCsvProcessing, setOoCsvProcessing] = useState(false);
 
     // --- Bales Opening State ---
     const [boDate, setBoDate] = useState(new Date().toISOString().split('T')[0]);
@@ -159,13 +151,6 @@ export const DataEntry: React.FC = () => {
     const [stagedProds, setStagedProds] = useState<ProductionEntry[]>([]);
     const [showProdSummary, setShowProdSummary] = useState(false);
     const [tempSerialTracker, setTempSerialTracker] = useState<Record<string, number>>({});
-    
-    // --- CSV Upload State ---
-    const [csvFile, setCsvFile] = useState<File | null>(null);
-    const [csvPreview, setCsvPreview] = useState<any[]>([]);
-    const [csvErrors, setCsvErrors] = useState<string[]>([]);
-    const [showCsvModal, setShowCsvModal] = useState(false);
-    const [csvProcessing, setCsvProcessing] = useState(false);
 
     // --- Re-baling State ---
     const [rbDate, setRbDate] = useState(new Date().toISOString().split('T')[0]);
@@ -240,32 +225,15 @@ export const DataEntry: React.FC = () => {
     const [siItemRate, setSiItemRate] = useState('');
     const [siCart, setSiCart] = useState<SalesInvoiceItem[]>([]);
     
-    const siSelectedItem = useMemo(() => state.items.find(i => i.id === siItemId), [siItemId, state.items]);
-    const siStockUnitLabel = useMemo(() => {
-        if (!siSelectedItem) return '';
-        const qty = siSelectedItem.stockQty ?? 0;
-        const pt = siSelectedItem.packingType;
-        if (pt === PackingType.KG) return 'Kg';
-        // simple pluralization for display
-        if (qty === 1) return pt;
-        if (pt === PackingType.BOX) return 'Boxes';
-        return `${pt}s`;
-    }, [siSelectedItem]);
-    
     // SI Additional Costs
     const [siCosts, setSiCosts] = useState<InvoiceAdditionalCost[]>([]);
-    
-    // Last Invoice for Proforma
-    const [lastInvoiceForCustomer, setLastInvoiceForCustomer] = useState<SalesInvoice | null>(null);
     const [siCostType, setSiCostType] = useState<any>('Freight');
     const [siCostProvider, setSiCostProvider] = useState('');
-    const [siCostCustomText, setSiCostCustomText] = useState(''); // For Customs/Other text input
     const [siCostAmount, setSiCostAmount] = useState('');
     const [siCostCurrency, setSiCostCurrency] = useState<Currency>('USD');
     const [siCostRate, setSiCostRate] = useState(1);
 
     const [showSiSummary, setShowSiSummary] = useState(false);
-    const [viewingInvoice, setViewingInvoice] = useState<SalesInvoice | null>(null);
 
     // --- Direct Sales State ---
         // --- Produced Production Report State ---
@@ -398,7 +366,7 @@ export const DataEntry: React.FC = () => {
         }
     }, [bpSupplier, state.partners]);
     
-    // Auto-Update Customer Details (Sales Invoice) and Find Last Invoice
+    // Auto-Update Customer Details (Sales Invoice)
     useEffect(() => {
         if (siCustomer) {
             const p = state.partners.find(x => x.id === siCustomer);
@@ -407,17 +375,8 @@ export const DataEntry: React.FC = () => {
                 if (p.divisionId) setSiDivision(p.divisionId);
                 if (p.subDivisionId) setSiSubDivision(p.subDivisionId);
             }
-            
-            // Find the last posted invoice for this customer
-            const lastInvoice = state.salesInvoices
-                .filter(inv => inv.customerId === siCustomer && inv.status === 'Posted')
-                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
-            
-            setLastInvoiceForCustomer(lastInvoice || null);
-        } else {
-            setLastInvoiceForCustomer(null);
         }
-    }, [siCustomer, state.partners, state.salesInvoices]);
+    }, [siCustomer, state.partners]);
 
     // Auto-Update Customer Details (Direct Sales)
     useEffect(() => {
@@ -632,7 +591,7 @@ export const DataEntry: React.FC = () => {
             date: ooDate,
             supplierId: ooSupplier,
             originalType: ooType,
-            ...(ooBatch ? { batchNumber: ooBatch } : {}),
+            batchNumber: ooBatch,
             qtyOpened: qtyVal,
             weightOpened: finalWeight,
             costPerKg: availableStockInfo.avgCost,
@@ -668,267 +627,6 @@ export const DataEntry: React.FC = () => {
     const handleRemoveStagedOpening = (id: string) => {
         setStagedOriginalOpenings(stagedOriginalOpenings.filter(o => o.id !== id));
     };
-
-    // Helper function to calculate available stock for a supplier/type/batch combination
-    const calculateAvailableStock = (supplierId: string, originalTypeId: string, batchNumber?: string) => {
-        const relevantPurchases = state.purchases.filter(p => 
-            p.supplierId === supplierId && 
-            p.originalTypeId === originalTypeId && 
-            (!batchNumber || p.batchNumber === batchNumber)
-        );
-
-        const relevantOpenings = state.originalOpenings.filter(o => 
-            o.supplierId === supplierId && 
-            o.originalType === originalTypeId &&
-            (!batchNumber || o.batchNumber === batchNumber)
-        );
-
-        const relevantDirectSales = state.salesInvoices.filter(inv => 
-            inv.status === 'Posted' && inv.items.some(item => {
-                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
-                return purchase && purchase.supplierId === supplierId && purchase.originalTypeId === originalTypeId && (!batchNumber || purchase.batchNumber === batchNumber);
-            })
-        );
-
-        const sold = relevantDirectSales.reduce((acc, inv) => {
-            inv.items.forEach(item => {
-                const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
-                if (purchase && purchase.supplierId === supplierId && purchase.originalTypeId === originalTypeId && (!batchNumber || purchase.batchNumber === batchNumber)) {
-                    acc.qty += item.qty;
-                    acc.weight += item.totalKg;
-                }
-            });
-            return acc;
-        }, { qty: 0, weight: 0 });
-
-        const purchased = relevantPurchases.reduce((acc, curr) => ({
-            qty: acc.qty + curr.qtyPurchased,
-            weight: acc.weight + curr.weightPurchased,
-            cost: acc.cost + curr.totalLandedCost
-        }), { qty: 0, weight: 0, cost: 0 });
-
-        const opened = relevantOpenings.reduce((acc, curr) => ({
-            qty: acc.qty + curr.qtyOpened,
-            weight: acc.weight + curr.weightOpened
-        }), { qty: 0, weight: 0 });
-
-        const currentQty = purchased.qty - opened.qty - sold.qty;
-        const currentWeight = purchased.weight - opened.weight - sold.weight;
-        const avgCostPerKg = purchased.weight > 0 ? (purchased.cost / purchased.weight) : 0;
-
-        return { 
-            qty: currentQty, 
-            weight: currentWeight, 
-            avgCost: avgCostPerKg 
-        };
-    };
-
-    // --- CSV Upload Handlers for Original Opening ---
-    const handleOoCsvFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        
-        if (!file.name.endsWith('.csv')) {
-            alert('Please select a CSV file');
-            return;
-        }
-        
-        setOoCsvFile(file);
-        setOoCsvPreview([]);
-        setOoCsvErrors([]);
-        
-        Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-                if (results.errors.length > 0) {
-                    setOoCsvErrors(results.errors.map(e => e.message));
-                }
-                setOoCsvPreview(results.data);
-                setShowOoCsvModal(true);
-            },
-            error: (error) => {
-                alert(`Error parsing CSV: ${error.message}`);
-            }
-        });
-    };
-
-    const processOoCsvOpening = () => {
-        if (!ooDate) {
-            alert('Please select an entry date first');
-            return;
-        }
-        
-        if (ooCsvPreview.length === 0) {
-            alert('No data to process');
-            return;
-        }
-        
-        setOoCsvProcessing(true);
-        const errors: string[] = [];
-        const newOpenings: OriginalOpening[] = [];
-        
-        ooCsvPreview.forEach((row: any, index: number) => {
-            // Support multiple column name variations
-            const supplierIdentifier = (
-                row.Supplier || row.supplier || 
-                row['Supplier'] || row['supplier'] ||
-                row.SupplierName || row.supplierName ||
-                ''
-            ).trim();
-            
-            const typeIdentifier = (
-                row['Original Type'] || row['original type'] || row['Original type'] ||
-                row.OriginalType || row.originalType || row.originaltype ||
-                row.Type || row.type ||
-                row['Type'] || row['type'] ||
-                ''
-            ).trim();
-            
-            const batchStr = (
-                row.Batch || row.batch || 
-                row['Batch Number'] || row['batch number'] || row['Batch number'] ||
-                row.BatchNumber || row.batchNumber ||
-                ''
-            ).trim();
-            
-            const qtyStr = (
-                row.Qty || row.qty || 
-                row.Quantity || row.quantity || 
-                row['Quantity'] || row['quantity'] ||
-                ''
-            ).trim();
-            
-            if (!supplierIdentifier) {
-                errors.push(`Row ${index + 2}: Supplier is missing`);
-                return;
-            }
-            
-            if (!typeIdentifier) {
-                errors.push(`Row ${index + 2}: Original Type is missing`);
-                return;
-            }
-            
-            if (!qtyStr) {
-                errors.push(`Row ${index + 2}: Quantity is missing`);
-                return;
-            }
-            
-            const qty = parseFloat(qtyStr);
-            if (isNaN(qty) || qty <= 0) {
-                errors.push(`Row ${index + 2}: Invalid quantity "${qtyStr}"`);
-                return;
-            }
-            
-            // Find supplier by name or code (case-insensitive)
-            const supplier = state.partners.find(p => 
-                (p.type === PartnerType.SUPPLIER || p.type === PartnerType.SUB_SUPPLIER) && (
-                    p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
-                    p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
-                )
-            );
-            
-            if (!supplier) {
-                errors.push(`Row ${index + 2}: Supplier not found "${supplierIdentifier}"`);
-                return;
-            }
-            
-            // Check if supplier has purchases
-            const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
-            if (supplierPurchases.length === 0) {
-                errors.push(`Row ${index + 2}: No purchases found for supplier "${supplierIdentifier}"`);
-                return;
-            }
-            
-            // Find original type - must be from purchases for this supplier
-            const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
-            const originalType = state.originalTypes.find(ot => 
-                typeIdsFromPurchases.includes(ot.id) && (
-                    ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
-                    ot.name.toLowerCase().includes(typeIdentifier.toLowerCase()) ||
-                    ot.id.toLowerCase() === typeIdentifier.toLowerCase()
-                )
-            );
-            
-            if (!originalType) {
-                errors.push(`Row ${index + 2}: Original Type "${typeIdentifier}" not found for supplier "${supplierIdentifier}"`);
-                return;
-            }
-            
-            // Calculate available stock
-            const stockInfo = calculateAvailableStock(supplier.id, originalType.id, batchStr || undefined);
-            
-            if (stockInfo.qty <= 0 && stockInfo.weight <= 0) {
-                errors.push(`Row ${index + 2}: No available stock for ${supplierIdentifier} - ${originalType.name}`);
-                return;
-            }
-            
-            // Calculate weight
-            const estWeight = stockInfo.qty > 0 
-                ? (stockInfo.weight / stockInfo.qty) * qty 
-                : qty; // Fallback: treat qty as weight if no unit qty
-            
-            const finalWeight = estWeight || qty;
-            
-            const newOpening: OriginalOpening = {
-                id: Math.random().toString(36).substr(2, 9),
-                date: ooDate,
-                supplierId: supplier.id,
-                originalType: originalType.id,
-                ...(batchStr ? { batchNumber: batchStr } : {}),
-                qtyOpened: qty,
-                weightOpened: finalWeight,
-                costPerKg: stockInfo.avgCost,
-                totalValue: finalWeight * stockInfo.avgCost
-            };
-            
-            newOpenings.push(newOpening);
-        });
-        
-        setOoCsvErrors(errors);
-        
-        if (errors.length > 0 && newOpenings.length === 0) {
-            alert(`CSV processing failed:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
-            setOoCsvProcessing(false);
-            return;
-        }
-        
-        // Add successful entries to staged openings
-        setStagedOriginalOpenings([...stagedOriginalOpenings, ...newOpenings]);
-        
-        if (errors.length > 0) {
-            alert(`Processed ${newOpenings.length} openings successfully.\n\nErrors found:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
-        } else {
-            alert(`Successfully processed ${newOpenings.length} original opening entries!`);
-        }
-        
-        // Reset CSV state
-        setOoCsvFile(null);
-        setOoCsvPreview([]);
-        setShowOoCsvModal(false);
-        setOoCsvProcessing(false);
-        
-        // Reset file input
-        const fileInput = document.getElementById('oo-csv-upload-input') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-    };
-
-    const downloadOoCsvTemplate = () => {
-        const template = [
-            ['Supplier', 'Original Type', 'Batch Number', 'Quantity'],
-            ['Supplier Name or Code', 'Type Name or Code', 'Optional', 'Qty'],
-            ['Supplier-001', 'Raw Cotton', 'BATCH-11001', '100'],
-            ['Supplier-002', 'Cotton Yarn', '', '50']
-        ];
-        const csv = template.map(row => row.join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'original_opening_template.csv';
-        a.click();
-        window.URL.revokeObjectURL(url);
-    };
     
     // --- History Table Data ---
     const openingsForDate = useMemo(() => {
@@ -953,42 +651,6 @@ export const DataEntry: React.FC = () => {
             alert('✅ Production deleted successfully! Ledger entries reversed.');
         }
     }
-
-    const [deletingProdDay, setDeletingProdDay] = useState(false);
-    const handleDeleteAllProductionForDate = async () => {
-        const prodsForDate = state.productions.filter(p => p.date === prodDate);
-        if (prodsForDate.length === 0) {
-            alert(`No production entries found for ${prodDate}.`);
-            return;
-        }
-
-        const pin = prompt(`Enter Supervisor PIN to delete ALL production entries for ${prodDate}:`);
-        if (pin !== SUPERVISOR_PIN) {
-            alert('❌ Invalid PIN! Deletion cancelled.');
-            return;
-        }
-
-        const ok = window.confirm(
-            `Delete ALL ${prodsForDate.length} production entries for ${prodDate}?\n\n` +
-            `This will:\n` +
-            `- Remove production rows\n` +
-            `- Reverse ALL production ledger entries for that date\n` +
-            `- Reduce Finished Goods stock accordingly\n\n` +
-            `This cannot be undone.`
-        );
-        if (!ok) return;
-
-        setDeletingProdDay(true);
-        try {
-            const deletedCount = await deleteProductionsForDate(prodDate);
-            alert(`✅ Deleted ${deletedCount} production entries for ${prodDate}.`);
-        } catch (error: any) {
-            console.error('❌ Error deleting production for date:', error);
-            alert(`❌ Failed to delete production for ${prodDate}: ${error?.message || 'Unknown error'}`);
-        } finally {
-            setDeletingProdDay(false);
-        }
-    };
 
     const handleDeleteSalesInvoice = (id: string) => {
         const pin = prompt('Enter Master Key to delete sales invoice:');
@@ -1342,7 +1004,6 @@ export const DataEntry: React.FC = () => {
             containerNumber: bpContainer,
             divisionId: bpDivision,
             subDivisionId: bpSubDivision,
-            factoryId: state.currentFactory?.id || '',
             currency: bpCurrency,
             exchangeRate: bpExchangeRate,
             items: bpCart,
@@ -1422,166 +1083,21 @@ export const DataEntry: React.FC = () => {
         setSiItemRate('');
     };
 
-    // Import Sales Invoice items from CSV (code, qty, rate)
-    const handleSiItemsCsvImport = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-
-        Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-                const rows: any[] = (results.data || []) as any[];
-                if (!rows.length) {
-                    alert('CSV file is empty or has no data rows.');
-                    return;
-                }
-
-                const importedItems: SalesInvoiceItem[] = [];
-                const errors: string[] = [];
-
-                rows.forEach((row, index) => {
-                    const rowNumber = index + 2; // Header is row 1
-
-                    const rawCode = (row.code || row.itemCode || row.ItemCode || row.id || '').toString().trim();
-                    const rawName = (row.name || row.itemName || '').toString().trim();
-                    const qtyRaw = row.qty ?? row.Qty ?? row.quantity ?? row.Quantity ?? '';
-                    const rateRaw = row.rate ?? row.Rate ?? row.price ?? row.Price ?? '';
-
-                    const qty = parseFloat(qtyRaw);
-                    if (!rawCode && !rawName) {
-                        errors.push(`Row ${rowNumber}: Missing item code/name.`);
-                        return;
-                    }
-                    if (!qty || isNaN(qty) || qty <= 0) {
-                        errors.push(`Row ${rowNumber}: Invalid qty for "${rawCode || rawName}".`);
-                        return;
-                    }
-
-                    const item = state.items.find(i => 
-                        (rawCode && (i.code === rawCode || i.id === rawCode)) ||
-                        (!rawCode && rawName && i.name.toLowerCase() === rawName.toLowerCase())
-                    );
-
-                    if (!item) {
-                        errors.push(`Row ${rowNumber}: Item not found for code/name "${rawCode || rawName}".`);
-                        return;
-                    }
-
-                    let rate = parseFloat(rateRaw);
-                    if (!rate || isNaN(rate) || rate <= 0) {
-                        rate = item.salePrice || 0;
-                    }
-                    if (!rate || isNaN(rate) || rate <= 0) {
-                        errors.push(`Row ${rowNumber}: Missing rate and item "${item.name}" has no Sale Price.`);
-                        return;
-                    }
-
-                    importedItems.push({
-                        id: Math.random().toString(36).substr(2, 9),
-                        itemId: item.id,
-                        itemName: item.name,
-                        qty,
-                        rate,
-                        total: qty * rate,
-                        totalKg: qty * item.weightPerUnit
-                    });
-                });
-
-                if (!importedItems.length) {
-                    alert(`No valid items imported from CSV.\n\nIssues:\n${errors.slice(0, 10).join('\n')}`);
-                    return;
-                }
-
-                setSiCart(prev => [...prev, ...importedItems]);
-
-                let message = `Imported ${importedItems.length} item(s) from CSV.`;
-                if (errors.length > 0) {
-                    message += `\n\nSkipped ${errors.length} row(s):\n${errors.slice(0, 10).join('\n')}`;
-                    if (errors.length > 10) {
-                        message += '\n...';
-                    }
-                }
-                alert(message);
-            },
-            error: (error) => {
-                console.error('Error parsing Sales Invoice items CSV:', error);
-                alert(`Error parsing CSV: ${error.message}`);
-            }
-        });
-
-        // Allow uploading the same file again if needed
-        event.target.value = '';
-    };
-
-    // Download simple CSV template for Sales Invoice items
-    const downloadSiItemsTemplate = () => {
-        const header = ['code', 'qty', 'rate'];
-        const sample = ['ITEM-1001', '10', '25.00'];
-        const csv = [header.join(','), sample.join(',')].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'sales_invoice_items_template.csv';
-        a.click();
-    };
-
     const handleAddSiCost = () => {
         if (!siCostAmount) return;
         const amount = parseFloat(siCostAmount);
         
-        const newCost: InvoiceAdditionalCost & { customDescription?: string } = {
+        const newCost: InvoiceAdditionalCost = {
             id: Math.random().toString(36).substr(2, 9),
             costType: siCostType,
-            providerId: (siCostType === 'Customs' || siCostType === 'Other') ? undefined : siCostProvider, // Only set providerId for Freight/Clearing/Commission
+            providerId: siCostProvider,
             amount: amount,
             currency: siCostCurrency,
-            exchangeRate: siCostRate,
-            customDescription: (siCostType === 'Customs' || siCostType === 'Other') ? siCostCustomText : undefined // Store custom text for Customs/Other
+            exchangeRate: siCostRate
         };
         setSiCosts([...siCosts, newCost]);
         setSiCostAmount('');
         setSiCostProvider('');
-        setSiCostCustomText(''); // Clear custom text
-    };
-    
-    // Filter providers based on cost type (for Sales Invoice Additional Costs)
-    const filteredSiProviders = useMemo(() => {
-        if (siCostType === 'Freight') {
-            return state.partners.filter(p => p.type === PartnerType.FREIGHT_FORWARDER || p.type === 'FREIGHT_FORWARDER');
-        } else if (siCostType === 'Clearing') {
-            return state.partners.filter(p => p.type === PartnerType.CLEARING_AGENT || p.type === 'CLEARING_AGENT');
-        } else if (siCostType === 'Commission') {
-            return state.partners.filter(p => p.type === PartnerType.COMMISSION_AGENT || p.type === 'COMMISSION_AGENT');
-        }
-        return []; // Customs and Other don't need provider dropdown
-    }, [siCostType, state.partners]);
-
-    // Load Last Invoice as Proforma
-    const loadLastInvoiceAsProforma = () => {
-        if (!lastInvoiceForCustomer) return;
-        
-        // Copy all items from last invoice
-        setSiCart(lastInvoiceForCustomer.items.map(item => ({
-            ...item,
-            id: Math.random().toString(36).substr(2, 9) // Generate new IDs
-        })));
-        
-        // Copy additional costs
-        setSiCosts(lastInvoiceForCustomer.additionalCosts.map(cost => ({
-            ...cost,
-            id: Math.random().toString(36).substr(2, 9) // Generate new IDs
-        })));
-        
-        // Copy other details
-        setSiLogo(lastInvoiceForCustomer.logoId);
-        setSiColor(lastInvoiceForCustomer.packingColor || '');
-        setSiContainer(lastInvoiceForCustomer.containerNumber || '');
-        setSiDiscount(lastInvoiceForCustomer.discount.toString());
-        setSiSurcharge(lastInvoiceForCustomer.surcharge.toString());
-        
-        alert(`Loaded ${lastInvoiceForCustomer.items.length} items from last invoice (${lastInvoiceForCustomer.invoiceNo}) as proforma. You can now edit and save.`);
     };
 
     const handleFinalizeInvoice = () => {
@@ -1593,79 +1109,56 @@ export const DataEntry: React.FC = () => {
     };
 
     const saveInvoice = () => {
-        try {
-            // Validate required fields
-            if (!siCustomer) {
-                alert("Please select a customer.");
-                return;
-            }
-            if (siCart.length === 0) {
-                alert("Please add at least one item to the invoice.");
-                return;
-            }
-            if (!siInvoiceNo || !siInvoiceNo.trim()) {
-                alert("Please enter an invoice number.");
-                return;
-            }
-            
-            const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
-            
-            // Calculate additional costs: convert to invoice currency (USD)
-            const costsTotal = siCosts.reduce((s, c) => {
-                // Convert cost amount from its currency to invoice currency (USD)
-                const amountInInvoiceCurrency = (c.amount || 0) / (c.exchangeRate || 1);
-                return s + amountInInvoiceCurrency;
-            }, 0); 
-            
-            const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
+        const grossTotal = siCart.reduce((s, i) => s + (i.total || 0), 0);
+        
+        // All sales are in USD, no conversion needed
+        const costsTotal = siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / 1)), 0); 
+        
+        const netTotal = grossTotal - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + costsTotal;
 
-            const newInvoice: SalesInvoice = {
-                id: siId || Math.random().toString(36).substr(2, 9),
-                invoiceNo: siInvoiceNo.trim(),
-                date: siDate,
-                status: 'Unposted',
-                customerId: siCustomer,
-                logoId: siLogo,
-                packingColor: siColor,
-                containerNumber: siContainer,
-                divisionId: siDivision,
-                subDivisionId: siSubDivision,
-                currency: 'USD', // All sales in USD for accounting
-                exchangeRate: 1, // USD base
-                customerCurrency: siCurrency, // Store customer's currency for ledger display
-                customerExchangeRate: siExchangeRate, // Store customer's exchange rate for ledger display
-                discount: parseFloat(siDiscount || '0'),
-                surcharge: parseFloat(siSurcharge || '0'),
-                items: siCart,
-                additionalCosts: siCosts,
-                grossTotal,
-                netTotal,
-                factoryId: state.currentFactory?.id || ''
-            };
+        const newInvoice: SalesInvoice = {
+            id: siId || Math.random().toString(36).substr(2, 9),
+            invoiceNo: siInvoiceNo,
+            date: siDate,
+            status: 'Unposted',
+            customerId: siCustomer,
+            logoId: siLogo,
+            packingColor: siColor,
+            containerNumber: siContainer,
+            divisionId: siDivision,
+            subDivisionId: siSubDivision,
+            currency: 'USD', // All sales in USD for accounting
+            exchangeRate: 1, // USD base
+            customerCurrency: siCurrency, // Store customer's currency for ledger display
+            customerExchangeRate: siExchangeRate, // Store customer's exchange rate for ledger display
+            discount: parseFloat(siDiscount || '0'),
+            surcharge: parseFloat(siSurcharge || '0'),
+            items: siCart,
+            additionalCosts: siCosts,
+            grossTotal,
+              netTotal,
+              factoryId: state.currentFactory?.id || ''
+        };
 
-            if (siId) {
-                updateSalesInvoice(newInvoice);
-            } else {
-                addSalesInvoice(newInvoice);
-            }
-            
-            // Reset
-            setShowSiSummary(false);
-            setSiId('');
-            setSiCustomer('');
-            setSiContainer('');
-            setSiCart([]);
-            setSiCosts([]);
-            alert("Invoice Saved Successfully!");
-            
-            // Increment ID if create mode
-            if (!siId) {
-                const num = parseInt(siInvoiceNo.replace('SINV-', ''));
-                if (!isNaN(num)) setSiInvoiceNo(`SINV-${num + 1}`);
-            }
-        } catch (error: any) {
-            console.error('Error saving invoice:', error);
-            alert(`Error saving invoice: ${error.message || 'Unknown error'}`);
+        if (siId) {
+            updateSalesInvoice(newInvoice);
+        } else {
+            addSalesInvoice(newInvoice);
+        }
+        
+        // Reset
+        setShowSiSummary(false);
+        setSiId('');
+        setSiCustomer('');
+        setSiContainer('');
+        setSiCart([]);
+        setSiCosts([]);
+        alert("Invoice Saved Successfully!");
+        
+        // Increment ID if create mode
+        if (!siId) {
+            const num = parseInt(siInvoiceNo.replace('SINV-', ''));
+            if (!isNaN(num)) setSiInvoiceNo(`SINV-${num + 1}`);
         }
     };
 
@@ -1923,9 +1416,10 @@ export const DataEntry: React.FC = () => {
             packingType: item.packingType,
             qtyProduced: qty,
             weightProduced: qty * item.weightPerUnit,
-              serialStart,
-              serialEnd,
-              factoryId: state.currentFactory?.id || ''
+            serialStart,
+            serialEnd,
+            factoryId: state.currentFactory?.id || '',
+            productionPrice: item.avgCost // Use avgProdPrice (avgCost) when entered via form
         };
         setStagedProds([...stagedProds, newEntry]);
         setProdItemId('');
@@ -1947,173 +1441,90 @@ export const DataEntry: React.FC = () => {
         alert("Production Saved Successfully");
     };
 
-    // --- CSV Upload Handlers ---
-    const handleCsvFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
+    // --- CSV Upload Handler for Production ---
+    const handleProductionCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
         if (!file) return;
-        
-        if (!file.name.endsWith('.csv')) {
-            alert('Please select a CSV file');
-            return;
-        }
-        
-        setCsvFile(file);
-        setCsvPreview([]);
-        setCsvErrors([]);
         
         Papa.parse(file, {
             header: true,
             skipEmptyLines: true,
             complete: (results) => {
-                if (results.errors.length > 0) {
-                    setCsvErrors(results.errors.map(e => e.message));
+                const parsedEntries: ProductionEntry[] = [];
+                const errors: string[] = [];
+                
+                for (let idx = 0; idx < results.data.length; idx++) {
+                    const row = results.data[idx] as any;
+                    
+                    if (!row['Production Date'] || !row['Item ID'] || !row['Quantity']) {
+                        errors.push(`Row ${idx + 2}: Missing required fields (Production Date, Item ID, or Quantity)`);
+                        continue;
+                    }
+                    
+                    // Find item by code or ID
+                    const item = state.items.find(i => i.code === row['Item ID'] || i.id === row['Item ID']);
+                    if (!item) {
+                        errors.push(`Row ${idx + 2}: Item "${row['Item ID']}" not found`);
+                        continue;
+                    }
+                    
+                    const qty = parseFloat(row['Quantity']);
+                    if (isNaN(qty) || qty <= 0) {
+                        errors.push(`Row ${idx + 2}: Invalid quantity "${row['Quantity']}"`);
+                        continue;
+                    }
+                    
+                    // Parse Production Price from CSV (required for CSV uploads)
+                    const productionPrice = row['Production Price'] ? parseFloat(row['Production Price']) : undefined;
+                    if (productionPrice === undefined || isNaN(productionPrice)) {
+                        errors.push(`Row ${idx + 2}: Production Price is required for CSV uploads`);
+                        continue;
+                    }
+                    
+                    let serialStart: number | undefined;
+                    let serialEnd: number | undefined;
+                    
+                    // Apply Serial Logic for Bale, Sack, Box, Bag
+                    if (item.packingType !== PackingType.KG) {
+                        const startNum = getNextSerialNumber(item.id);
+                        serialStart = startNum;
+                        serialEnd = startNum + qty - 1;
+                        setTempSerialTracker(prev => ({ ...prev, [item.id]: (serialEnd || 0) + 1 }));
+                    }
+                    
+                    parsedEntries.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        date: row['Production Date'],
+                        itemId: item.id,
+                        itemName: item.name,
+                        packingType: item.packingType,
+                        qtyProduced: qty,
+                        weightProduced: qty * item.weightPerUnit,
+                        serialStart,
+                        serialEnd,
+                        factoryId: state.currentFactory?.id || '',
+                        productionPrice: productionPrice // Use Production Price from CSV
+                    });
                 }
-                setCsvPreview(results.data);
-                setShowCsvModal(true);
+                
+                if (errors.length > 0) {
+                    alert(`CSV Upload Errors:\n${errors.join('\n')}\n\nOnly valid rows will be added.`);
+                }
+                
+                if (parsedEntries.length > 0) {
+                    setStagedProds([...stagedProds, ...parsedEntries]);
+                    alert(`Successfully loaded ${parsedEntries.length} production entry(ies) from CSV.`);
+                } else {
+                    alert('No valid production entries found in CSV.');
+                }
             },
-            error: (error) => {
-                alert(`Error parsing CSV: ${error.message}`);
+            error: (err) => {
+                alert(`Error parsing CSV: ${err.message}`);
             }
         });
-    };
-
-    const processCsvProduction = () => {
-        if (!prodDate) {
-            alert('Please select a production date first');
-            return;
-        }
-        
-        if (csvPreview.length === 0) {
-            alert('No data to process');
-            return;
-        }
-        
-        setCsvProcessing(true);
-        const errors: string[] = [];
-        const newProductions: ProductionEntry[] = [];
-        const updatedSerialTracker = { ...tempSerialTracker };
-        
-        csvPreview.forEach((row: any, index: number) => {
-            // Support multiple column name variations: Item, Item Code, ItemCode, Code, ItemName, etc.
-            const itemIdentifier = (
-                row.Item || row.item || 
-                row['Item Code'] || row['item code'] || row['Item code'] || 
-                row.ItemCode || row.itemCode || row.itemcode ||
-                row.ItemName || row.itemName || row.itemname ||
-                row.Code || row.code || 
-                row['Item Name'] || row['item name'] || row['Item name'] ||
-                ''
-            ).trim();
-            // Support multiple quantity column name variations
-            const qtyStr = (
-                row.Qty || row.qty || 
-                row.Quantity || row.quantity || 
-                row['Quantity'] || row['quantity'] ||
-                ''
-            ).trim();
-            
-            if (!itemIdentifier) {
-                errors.push(`Row ${index + 2}: Item name/code is missing`);
-                return;
-            }
-            
-            if (!qtyStr) {
-                errors.push(`Row ${index + 2}: Quantity is missing`);
-                return;
-            }
-            
-            const qty = parseFloat(qtyStr);
-            if (isNaN(qty) || qty <= 0) {
-                errors.push(`Row ${index + 2}: Invalid quantity "${qtyStr}"`);
-                return;
-            }
-            
-            // Find item by code or name (case-insensitive)
-            const item = state.items.find(i => 
-                i.category !== 'Raw Material' && (
-                    i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
-                    i.name.toLowerCase() === itemIdentifier.toLowerCase() ||
-                    i.code.toLowerCase().includes(itemIdentifier.toLowerCase()) ||
-                    i.name.toLowerCase().includes(itemIdentifier.toLowerCase())
-                )
-            );
-            
-            if (!item) {
-                errors.push(`Row ${index + 2}: Item not found "${itemIdentifier}"`);
-                return;
-            }
-            
-            let serialStart: number | undefined;
-            let serialEnd: number | undefined;
-            
-            // Apply Serial Logic for Bale, Sack, Box, Bag
-            if (item.packingType !== PackingType.KG) {
-                const startNum = updatedSerialTracker[item.id] || getNextSerialNumber(item.id);
-                serialStart = startNum;
-                serialEnd = startNum + qty - 1;
-                updatedSerialTracker[item.id] = (serialEnd || 0) + 1;
-            }
-            
-            const newEntry: ProductionEntry = {
-                id: Math.random().toString(36).substr(2, 9),
-                date: prodDate,
-                itemId: item.id,
-                itemName: item.name,
-                packingType: item.packingType,
-                qtyProduced: qty,
-                weightProduced: qty * item.weightPerUnit,
-                serialStart,
-                serialEnd,
-                factoryId: state.currentFactory?.id || ''
-            };
-            
-            newProductions.push(newEntry);
-        });
-        
-        setCsvErrors(errors);
-        setTempSerialTracker(updatedSerialTracker);
-        
-        if (errors.length > 0 && newProductions.length === 0) {
-            alert(`CSV processing failed:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
-            setCsvProcessing(false);
-            return;
-        }
-        
-        // Add successful entries to staged productions
-        setStagedProds([...stagedProds, ...newProductions]);
-        
-        if (errors.length > 0) {
-            alert(`Processed ${newProductions.length} items successfully.\n\nErrors found:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
-        } else {
-            alert(`Successfully processed ${newProductions.length} production entries!`);
-        }
-        
-        // Reset CSV state
-        setCsvFile(null);
-        setCsvPreview([]);
-        setShowCsvModal(false);
-        setCsvProcessing(false);
         
         // Reset file input
-        const fileInput = document.getElementById('csv-upload-input') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-    };
-
-    const downloadCsvTemplate = () => {
-        const template = [
-            ['Item Code', 'Quantity'],
-            ['Item-1001', '10'],
-            ['Item-1002', '20'],
-            ['Item-1003', '15']
-        ];
-        const csv = template.map(row => row.join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'production_template.csv';
-        a.click();
-        window.URL.revokeObjectURL(url);
+        e.target.value = '';
     };
 
     // --- Re-baling Logic ---
@@ -2229,15 +1640,9 @@ export const DataEntry: React.FC = () => {
         ];
     }
     const currentSubModuleDef = subModules.find(s => s.id === activeSubModule);
-    // Suppliers that have purchases (for filtering stock availability) - ONLY these should appear in Original Opening
-    // IMPORTANT: Purchases now store supplierId as the CSV ID/CODE (e.g. SUP-5001),
-    // while partners use Firestore document ID + code field. We must match on BOTH.
     const suppliersWithStock = useMemo(() => {
-        const supplierIdsOrCodes = new Set(state.purchases.map(p => p.supplierId).filter(Boolean));
-        return state.partners.filter(p => 
-            supplierIdsOrCodes.has(p.id) || 
-            supplierIdsOrCodes.has((p as any).code)
-        );
+        const ids = Array.from(new Set(state.purchases.map(p => p.supplierId)));
+        return state.partners.filter(p => ids.includes(p.id));
     }, [state.purchases, state.partners]);
 
     // SI Totals
@@ -2248,14 +1653,14 @@ export const DataEntry: React.FC = () => {
     return (
         <div className="space-y-6">
             {/* Top Level Navigation Tabs */}
-            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 mb-4 print:hidden">
+            <div className="flex gap-4 mb-4 print:hidden">
                 {[ { id: 'purchase', label: 'Purchases', icon: ShoppingCart }, { id: 'production', label: 'Production', icon: Factory }, { id: 'sales', label: 'Sales', icon: Truck } ].map((m) => (
                     <button
                         key={m.id}
                         onClick={() => { setActiveModule(m.id as ModuleType); setActiveSubModule(getSubModules(m.id as ModuleType)[0].id); }}
-                        className={`flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition-all flex-1 border text-sm sm:text-base ${ activeModule === m.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border-slate-200' }`}
+                        className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-all flex-1 justify-center border ${ activeModule === m.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 hover:bg-slate-50 border-slate-200' }`}
                     >
-                        <m.icon size={18} className="sm:w-5 sm:h-5" /> <span className="hidden xs:inline">{m.label}</span>
+                        <m.icon size={20} /> {m.label}
                     </button>
                 ))}
             </div>
@@ -2273,7 +1678,7 @@ export const DataEntry: React.FC = () => {
                 ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-12">
                     <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm min-h-[500px]">
                         <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4 print:hidden">
@@ -2419,53 +1824,12 @@ export const DataEntry: React.FC = () => {
                                 {ooTab === 'supplier' ? (
                                     <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
                                         <div className="md:col-span-7 space-y-6">
-                                            <div className="grid grid-cols-2 gap-6">
-                                                <div>
-                                                    <label className="block text-sm font-medium text-slate-600 mb-1">Entry Date</label>
-                                                    <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={ooDate} onChange={e => { setOoDate(e.target.value); setStagedOriginalOpenings([]); }} required />
-                                                </div>
-                                            </div>
-                                            
-                                            {/* CSV Upload Section */}
-                                            <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-dashed border-green-300 rounded-xl p-6">
-                                                <div className="flex items-center gap-3 mb-4">
-                                                    <Upload className="text-green-600" size={24} />
-                                                    <div>
-                                                        <h3 className="font-bold text-slate-800 text-sm">Bulk Upload (CSV)</h3>
-                                                        <p className="text-xs text-slate-500">Upload daily original openings for multiple suppliers/types at once</p>
-                                                    </div>
-                                                </div>
-                                                <div className="flex gap-2 mb-3">
-                                                    <label className="flex-1 cursor-pointer">
-                                                        <input
-                                                            id="oo-csv-upload-input"
-                                                            type="file"
-                                                            accept=".csv"
-                                                            onChange={handleOoCsvFileSelect}
-                                                            className="hidden"
-                                                        />
-                                                        <div className="bg-white border-2 border-green-400 text-green-700 hover:bg-green-50 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm">
-                                                            <Upload size={16} /> Choose CSV File
-                                                        </div>
-                                                    </label>
-                                                    <button
-                                                        onClick={downloadOoCsvTemplate}
-                                                        className="bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
-                                                        title="Download CSV Template"
-                                                    >
-                                                        <Download size={16} /> Template
-                                                    </button>
-                                                </div>
-                                                <p className="text-xs text-slate-600">CSV Format: <span className="font-mono bg-white px-2 py-1 rounded border border-slate-200">Supplier, Original Type, Batch Number, Quantity</span></p>
-                                                <p className="text-xs text-slate-500 mt-1">Batch Number is optional. Supplier and Original Type must match existing purchases.</p>
-                                            </div>
-                                            
-                                            <div className="border-t border-slate-200 pt-4">
-                                                <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Or Add Manually</p>
-                                            </div>
-                                            
                                             <form onSubmit={handleOpeningSubmit} className="space-y-6">
                                                 <div className="grid grid-cols-2 gap-6">
+                                                    <div>
+                                                        <label className="block text-sm font-medium text-slate-600 mb-1">Entry Date</label>
+                                                        <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 border-slate-300" value={ooDate} onChange={e => setOoDate(e.target.value)} required />
+                                                    </div>
                                                     <div>
                                                         <label className="block text-sm font-medium text-slate-600 mb-1">Supplier</label>
                                                         <EntitySelector
@@ -3522,29 +2886,6 @@ export const DataEntry: React.FC = () => {
                                                     placeholder="Select Customer..." 
                                                     onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.CUSTOMER })}
                                                 />
-                                                {/* Show Last Invoice as Proforma */}
-                                                {lastInvoiceForCustomer && (
-                                                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                                                        <div className="flex items-start justify-between gap-3">
-                                                            <div className="flex-1">
-                                                                <p className="text-xs font-semibold text-blue-700 mb-1">Last Invoice Available</p>
-                                                                <p className="text-sm text-blue-900 font-medium">{lastInvoiceForCustomer.invoiceNo}</p>
-                                                                <p className="text-xs text-blue-600">
-                                                                    {new Date(lastInvoiceForCustomer.date).toLocaleDateString()} • 
-                                                                    {lastInvoiceForCustomer.items.length} items • 
-                                                                    ${lastInvoiceForCustomer.netTotal.toLocaleString()}
-                                                                </p>
-                                                            </div>
-                                                            <button
-                                                                onClick={loadLastInvoiceAsProforma}
-                                                                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
-                                                                title="Load this invoice as proforma"
-                                                            >
-                                                                <FileText size={14} /> Use as Proforma
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                )}
                                             </div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} readOnly /></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siDate} onChange={e => setSiDate(e.target.value)} /></div>
@@ -3566,13 +2907,9 @@ export const DataEntry: React.FC = () => {
                                             </div>
                                             <div>
                                                 <label className="block text-sm font-medium text-slate-600 mb-1">Packing Color</label>
-                                                <textarea 
-                                                    className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 resize-y min-h-[80px]" 
-                                                    value={siColor} 
-                                                    onChange={e => setSiColor(e.target.value)}
-                                                    placeholder="Enter packing color details..."
-                                                    rows={3}
-                                                />
+                                                <select className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siColor} onChange={e => setSiColor(e.target.value)}>
+                                                    <option value="">None</option><option value="Blue">Blue</option><option value="Red">Red</option><option value="Green">Green</option><option value="White">White</option><option value="Yellow">Yellow</option>
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-medium text-slate-500 mb-1">Exchange Rate</label>
@@ -3616,28 +2953,7 @@ export const DataEntry: React.FC = () => {
                                         
                                         {/* Item Cart */}
                                         <div className="border-t border-slate-200 pt-6">
-                                             <div className="flex items-center justify-between mb-4">
-                                                 <h4 className="font-bold text-slate-700">Item Entry</h4>
-                                                 <div className="flex gap-2">
-                                                     <button
-                                                         type="button"
-                                                         onClick={downloadSiItemsTemplate}
-                                                         className="px-3 py-1.5 bg-slate-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-700 flex items-center gap-1.5"
-                                                         title="Download CSV template"
-                                                     >
-                                                         <Download size={14} /> Download CSV Template
-                                                     </button>
-                                                     <label className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer">
-                                                         <Upload size={14} /> Import Items from CSV
-                                                         <input
-                                                             type="file"
-                                                             accept=".csv"
-                                                             onChange={handleSiItemsCsvImport}
-                                                             className="hidden"
-                                                         />
-                                                     </label>
-                                                 </div>
-                                             </div>
+                                             <h4 className="font-bold text-slate-700 mb-4">Item Entry</h4>
                                              <div className="bg-slate-100 p-3 rounded-lg mb-4">
                                                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
                                                      <div className="md:col-span-6">
@@ -3652,26 +2968,6 @@ export const DataEntry: React.FC = () => {
                                                             formatSelected={formatItemSelected}
                                                             searchFields={['code', 'name', 'category']}
                                                         />
-                                                        {siSelectedItem && (
-                                                            <div className="mt-1 rounded-lg border border-slate-200 bg-white/70 px-2 py-1 text-[11px] leading-4 text-slate-600">
-                                                                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
-                                                                    <div className="flex items-baseline gap-1.5">
-                                                                        <span className="text-slate-500">In Stock:</span>
-                                                                        <span className="font-semibold text-slate-700">
-                                                                            {(siSelectedItem.stockQty ?? 0).toLocaleString()} {siStockUnitLabel}
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="flex items-baseline gap-1.5">
-                                                                        <span className="text-slate-500">Package Size:</span>
-                                                                        <span className="font-semibold text-slate-700">
-                                                                            {siSelectedItem.packingType === PackingType.KG
-                                                                                ? '1 Kg (by weight)'
-                                                                                : `${(siSelectedItem.weightPerUnit ?? 0).toLocaleString()} Kg / ${siSelectedItem.packingType}`}
-                                                                        </span>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        )}
                                                      </div>
                                                      <div className="md:col-span-2">
                                                          <label className="block text-xs font-semibold text-slate-500 mb-1">Qty</label>
@@ -3681,7 +2977,7 @@ export const DataEntry: React.FC = () => {
                                                          <label className="block text-xs font-semibold text-slate-500 mb-1">Rate/Unit (USD)</label>
                                                          <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="0.00" value={siItemRate} onChange={e => setSiItemRate(e.target.value)} />
                                                      </div>
-                                                     <div className="md:col-span-2 flex items-end"><button type="button" onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
+                                                     <div className="md:col-span-2 flex items-end"><button onClick={handleAddSiItem} className="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Add Item</button></div>
                                                  </div>
                                              </div>
                                              <table className="w-full text-sm text-left border border-slate-200 rounded-lg overflow-hidden">
@@ -3690,18 +2986,6 @@ export const DataEntry: React.FC = () => {
                                                      {siCart.map(item => ( <tr key={item.id} className="hover:bg-slate-50"><td className="px-4 py-2">{item.itemName}</td><td className="px-4 py-2 text-right">{item.qty}</td><td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td><td className="px-4 py-2 text-right">{item.rate.toFixed(2)}</td><td className="px-4 py-2 text-right font-bold">{item.total.toFixed(2)}</td><td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr> ))}
                                                      {siCart.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 italic">No items added</td></tr>}
                                                  </tbody>
-                                                 {siCart.length > 0 && (
-                                                     <tfoot className="bg-slate-100 font-bold text-slate-800 border-t-2 border-slate-300">
-                                                         <tr>
-                                                             <td className="px-4 py-3">Total</td>
-                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)}</td>
-                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.totalKg) || 0), 0).toFixed(2)}</td>
-                                                             <td className="px-4 py-3 text-right">-</td>
-                                                             <td className="px-4 py-3 text-right">{siCart.reduce((sum, item) => sum + (Number(item.total) || 0), 0).toFixed(2)}</td>
-                                                             <td className="px-4 py-3 text-center">-</td>
-                                                         </tr>
-                                                     </tfoot>
-                                                 )}
                                              </table>
                                         </div>
                                         
@@ -3710,71 +2994,22 @@ export const DataEntry: React.FC = () => {
                                             <h4 className="font-bold text-slate-700 mb-4">Additional Costs (Pass-through)</h4>
                                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                                 <div className="flex flex-wrap md:flex-nowrap gap-3">
-                                                    <div className="w-full md:w-32">
-                                                        <select 
-                                                            className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" 
-                                                            value={siCostType} 
-                                                            onChange={e => {
-                                                                setSiCostType(e.target.value);
-                                                                setSiCostProvider(''); // Reset provider when type changes
-                                                                setSiCostCustomText(''); // Reset custom text
-                                                            }}
-                                                        >
-                                                            <option value="Freight">Freight</option>
-                                                            <option value="Clearing">Clearing</option>
-                                                            <option value="Commission">Commission</option>
-                                                            <option value="Customs">Customs</option>
-                                                            <option value="Other">Other</option>
-                                                        </select>
-                                                    </div>
+                                                    <div className="w-full md:w-32"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostType} onChange={e => setSiCostType(e.target.value)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Customs">Customs</option><option value="Other">Other</option></select></div>
                                                     <div className="w-full md:w-1/3">
-                                                        {(siCostType === 'Customs' || siCostType === 'Other') ? (
-                                                            <input
-                                                                type="text"
-                                                                className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
-                                                                placeholder={`${siCostType} Description...`}
-                                                                value={siCostCustomText}
-                                                                onChange={e => setSiCostCustomText(e.target.value)}
-                                                            />
-                                                        ) : (
-                                                            <EntitySelector 
-                                                                entities={filteredSiProviders} 
-                                                                selectedId={siCostProvider} 
-                                                                onSelect={setSiCostProvider} 
-                                                                placeholder={`Select ${siCostType === 'Freight' ? 'Freight Forwarder' : siCostType === 'Clearing' ? 'Clearing Agent' : 'Commission Agent'}...`} 
-                                                                onQuickAdd={() => {
-                                                                    const type = siCostType === 'Freight' ? PartnerType.FREIGHT_FORWARDER :
-                                                                                 siCostType === 'Clearing' ? PartnerType.CLEARING_AGENT :
-                                                                                 PartnerType.COMMISSION_AGENT;
-                                                                    openQuickAdd(setupConfigs.partnerConfig, { type });
-                                                                }}
-                                                            />
-                                                        )}
+                                                        <EntitySelector 
+                                                            entities={state.partners.filter(p => [PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT, PartnerType.VENDOR].includes(p.type))} 
+                                                            selectedId={siCostProvider} 
+                                                            onSelect={setSiCostProvider} 
+                                                            placeholder="Provider (Optional)" 
+                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                        />
                                                     </div>
                                                     <div className="w-1/2 md:w-24"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostCurrency} onChange={e => setSiCostCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                     <div className="w-1/2 md:w-32"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Amount" value={siCostAmount} onChange={e => setSiCostAmount(e.target.value)} /></div>
-                                                    <button 
-                                                        onClick={handleAddSiCost} 
-                                                        disabled={!siCostAmount || ((siCostType === 'Freight' || siCostType === 'Clearing' || siCostType === 'Commission') && !siCostProvider)}
-                                                        className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-                                                    >
-                                                        Add
-                                                    </button>
+                                                    <button onClick={handleAddSiCost} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700">Add</button>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    {siCosts.map(c => ( 
-                                                        <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200">
-                                                            <span>
-                                                                {c.costType} 
-                                                                {c.providerId && ` (${state.partners.find(p=>p.id===c.providerId)?.name})`}
-                                                                {!c.providerId && (c as any).customDescription && ` (${(c as any).customDescription})`}
-                                                            </span>
-                                                            <div className="flex gap-4 font-mono">
-                                                                <span>{c.amount} {c.currency}</span>
-                                                                <button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button>
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                    {siCosts.map(c => ( <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200"><span>{c.costType} {c.providerId && `(${state.partners.find(p=>p.id===c.providerId)?.name})`}</span><div className="flex gap-4 font-mono"><span>{c.amount} {c.currency}</span><button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}
                                                 </div>
                                             </div>
                                         </div>
@@ -3793,15 +3028,7 @@ export const DataEntry: React.FC = () => {
                                                 {state.salesInvoices.map(inv => (
                                                     <tr key={inv.id} className="hover:bg-slate-50">
                                                         <td className="px-4 py-3">{inv.date}</td>
-                                                        <td className="px-4 py-3">
-                                                            <button
-                                                                onClick={() => setViewingInvoice(inv)}
-                                                                className="font-mono font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                                                                title="Click to view invoice details"
-                                                            >
-                                                                {inv.invoiceNo}
-                                                            </button>
-                                                        </td>
+                                                        <td className="px-4 py-3 font-mono font-bold text-blue-600">{inv.invoiceNo}</td>
                                                         <td className="px-4 py-3">{state.partners.find(p => p.id === inv.customerId)?.name}</td>
                                                         <td className="px-4 py-3 text-right font-mono">{inv.netTotal.toLocaleString()} {inv.currency}</td>
                                                         <td className="px-4 py-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${inv.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{inv.status}</span></td>
@@ -3893,41 +3120,40 @@ export const DataEntry: React.FC = () => {
                                     <div className="md:col-span-7 space-y-6">
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Production Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500" value={prodDate} onChange={e => { setProdDate(e.target.value); setStagedProds([]); }} required /></div>
                                         
-                                        {/* CSV Upload Section */}
-                                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl p-6">
-                                            <div className="flex items-center gap-3 mb-4">
-                                                <Upload className="text-blue-600" size={24} />
-                                                <div>
-                                                    <h3 className="font-bold text-slate-800 text-sm">Bulk Upload (CSV)</h3>
-                                                    <p className="text-xs text-slate-500">Upload daily production for multiple items at once</p>
-                                                </div>
-                                            </div>
-                                            <div className="flex gap-2 mb-3">
+                                        {/* Bulk Upload CSV Section */}
+                                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                            <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2"><FileText size={16} /> Bulk Upload (CSV)</h4>
+                                            <div className="flex gap-3">
                                                 <label className="flex-1 cursor-pointer">
                                                     <input
-                                                        id="csv-upload-input"
                                                         type="file"
                                                         accept=".csv"
-                                                        onChange={handleCsvFileSelect}
+                                                        onChange={handleProductionCSVUpload}
                                                         className="hidden"
                                                     />
-                                                    <div className="bg-white border-2 border-blue-400 text-blue-700 hover:bg-blue-50 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm">
-                                                        <Upload size={16} /> Choose CSV File
-                                                    </div>
+                                                    <span className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors">
+                                                        <Download size={18} /> Choose CSV File
+                                                    </span>
                                                 </label>
-                                                <button
-                                                    onClick={downloadCsvTemplate}
-                                                    className="bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
-                                                    title="Download CSV Template"
+                                                <a
+                                                    href="/production_template.csv"
+                                                    download
+                                                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors"
+                                                    style={{ textDecoration: 'none' }}
                                                 >
-                                                    <Download size={16} /> Template
-                                                </button>
+                                                    <FileText size={18} /> Template
+                                                </a>
                                             </div>
-                                            <p className="text-xs text-slate-600">CSV Format: <span className="font-mono bg-white px-2 py-1 rounded border border-slate-200">Item, Qty</span> (Item can be name or code)</p>
+                                            <p className="text-xs text-slate-500 mt-2">CSV must include: Production Date, Item ID, Quantity, Production Price</p>
                                         </div>
                                         
-                                        <div className="border-t border-slate-200 pt-4">
-                                            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Or Add Manually</p>
+                                        <div className="relative">
+                                            <div className="absolute inset-0 flex items-center">
+                                                <div className="w-full border-t border-slate-300"></div>
+                                            </div>
+                                            <div className="relative flex justify-center text-xs uppercase">
+                                                <span className="bg-white px-2 text-slate-500">OR ADD MANUALLY</span>
+                                            </div>
                                         </div>
                                         
                                         <div>
@@ -3970,56 +3196,7 @@ export const DataEntry: React.FC = () => {
                                         })}</div> )}</div>
                                         <div className="border-t border-slate-200 pt-4 mt-auto"><div className="flex justify-between text-sm mb-4 font-medium text-slate-700"><span>Total Units:</span><span>{stagedProds.reduce((sum, p) => sum + p.qtyProduced, 0)}</span></div><button onClick={() => setShowProdSummary(true)} disabled={stagedProds.length === 0} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2"><Save size={18} /> Finalize & Save</button></div>
                                     </div>
-                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200">
-                                    <div className="flex items-center justify-between gap-3 mb-4">
-                                        <h4 className="font-semibold text-slate-700 flex items-center gap-2">
-                                            <History size={16} className="text-slate-400" /> Saved Entries ({prodDate})
-                                        </h4>
-                                        <button
-                                            type="button"
-                                            onClick={handleDeleteAllProductionForDate}
-                                            disabled={deletingProdDay || state.productions.filter(p => p.date === prodDate).length === 0}
-                                            className="px-3 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
-                                            title="Delete ALL production entries for this date"
-                                        >
-                                            <Trash2 size={14} />
-                                            {deletingProdDay ? 'Deleting...' : `Delete All (${state.productions.filter(p => p.date === prodDate).length})`}
-                                        </button>
-                                    </div>
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm text-left">
-                                            <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
-                                                <tr>
-                                                    <th className="px-4 py-2">Item</th>
-                                                    <th className="px-4 py-2">Qty</th>
-                                                    <th className="px-4 py-2">Weight</th>
-                                                    <th className="px-4 py-2">Serials</th>
-                                                    <th className="px-4 py-2 text-right">Action</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {state.productions.filter(p => p.date === prodDate).map(p => (
-                                                    <tr key={p.id} className="hover:bg-slate-50">
-                                                        <td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td>
-                                                        <td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td>
-                                                        <td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td>
-                                                        <td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td>
-                                                        <td className="px-4 py-2 text-right">
-                                                            <button onClick={() => handleDeleteProduction(p.id)} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete">
-                                                                <Trash2 size={14} />
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                                {state.productions.filter(p => p.date === prodDate).length === 0 && (
-                                                    <tr>
-                                                        <td colSpan={5} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td>
-                                                    </tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
+                                <div className="md:col-span-12 mt-8 pt-6 border-t border-slate-200"><h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2"><History size={16} className="text-slate-400" /> Saved Entries ({prodDate})</h4><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Weight</th><th className="px-4 py-2">Serials</th><th className="px-4 py-2 text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{state.productions.filter(p => p.date === prodDate).map(p => ( <tr key={p.id} className="hover:bg-slate-50"><td className="px-4 py-2 font-medium text-slate-700">{p.itemName}</td><td className="px-4 py-2">{p.qtyProduced} {p.packingType}</td><td className="px-4 py-2 text-slate-500">{p.weightProduced} kg</td><td className="px-4 py-2 font-mono text-xs text-slate-600">{p.serialStart ? `#${p.serialStart} - #${p.serialEnd}` : '-'}</td><td className="px-4 py-2 text-right"><button onClick={() => handleDeleteProduction(p.id)} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors" title="Delete"><Trash2 size={14} /></button></td></tr> ))} {state.productions.filter(p => p.date === prodDate).length === 0 && ( <tr><td colSpan={5} className="text-center py-4 text-slate-400 text-xs italic">No production saved for this date.</td></tr> )}</tbody></table></div></div>
                             </div>
                         )}
 
@@ -4103,227 +3280,9 @@ export const DataEntry: React.FC = () => {
             {/* Production Summary Modal */}
             {showProdSummary && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                <CheckCircle className="text-emerald-500" /> Confirm Production
-                            </h3>
-                            <button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600">
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <div className="p-6 overflow-y-auto">
-                            <p className="text-sm text-slate-500 mb-4">
-                                Please review the staged items before saving. Compare with yesterday's output to ensure consistency.
-                            </p>
-
-                            <div className="border border-slate-200 rounded-lg overflow-hidden">
-                                <div className="max-h-[55vh] overflow-y-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="bg-slate-50 text-slate-500 uppercase text-xs sticky top-0 z-10 border-b border-slate-200">
-                                            <tr>
-                                                <th className="px-4 py-3">Item</th>
-                                                <th className="px-4 py-3 text-right">Qty (Today)</th>
-                                                <th className="px-4 py-3 text-right">Yesterday</th>
-                                                <th className="px-4 py-3 text-right">Variance</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {stagedProds.map(p => {
-                                                const yesterdayQty = getYesterdayProduction(p.itemId);
-                                                const variance = p.qtyProduced - yesterdayQty;
-                                                return (
-                                                    <tr key={p.id}>
-                                                        <td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td>
-                                                        <td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td>
-                                                        <td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td>
-                                                        <td
-                                                            className={`px-4 py-3 text-right ${
-                                                                variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'
-                                                            }`}
-                                                        >
-                                                            {variance > 0 ? '+' : ''}
-                                                            {variance}
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                            <button
-                                onClick={() => setShowProdSummary(false)}
-                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleFinalizeProduction}
-                                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm"
-                            >
-                                Save & Continue
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* CSV Preview Modal */}
-            {showCsvModal && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                <FileText className="text-blue-500" /> CSV Preview - Production Date: {prodDate}
-                            </h3>
-                            <button onClick={() => { setShowCsvModal(false); setCsvPreview([]); setCsvErrors([]); }} className="text-slate-400 hover:text-slate-600">
-                                <X size={20} />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6">
-                            {csvErrors.length > 0 && (
-                                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <AlertCircle className="text-red-600" size={20} />
-                                        <h4 className="font-bold text-red-800">Errors Found ({csvErrors.length})</h4>
-                                    </div>
-                                    <div className="max-h-32 overflow-y-auto text-sm text-red-700">
-                                        {csvErrors.slice(0, 10).map((error, idx) => (
-                                            <div key={idx} className="mb-1">• {error}</div>
-                                        ))}
-                                        {csvErrors.length > 10 && <div className="text-red-600 font-medium">... and {csvErrors.length - 10} more errors</div>}
-                                    </div>
-                                </div>
-                            )}
-                            <div className="mb-4">
-                                <p className="text-sm text-slate-600 mb-2">
-                                    Found <strong>{csvPreview.length}</strong> rows. Items will be matched by name or code.
-                                </p>
-                                <p className="text-xs text-slate-500">
-                                    Only Finished Goods (non-Raw Material) items will be processed.
-                                </p>
-                            </div>
-                            <div className="border border-slate-200 rounded-lg overflow-hidden">
-                                <div className="max-h-96 overflow-y-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-slate-50 sticky top-0">
-                                            <tr>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Row</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Item (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Qty (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Matched Item</th>
-                                                <th className="px-4 py-2 text-center border-b border-slate-200">Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {csvPreview.map((row: any, index: number) => {
-                                                // Support multiple column name variations (same as processing logic)
-                                                const itemIdentifier = (
-                                                    row.Item || row.item || 
-                                                    row['Item Code'] || row['item code'] || row['Item code'] || 
-                                                    row.ItemCode || row.itemCode || row.itemcode ||
-                                                    row.ItemName || row.itemName || row.itemname ||
-                                                    row.Code || row.code || 
-                                                    row['Item Name'] || row['item name'] || row['Item name'] ||
-                                                    ''
-                                                ).trim();
-                                                const qtyStr = (
-                                                    row.Qty || row.qty || 
-                                                    row.Quantity || row.quantity || 
-                                                    row['Quantity'] || row['quantity'] ||
-                                                    ''
-                                                ).trim();
-                                                const item = state.items.find(i => 
-                                                    i.category !== 'Raw Material' && (
-                                                        i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
-                                                        i.name.toLowerCase() === itemIdentifier.toLowerCase() ||
-                                                        i.code.toLowerCase().includes(itemIdentifier.toLowerCase()) ||
-                                                        i.name.toLowerCase().includes(itemIdentifier.toLowerCase())
-                                                    )
-                                                );
-                                                const isValid = item && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
-                                                
-                                                return (
-                                                    <tr key={index} className={isValid ? 'bg-emerald-50/30' : 'bg-red-50/30'}>
-                                                        <td className="px-4 py-2 font-mono text-xs text-slate-500">{index + 1}</td>
-                                                        <td className="px-4 py-2 font-medium">{itemIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
-                                                        <td className="px-4 py-2">{qtyStr || <span className="text-red-600 italic">Missing</span>}</td>
-                                                        <td className="px-4 py-2">
-                                                            {item ? (
-                                                                <span className="text-emerald-700 font-medium">{item.code} - {item.name}</span>
-                                                            ) : (
-                                                                <span className="text-red-600 italic">Not found</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="px-4 py-2 text-center">
-                                                            {isValid ? (
-                                                                <CheckCircle className="text-emerald-600 mx-auto" size={18} />
-                                                            ) : (
-                                                                <AlertCircle className="text-red-600 mx-auto" size={18} />
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                            <button
-                                onClick={() => { setShowCsvModal(false); setCsvPreview([]); setCsvErrors([]); }}
-                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={processCsvProduction}
-                                disabled={csvProcessing || csvPreview.length === 0}
-                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
-                            >
-                                {csvProcessing ? (
-                                    <>
-                                        <RefreshCw className="animate-spin" size={16} />
-                                        Processing...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Upload size={16} />
-                                        Process & Add to List ({csvPreview.filter((row: any) => {
-                                            // Support multiple column name variations
-                                            const itemIdentifier = (
-                                                row.Item || row.item || 
-                                                row['Item Code'] || row['item code'] || row['Item code'] || 
-                                                row.ItemCode || row.itemCode || row.itemcode ||
-                                                row.ItemName || row.itemName || row.itemname ||
-                                                row.Code || row.code || 
-                                                row['Item Name'] || row['item name'] || row['Item name'] ||
-                                                ''
-                                            ).trim();
-                                            const qtyStr = (
-                                                row.Qty || row.qty || 
-                                                row.Quantity || row.quantity || 
-                                                row['Quantity'] || row['quantity'] ||
-                                                ''
-                                            ).trim();
-                                            const item = state.items.find(i => 
-                                                i.category !== 'Raw Material' && (
-                                                    i.code.toLowerCase() === itemIdentifier.toLowerCase() ||
-                                                    i.name.toLowerCase() === itemIdentifier.toLowerCase()
-                                                )
-                                            );
-                                            return item && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
-                                        }).length} items)
-                                    </>
-                                )}
-                            </button>
-                        </div>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95 duration-200">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><CheckCircle className="text-emerald-500" /> Confirm Production</h3><button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button></div>
+                        <div className="p-6"><p className="text-sm text-slate-500 mb-4">Please review the staged items before saving. Compare with yesterday's output to ensure consistency.</p><table className="w-full text-sm text-left mb-6"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-3">Item</th><th className="px-4 py-3 text-right">Qty (Today)</th><th className="px-4 py-3 text-right">Yesterday</th><th className="px-4 py-3 text-right">Variance</th></tr></thead><tbody className="divide-y divide-slate-100">{stagedProds.map(p => { const yesterdayQty = getYesterdayProduction(p.itemId); const variance = p.qtyProduced - yesterdayQty; return ( <tr key={p.id}><td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td><td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td><td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td><td className={`px-4 py-3 text-right ${variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'}`}>{variance > 0 ? '+' : ''}{variance}</td></tr> ); })}</tbody></table><div className="flex justify-end gap-3"><button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">Cancel</button><button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">Save & Continue</button></div></div>
                     </div>
                 </div>
             )}
@@ -4453,7 +3412,7 @@ export const DataEntry: React.FC = () => {
                                                 <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name}</td>
                                                 <td className="px-3 py-2 text-center">{item.qty || 0}</td>
                                                 <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
-                                                <td className="px-3 py-2 text-right font-mono">{(item.rate || 0).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{(item.ratePerUnit || 0).toFixed(2)}</td>
                                                 <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
                                             </tr>
                                         ))}
@@ -4481,28 +3440,14 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     )}
                                     {siCosts.length > 0 && (
-                                        <div className="space-y-1">
-                                            {siCosts.map((cost, idx) => {
-                                                const amountInInvoiceCurrency = (cost.amount || 0) / (cost.exchangeRate || 1);
-                                                const costLabel = cost.costType + 
-                                                    (cost.providerId ? ` (${state.partners.find(p => p.id === cost.providerId)?.name})` : '') +
-                                                    (!cost.providerId && (cost as any).customDescription ? ` (${(cost as any).customDescription})` : '');
-                                                return (
-                                                    <div key={idx} className="flex justify-between text-sm text-blue-600">
-                                                        <span>{costLabel}</span>
-                                                        <span className="font-mono">+{amountInInvoiceCurrency.toFixed(2)}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                            <div className="flex justify-between text-sm font-bold text-blue-700 pt-1 border-t border-blue-200">
-                                                <span>Total Additional Costs</span>
-                                                <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0).toFixed(2)}</span>
-                                            </div>
+                                        <div className="flex justify-between text-sm text-blue-600">
+                                            <span>Additional Costs</span>
+                                            <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0).toFixed(2)}</span>
                                         </div>
                                     )}
                                     <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
                                         <span>Net Total</span>
-                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0)).toFixed(2)}</span>
+                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0)).toFixed(2)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -4525,339 +3470,6 @@ export const DataEntry: React.FC = () => {
                     </div>
                 </div>
             )}
-
-            {/* Invoice Review Modal (Read-Only) */}
-            {viewingInvoice && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-200 bg-gradient-to-r from-blue-600 to-blue-700 text-white flex justify-between items-center">
-                            <div>
-                                <h3 className="text-2xl font-bold">Sales Invoice Review</h3>
-                                <p className="text-sm text-blue-100 mt-1">Invoice #{viewingInvoice.invoiceNo} - {viewingInvoice.status}</p>
-                            </div>
-                            <button
-                                onClick={() => setViewingInvoice(null)}
-                                className="text-white hover:text-blue-100 p-2 rounded-lg hover:bg-blue-500/20"
-                                title="Close"
-                            >
-                                <X size={24} />
-                            </button>
-                        </div>
-                        
-                        <div className="p-6 space-y-6">
-                            {/* Invoice Header */}
-                            <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
-                                <div>
-                                    <p className="text-xs text-slate-500 font-semibold uppercase">Invoice Number</p>
-                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.invoiceNo}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-500 font-semibold uppercase">Date</p>
-                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.date}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-500 font-semibold uppercase">Customer</p>
-                                    <p className="text-lg font-bold text-slate-800">{state.partners.find(p => p.id === viewingInvoice.customerId)?.name}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-500 font-semibold uppercase">Container</p>
-                                    <p className="text-lg font-bold text-slate-800">{viewingInvoice.containerNumber || 'N/A'}</p>
-                                </div>
-                                {viewingInvoice.divisionId && (
-                                    <div>
-                                        <p className="text-xs text-slate-500 font-semibold uppercase">Division</p>
-                                        <p className="text-lg font-bold text-slate-800">{state.divisions.find(d => d.id === viewingInvoice.divisionId)?.name || 'N/A'}</p>
-                                    </div>
-                                )}
-                                {viewingInvoice.packingColor && (
-                                    <div>
-                                        <p className="text-xs text-slate-500 font-semibold uppercase">Packing Color</p>
-                                        <p className="text-lg font-bold text-slate-800">{viewingInvoice.packingColor}</p>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Items Table */}
-                            <div>
-                                <h4 className="font-bold text-slate-700 mb-3">Items</h4>
-                                <table className="w-full text-sm">
-                                    <thead className="bg-slate-100 text-slate-600">
-                                        <tr>
-                                            <th className="px-3 py-2 text-left">Item</th>
-                                            <th className="px-3 py-2 text-center">Qty</th>
-                                            <th className="px-3 py-2 text-center">Kg</th>
-                                            <th className="px-3 py-2 text-right">Rate</th>
-                                            <th className="px-3 py-2 text-right">Total</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {viewingInvoice.items.map((item, idx) => (
-                                            <tr key={idx}>
-                                                <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name || item.itemName}</td>
-                                                <td className="px-3 py-2 text-center">{item.qty || 0}</td>
-                                                <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
-                                                <td className="px-3 py-2 text-right font-mono">{(item.rate || 0).toFixed(2)}</td>
-                                                <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-
-                            {/* Summary */}
-                            <div className="bg-slate-50 p-4 rounded-lg">
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-600">Gross Total</span>
-                                        <span className="font-mono font-bold">{viewingInvoice.currency} {viewingInvoice.grossTotal.toFixed(2)}</span>
-                                    </div>
-                                    {viewingInvoice.discount > 0 && (
-                                        <div className="flex justify-between text-sm text-red-600">
-                                            <span>Discount</span>
-                                            <span className="font-mono">-{viewingInvoice.discount.toFixed(2)}</span>
-                                        </div>
-                                    )}
-                                    {viewingInvoice.surcharge > 0 && (
-                                        <div className="flex justify-between text-sm text-emerald-600">
-                                            <span>Surcharge</span>
-                                            <span className="font-mono">+{viewingInvoice.surcharge.toFixed(2)}</span>
-                                        </div>
-                                    )}
-                                    {viewingInvoice.additionalCosts && viewingInvoice.additionalCosts.length > 0 && (
-                                        <div className="space-y-1">
-                                            {viewingInvoice.additionalCosts.map((cost, idx) => {
-                                                const amountInInvoiceCurrency = (cost.amount || 0) / (cost.exchangeRate || 1);
-                                                const costLabel = cost.costType + 
-                                                    (cost.providerId ? ` (${state.partners.find(p => p.id === cost.providerId)?.name})` : '') +
-                                                    (!cost.providerId && (cost as any).customDescription ? ` (${(cost as any).customDescription})` : '');
-                                                return (
-                                                    <div key={idx} className="flex justify-between text-sm text-blue-600">
-                                                        <span>{costLabel}</span>
-                                                        <span className="font-mono">+{amountInInvoiceCurrency.toFixed(2)}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                            <div className="flex justify-between text-sm font-bold text-blue-700 pt-1 border-t border-blue-200">
-                                                <span>Total Additional Costs</span>
-                                                <span className="font-mono">+{viewingInvoice.additionalCosts.reduce((s, c) => s + ((c.amount || 0) / (c.exchangeRate || 1)), 0).toFixed(2)}</span>
-                                            </div>
-                                        </div>
-                                    )}
-                                    <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
-                                        <span>Net Total</span>
-                                        <span className="font-mono">{viewingInvoice.currency} {viewingInvoice.netTotal.toFixed(2)}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end">
-                            <button
-                                onClick={() => setViewingInvoice(null)}
-                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold"
-                            >
-                                Close
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* CSV Preview Modal for Original Opening */}
-            {showOoCsvModal && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-none sm:rounded-xl shadow-2xl max-w-4xl w-full h-full sm:h-auto sm:max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                <FileText className="text-green-500" /> CSV Preview - Entry Date: {ooDate}
-                            </h3>
-                            <button onClick={() => { setShowOoCsvModal(false); setOoCsvPreview([]); setOoCsvErrors([]); }} className="text-slate-400 hover:text-slate-600">
-                                <X size={20} />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6">
-                            {ooCsvErrors.length > 0 && (
-                                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <AlertCircle className="text-red-600" size={20} />
-                                        <h4 className="font-bold text-red-800">Errors Found ({ooCsvErrors.length})</h4>
-                                    </div>
-                                    <div className="max-h-32 overflow-y-auto text-sm text-red-700">
-                                        {ooCsvErrors.slice(0, 10).map((error, idx) => (
-                                            <div key={idx} className="mb-1">• {error}</div>
-                                        ))}
-                                        {ooCsvErrors.length > 10 && <div className="text-red-600 font-medium">... and {ooCsvErrors.length - 10} more errors</div>}
-                                    </div>
-                                </div>
-                            )}
-                            <div className="mb-4">
-                                <p className="text-sm text-slate-600 mb-2">
-                                    Found <strong>{ooCsvPreview.length}</strong> rows. Suppliers and Original Types will be matched by name.
-                                </p>
-                                <p className="text-xs text-slate-500">
-                                    Only suppliers with existing purchases and their Original Types will be processed.
-                                </p>
-                            </div>
-                            <div className="border border-slate-200 rounded-lg overflow-hidden">
-                                <div className="max-h-96 overflow-y-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-slate-50 sticky top-0">
-                                            <tr>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Row</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Supplier (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Original Type (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Batch (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Qty (from CSV)</th>
-                                                <th className="px-4 py-2 text-left border-b border-slate-200">Matched</th>
-                                                <th className="px-4 py-2 text-center border-b border-slate-200">Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {ooCsvPreview.map((row: any, index: number) => {
-                                                const supplierIdentifier = (
-                                                    row.Supplier || row.supplier || 
-                                                    row['Supplier'] || row['supplier'] ||
-                                                    row.SupplierName || row.supplierName ||
-                                                    ''
-                                                ).trim();
-                                                const typeIdentifier = (
-                                                    row['Original Type'] || row['original type'] || row['Original type'] ||
-                                                    row.OriginalType || row.originalType || row.originaltype ||
-                                                    row.Type || row.type ||
-                                                    ''
-                                                ).trim();
-                                                const batchStr = (
-                                                    row.Batch || row.batch || 
-                                                    row['Batch Number'] || row['batch number'] || row['Batch number'] ||
-                                                    row.BatchNumber || row.batchNumber ||
-                                                    ''
-                                                ).trim();
-                                                const qtyStr = (
-                                                    row.Qty || row.qty || 
-                                                    row.Quantity || row.quantity || 
-                                                    ''
-                                                ).trim();
-                                                
-                                                const supplier = state.partners.find(p => 
-                                                    [PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER].includes(p.type) && (
-                                                        p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
-                                                        p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
-                                                    )
-                                                );
-                                                
-                                                let originalType = null;
-                                                if (supplier) {
-                                                    const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
-                                                    const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
-                                                    originalType = state.originalTypes.find(ot => 
-                                                        typeIdsFromPurchases.includes(ot.id) && (
-                                                            ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
-                                                            ot.name.toLowerCase().includes(typeIdentifier.toLowerCase()) ||
-                                                            ot.id.toLowerCase() === typeIdentifier.toLowerCase()
-                                                        )
-                                                    );
-                                                }
-                                                
-                                                const isValid = supplier && originalType && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
-                                                
-                                                return (
-                                                    <tr key={index} className={isValid ? 'bg-emerald-50/30' : 'bg-red-50/30'}>
-                                                        <td className="px-4 py-2 font-mono text-xs text-slate-500">{index + 1}</td>
-                                                        <td className="px-4 py-2 font-medium">{supplierIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
-                                                        <td className="px-4 py-2">{typeIdentifier || <span className="text-red-600 italic">Missing</span>}</td>
-                                                        <td className="px-4 py-2">{batchStr || <span className="text-slate-400 italic">-</span>}</td>
-                                                        <td className="px-4 py-2">{qtyStr || <span className="text-red-600 italic">Missing</span>}</td>
-                                                        <td className="px-4 py-2">
-                                                            {supplier && originalType ? (
-                                                                <span className="text-emerald-700 font-medium text-xs">{supplier.name} - {originalType.name}</span>
-                                                            ) : (
-                                                                <span className="text-red-600 italic text-xs">
-                                                                    {!supplier ? 'Supplier not found' : 'Type not found for supplier'}
-                                                                </span>
-                                                            )}
-                                                        </td>
-                                                        <td className="px-4 py-2 text-center">
-                                                            {isValid ? (
-                                                                <CheckCircle className="text-emerald-600 mx-auto" size={18} />
-                                                            ) : (
-                                                                <AlertCircle className="text-red-600 mx-auto" size={18} />
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                            <button
-                                onClick={() => { setShowOoCsvModal(false); setOoCsvPreview([]); setOoCsvErrors([]); }}
-                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-white font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={processOoCsvOpening}
-                                disabled={ooCsvProcessing || ooCsvPreview.length === 0}
-                                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
-                            >
-                                {ooCsvProcessing ? (
-                                    <>
-                                        <RefreshCw className="animate-spin" size={16} />
-                                        Processing...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Upload size={16} />
-                                        Process & Add to List ({ooCsvPreview.filter((row: any) => {
-                                            const supplierIdentifier = (
-                                                row.Supplier || row.supplier || 
-                                                row['Supplier'] || row['supplier'] ||
-                                                row.SupplierName || row.supplierName ||
-                                                ''
-                                            ).trim();
-                                            const typeIdentifier = (
-                                                row['Original Type'] || row['original type'] || row['Original type'] ||
-                                                row.OriginalType || row.originalType ||
-                                                row.Type || row.type ||
-                                                ''
-                                            ).trim();
-                                            const qtyStr = (
-                                                row.Qty || row.qty || 
-                                                row.Quantity || row.quantity || 
-                                                ''
-                                            ).trim();
-                                            
-                                            const supplier = state.partners.find(p => 
-                                                [PartnerType.SUB_SUPPLIER, PartnerType.SUPPLIER].includes(p.type) && (
-                                                    p.name.toLowerCase() === supplierIdentifier.toLowerCase() ||
-                                                    p.name.toLowerCase().includes(supplierIdentifier.toLowerCase())
-                                                )
-                                            );
-                                            
-                                            let originalType = null;
-                                            if (supplier) {
-                                                const supplierPurchases = state.purchases.filter(p => p.supplierId === supplier.id);
-                                                const typeIdsFromPurchases = Array.from(new Set(supplierPurchases.map(p => p.originalTypeId)));
-                                                originalType = state.originalTypes.find(ot => 
-                                                    typeIdsFromPurchases.includes(ot.id) && (
-                                                        ot.name.toLowerCase() === typeIdentifier.toLowerCase() ||
-                                                        ot.name.toLowerCase().includes(typeIdentifier.toLowerCase())
-                                                    )
-                                                );
-                                            }
-                                            
-                                            return supplier && originalType && qtyStr && !isNaN(parseFloat(qtyStr)) && parseFloat(qtyStr) > 0;
-                                        }).length} items)
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
-};
+};            

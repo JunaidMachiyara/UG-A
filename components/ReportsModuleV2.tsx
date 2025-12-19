@@ -36,7 +36,7 @@ import {
     Truck,
     History
 } from 'lucide-react';
-import { CHART_COLORS } from '../constants';
+import { CHART_COLORS, EXCHANGE_RATES } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -384,15 +384,15 @@ const InventoryIntelligence: React.FC = () => {
                     </div>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
+                    <table className="w-full text-sm text-left min-w-full">
                         <thead className="bg-white text-slate-500 uppercase font-bold text-xs border-b border-slate-200">
                             <tr>
-                                <th className="px-6 py-4">Item Code</th>
-                                <th className="px-6 py-4">Item Name</th>
-                                <th className="px-6 py-4 text-right">Opening Stock</th>
-                                <th className="px-6 py-4 text-right">Quantity Sold</th>
-                                <th className="px-6 py-4 text-right">Current Stock</th>
-                                <th className="px-6 py-4 text-center">Invoices</th>
+                                <th className="px-4 py-4 whitespace-nowrap">Item Code</th>
+                                <th className="px-4 py-4 min-w-[250px]">Item Name</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Opening Stock</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Quantity Sold</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Current Stock</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">Invoices</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -481,26 +481,26 @@ const InventoryIntelligence: React.FC = () => {
                     </div>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
+                    <table className="w-full text-sm text-left min-w-full">
                         <thead className="bg-white text-slate-500 uppercase font-bold text-xs border-b border-slate-200">
                             <tr>
-                                <th className="px-6 py-4">Item</th>
-                                <th className="px-6 py-4 text-center">Status</th>
-                                <th className="px-6 py-4 text-right">Prod. Cost</th>
-                                <th className="px-6 py-4 text-right">Sale Price</th>
-                                <th className="px-6 py-4 text-right">Margin</th>
-                                <th className="px-6 py-4 text-center">Sales Freq</th>
-                                <th className="px-6 py-4 text-center">Prod / Sold (Units)</th>
+                                <th className="px-4 py-4 min-w-[250px]">Item</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">Status</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Prod. Cost</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Sale Price</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Margin</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">Sales Freq</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">Prod / Sold (Units)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {feasibilityData.map(item => (
                                 <tr key={item.id} className="hover:bg-slate-50">
-                                    <td className="px-6 py-3 font-medium text-slate-700">
+                                    <td className="px-4 py-3 font-medium text-slate-700">
                                         {item.name}
                                         <div className="text-xs text-slate-400">{state.categories.find(c => c.id === item.category)?.name || item.category}</div>
                                     </td>
-                                    <td className="px-6 py-3 text-center">
+                                    <td className="px-4 py-3 text-center whitespace-nowrap">
                                         <span className={`px-2 py-1 rounded text-xs font-bold border ${
                                             item.status === 'Excellent' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
                                             item.status === 'Good' ? 'bg-blue-100 text-blue-700 border-blue-200' :
@@ -840,14 +840,14 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                         <button onClick={() => setAddCustomerModalOpen(true)} className="bg-white text-blue-600 px-3 py-1 rounded text-sm font-bold hover:bg-blue-50"><Plus size={14}/></button>
                     </div>
                     <div className="flex-1 overflow-auto">
-                        <table className="w-full text-sm text-left">
+                        <table className="w-full text-sm text-left min-w-full">
                             <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                                 <tr>
-                                    <th className="px-4 py-2">Customer</th>
-                                    <th className="px-4 py-2 text-right">Receivable</th>
-                                    <th className="px-4 py-2 text-right">Last Actual</th>
-                                    <th className="px-4 py-2 text-right">This Plan</th>
-                                    <th className="px-4 py-2 text-center">Action</th>
+                                    <th className="px-4 py-2 min-w-[250px]">Customer</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Receivable</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Actual</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Plan</th>
+                                    <th className="px-4 py-2 text-center whitespace-nowrap">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -885,14 +885,14 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                         <button onClick={() => setAddSupplierModalOpen(true)} className="bg-white text-red-600 px-3 py-1 rounded text-sm font-bold hover:bg-red-50"><Plus size={14}/></button>
                     </div>
                      <div className="flex-1 overflow-auto">
-                        <table className="w-full text-sm text-left">
+                        <table className="w-full text-sm text-left min-w-full">
                             <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                                 <tr>
-                                    <th className="px-4 py-2">Supplier</th>
-                                    <th className="px-4 py-2 text-right">Payable</th>
-                                    <th className="px-4 py-2 text-right">Last Actual</th>
-                                    <th className="px-4 py-2 text-right">This Plan</th>
-                                    <th className="px-4 py-2 text-center">Action</th>
+                                    <th className="px-4 py-2 min-w-[250px]">Supplier</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Payable</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Actual</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Plan</th>
+                                    <th className="px-4 py-2 text-center whitespace-nowrap">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -1181,49 +1181,71 @@ const SmartExplorer: React.FC = () => {
             </div>
 
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden min-h-[500px]">
-                <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
-                        {mode === 'LEDGER' && (
-                            <tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">ID</th><th className="px-6 py-4">Account</th><th className="px-6 py-4">Narration</th><th className="px-6 py-4 text-right">Debit</th><th className="px-6 py-4 text-right">Credit</th></tr>
-                        )}
-                        {mode === 'SALES' && (
-                            <tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Invoice #</th><th className="px-6 py-4">Customer</th><th className="px-6 py-4">Status</th><th className="px-6 py-4 text-right">Items</th><th className="px-6 py-4 text-right">Total</th></tr>
-                        )}
-                        {mode === 'PURCHASE' && (
-                            <tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Batch #</th><th className="px-6 py-4">Supplier</th><th className="px-6 py-4">Type</th><th className="px-6 py-4 text-right">Weight</th><th className="px-6 py-4 text-right">Cost</th></tr>
-                        )}
-                    </thead>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm min-w-full">
+                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
+                            {mode === 'LEDGER' && (
+                                <tr>
+                                    <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                    <th className="px-4 py-4 whitespace-nowrap">ID</th>
+                                    <th className="px-4 py-4 min-w-[200px]">Account</th>
+                                    <th className="px-4 py-4 min-w-[300px]">Narration</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Debit</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Credit</th>
+                                </tr>
+                            )}
+                            {mode === 'SALES' && (
+                                <tr>
+                                    <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                    <th className="px-4 py-4 whitespace-nowrap">Invoice #</th>
+                                    <th className="px-4 py-4 min-w-[200px]">Customer</th>
+                                    <th className="px-4 py-4 whitespace-nowrap">Status</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Items</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Total</th>
+                                </tr>
+                            )}
+                            {mode === 'PURCHASE' && (
+                                <tr>
+                                    <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                    <th className="px-4 py-4 whitespace-nowrap">Batch #</th>
+                                    <th className="px-4 py-4 min-w-[200px]">Supplier</th>
+                                    <th className="px-4 py-4 min-w-[150px]">Type</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Weight</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Cost</th>
+                                </tr>
+                            )}
+                        </thead>
                     <tbody className="divide-y divide-slate-100">
                         {filtered.slice(0, 100).map((row: any, i: number) => (
                             <tr key={i} className="hover:bg-slate-50 transition-colors">
                                 {mode === 'LEDGER' && (
                                     <>
-                                        <td className="px-6 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
-                                        <td className="px-6 py-3 font-mono text-xs font-bold text-blue-600">{row.transactionId}</td>
-                                        <td className="px-6 py-3 font-medium text-slate-800">{row.accountName}</td>
-                                        <td className="px-6 py-3 text-slate-500 max-w-xs truncate">{row.narration}</td>
-                                        <td className="px-6 py-3 text-right font-mono">{row.debit > 0 ? row.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                                        <td className="px-6 py-3 text-right font-mono">{row.credit > 0 ? row.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                        <td className="px-4 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
+                                        <td className="px-4 py-3 font-mono text-xs font-bold text-blue-600 whitespace-nowrap">{row.transactionId}</td>
+                                        <td className="px-4 py-3 font-medium text-slate-800">{row.accountName}</td>
+                                        <td className="px-4 py-3 text-slate-500">{row.narration}</td>
+                                        <td className="px-4 py-3 text-right font-mono whitespace-nowrap">{row.debit > 0 ? row.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                        <td className="px-4 py-3 text-right font-mono whitespace-nowrap">{row.credit > 0 ? row.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                                     </>
                                 )}
                                 {mode === 'SALES' && (
                                     <>
-                                        <td className="px-6 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
-                                        <td className="px-6 py-3 font-mono text-xs font-bold text-blue-600">{row.invoiceNo}</td>
-                                        <td className="px-6 py-3 font-medium text-slate-800">{state.partners.find(p => p.id === row.customerId)?.name}</td>
-                                        <td className="px-6 py-3"><span className={`px-2 py-1 rounded text-xs font-bold ${row.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{row.status}</span></td>
-                                        <td className="px-6 py-3 text-right">{row.items.length}</td>
-                                        <td className="px-6 py-3 text-right font-mono font-bold">${row.netTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                        <td className="px-4 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
+                                        <td className="px-4 py-3 font-mono text-xs font-bold text-blue-600 whitespace-nowrap">{row.invoiceNo}</td>
+                                        <td className="px-4 py-3 font-medium text-slate-800">{state.partners.find(p => p.id === row.customerId)?.name}</td>
+                                        <td className="px-4 py-3 whitespace-nowrap"><span className={`px-2 py-1 rounded text-xs font-bold ${row.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{row.status}</span></td>
+                                        <td className="px-4 py-3 text-right whitespace-nowrap">{row.items.length}</td>
+                                        <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">${row.netTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                                     </>
                                 )}
                                 {mode === 'PURCHASE' && (
                                     <>
                                         <td className="px-6 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
-                                        <td className="px-6 py-3 font-mono text-xs font-bold text-blue-600">{row.batchNumber}</td>
-                                        <td className="px-6 py-3 font-medium text-slate-800">{state.partners.find(p => p.id === row.supplierId)?.name}</td>
-                                        <td className="px-6 py-3 text-slate-500">{row.originalType}</td>
-                                        <td className="px-6 py-3 text-right">{row.weightPurchased.toLocaleString()} kg</td>
-                                        <td className="px-6 py-3 text-right font-mono font-bold">${row.totalLandedCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                        <td className="px-4 py-3 font-mono text-xs font-bold text-blue-600 whitespace-nowrap">{row.batchNumber}</td>
+                                        <td className="px-4 py-3 font-medium text-slate-800">{state.partners.find(p => p.id === row.supplierId)?.name}</td>
+                                        <td className="px-4 py-3 text-slate-500">{row.originalType}</td>
+                                        <td className="px-4 py-3 text-right whitespace-nowrap">{row.weightPurchased.toLocaleString()} kg</td>
+                                        <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">${row.totalLandedCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                                     </>
                                 )}
                             </tr>
@@ -1419,7 +1441,7 @@ const LedgerReport: React.FC = () => {
     const [viewVoucherId, setViewVoucherId] = useState<string | null>(null);
 
     const allEntities = useMemo(() => {
-        const accs = state.accounts.map(a => ({ id: a.id, name: a.name, type: a.type, currency: 'USD', isPartner: false }));
+        const accs = state.accounts.map(a => ({ id: a.id, name: a.name, type: a.type, currency: a.currency || 'USD', isPartner: false }));
         const partners = state.partners.map(p => ({ id: p.id, name: p.name, type: p.type, currency: p.defaultCurrency, isPartner: true }));
         return [...accs, ...partners];
     }, [state.accounts, state.partners]);
@@ -1449,38 +1471,181 @@ const LedgerReport: React.FC = () => {
                 <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">To</label><input type="date" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" value={endDate} onChange={e => setEndDate(e.target.value)} /></div>
                 <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account Type</label><select className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" value={accountType} onChange={e => { setAccountType(e.target.value); setSelectedAccountId(''); }}><option value="ALL">All Types</option><optgroup label="Business Partners"><option value="CUSTOMER">Customers</option><option value="SUPPLIER">Suppliers</option><option value="VENDOR">Vendors</option></optgroup><optgroup label="Chart of Accounts"><option value="ASSET">Assets</option><option value="LIABILITY">Liabilities</option><option value="EXPENSE">Expenses</option><option value="REVENUE">Revenue</option></optgroup></select></div>
                 <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Account</label><div className="relative"><select className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm appearance-none" value={selectedAccountId} onChange={e => setSelectedAccountId(e.target.value)}><option value="">-- View Summary --</option>{filteredEntities.map(e => ( <option key={e.id} value={e.id}>{e.name}</option> ))}</select><ChevronDown className="absolute right-2 top-2.5 text-slate-400 pointer-events-none" size={16} /></div></div>
-                {activeEntity && activeEntity.currency !== 'USD' && ( <div className="flex items-center gap-2 pb-2"><label className="text-sm font-bold text-slate-700">Show {activeEntity.currency}?</label><button onClick={() => setShowFcy(!showFcy)} className={`w-10 h-5 rounded-full transition-colors relative ${showFcy ? 'bg-blue-600' : 'bg-slate-300'}`}><div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-transform ${showFcy ? 'left-6' : 'left-1'}`}></div></button></div> )}
+                {activeEntity && activeEntity.currency !== 'USD' && ( 
+                    <div className="flex items-center gap-2 pb-2">
+                        <label className="text-sm font-bold text-slate-700">View in:</label>
+                        <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1">
+                            <button 
+                                onClick={() => setShowFcy(false)} 
+                                className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${!showFcy ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}
+                            >
+                                USD (Base)
+                            </button>
+                            <button 
+                                onClick={() => setShowFcy(true)} 
+                                className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${showFcy ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}
+                            >
+                                {activeEntity.currency} (Default)
+                            </button>
+                        </div>
+                    </div> 
+                )}
             </div>
 
             <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                 {!selectedAccountId ? (
                     <div className="flex-1 overflow-auto">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10"><tr><th className="px-6 py-4">Account Name</th><th className="px-6 py-4">Type</th><th className="px-6 py-4 text-right">Opening ($)</th><th className="px-6 py-4 text-right">Debit ($)</th><th className="px-6 py-4 text-right">Credit ($)</th><th className="px-6 py-4 text-right">Closing ($)</th><th className="px-6 py-4 text-center">Action</th></tr></thead>
-                            <tbody className="divide-y divide-slate-100">{filteredEntities.map(e => { const stats = getAccountStats(e.id); if (stats.opening === 0 && stats.debit === 0 && stats.credit === 0) return null; return ( <tr key={e.id} className="hover:bg-slate-50 group"><td className="px-6 py-3 font-medium text-slate-800">{e.name}</td><td className="px-6 py-3 text-xs text-slate-500"><span className="bg-slate-100 px-2 py-1 rounded">{e.type}</span></td><td className="px-6 py-3 text-right font-mono text-slate-600">{stats.opening.toLocaleString(undefined, {minimumFractionDigits: 2})}</td><td className="px-6 py-3 text-right font-mono text-slate-600">{stats.debit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td><td className="px-6 py-3 text-right font-mono text-slate-600">{stats.credit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td><td className={`px-6 py-3 text-right font-mono font-bold ${stats.closing < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{Math.abs(stats.closing).toLocaleString(undefined, {minimumFractionDigits: 2})} {stats.closing < 0 ? 'Cr' : 'Dr'}</td><td className="px-6 py-3 text-center"><button onClick={() => setSelectedAccountId(e.id)} className="text-blue-600 hover:text-blue-800 text-xs font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">View Ledger</button></td></tr> ); })}</tbody>
+                        <table className="w-full text-sm text-left min-w-full">
+                            <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">
+                                <tr>
+                                    <th className="px-4 py-4 min-w-[250px]">Account Name</th>
+                                    <th className="px-4 py-4 whitespace-nowrap">Type</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Opening ($)</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Debit ($)</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Credit ($)</th>
+                                    <th className="px-4 py-4 text-right whitespace-nowrap">Closing ($)</th>
+                                    <th className="px-4 py-4 text-center whitespace-nowrap">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filteredEntities.map(e => { 
+                                    const stats = getAccountStats(e.id); 
+                                    if (stats.opening === 0 && stats.debit === 0 && stats.credit === 0) return null; 
+                                    return ( 
+                                        <tr key={e.id} className="hover:bg-slate-50 group">
+                                            <td className="px-4 py-3 font-medium text-slate-800">{e.name}</td>
+                                            <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap"><span className="bg-slate-100 px-2 py-1 rounded">{e.type}</span></td>
+                                            <td className="px-4 py-3 text-right font-mono text-slate-600 whitespace-nowrap">{stats.opening.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-slate-600 whitespace-nowrap">{stats.debit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-slate-600 whitespace-nowrap">{stats.credit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className={`px-4 py-3 text-right font-mono font-bold whitespace-nowrap ${stats.closing < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                                                {Math.abs(stats.closing).toLocaleString(undefined, {minimumFractionDigits: 2})} {stats.closing < 0 ? 'Cr' : 'Dr'}
+                                            </td>
+                                            <td className="px-4 py-3 text-center whitespace-nowrap">
+                                                <button onClick={() => setSelectedAccountId(e.id)} className="text-blue-600 hover:text-blue-800 text-xs font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">
+                                                    View Ledger
+                                                </button>
+                                            </td>
+                                        </tr> 
+                                    ); 
+                                })}
+                            </tbody>
                         </table>
                     </div>
                 ) : (
                     <div className="flex flex-col h-full">
-                        {activeEntity && ( <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center"><div><h3 className="text-xl font-bold text-slate-800">{activeEntity.name}</h3><p className="text-sm text-slate-500">Ledger from {startDate} to {endDate} {showFcy && `(${activeEntity.currency})`}</p></div><div className="flex gap-2"><button onClick={() => window.print()} className="bg-white border border-slate-300 px-3 py-1 rounded text-sm flex gap-2"><Printer size={16}/> Print</button></div></div> )}
+                        {activeEntity && ( 
+                            <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                                <div>
+                                    <h3 className="text-xl font-bold text-slate-800">{activeEntity.name}</h3>
+                                    <p className="text-sm text-slate-500">Ledger from {startDate} to {endDate} {showFcy ? `(${activeEntity.currency})` : '(USD)'}</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => window.print()} className="bg-white border border-slate-300 px-3 py-1 rounded text-sm flex gap-2">
+                                        <Printer size={16}/> Print
+                                    </button>
+                                </div>
+                            </div> 
+                        )}
                         <div className="flex-1 overflow-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-white text-slate-500 font-bold uppercase text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Voucher</th><th className="px-6 py-4">Description</th><th className="px-6 py-4 text-right bg-emerald-50/30">Debit</th><th className="px-6 py-4 text-right bg-red-50/30">Credit</th><th className="px-6 py-4 text-right bg-slate-50">Balance</th></tr></thead>
+                            <table className="w-full text-sm text-left min-w-full">
+                                <thead className="bg-white text-slate-500 font-bold uppercase text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                                    <tr>
+                                        <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                        <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
+                                        <th className="px-4 py-4 min-w-[300px]">Description</th>
+                                        <th className="px-4 py-4 text-right bg-emerald-50/30 whitespace-nowrap">Debit ({showFcy ? activeEntity?.currency : 'USD'})</th>
+                                        <th className="px-4 py-4 text-right bg-red-50/30 whitespace-nowrap">Credit ({showFcy ? activeEntity?.currency : 'USD'})</th>
+                                        <th className="px-4 py-4 text-right bg-slate-50 whitespace-nowrap">Balance ({showFcy ? activeEntity?.currency : 'USD'})</th>
+                                    </tr>
+                                </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {(() => {
                                         if (!activeEntity) return null;
                                         const stats = getAccountStats(activeEntity.id);
-                                        let runningBalance = stats.opening;
+                                        
+                                        // Get exchange rate for account's default currency
+                                        const accountCurrency = state.currencies.find(c => c.code === activeEntity.currency);
+                                        const accountCurrencyRate = accountCurrency?.exchangeRate || EXCHANGE_RATES[activeEntity.currency as keyof typeof EXCHANGE_RATES] || 1;
+                                        
+                                        // Convert opening balance if showing in default currency
+                                        let openingBalance = stats.opening;
+                                        if (showFcy && activeEntity.currency !== 'USD') {
+                                            openingBalance = stats.opening * accountCurrencyRate;
+                                        }
+                                        
+                                        let runningBalance = openingBalance;
+                                        
                                         return (
                                             <>
-                                                <tr className="bg-slate-50 font-bold text-slate-600"><td className="px-6 py-3" colSpan={3}>Opening Balance b/f</td><td className="px-6 py-3 text-right">-</td><td className="px-6 py-3 text-right">-</td><td className="px-6 py-3 text-right bg-slate-100">{showFcy ? 'N/A' : `${Math.abs(stats.opening).toLocaleString(undefined, {minimumFractionDigits: 2})} ${stats.opening < 0 ? 'Cr' : 'Dr'}`}</td></tr>
+                                                <tr className="bg-slate-50 font-bold text-slate-600">
+                                                    <td className="px-4 py-3" colSpan={3}>Opening Balance b/f</td>
+                                                    <td className="px-4 py-3 text-right">-</td>
+                                                    <td className="px-4 py-3 text-right">-</td>
+                                                    <td className="px-4 py-3 text-right bg-slate-100 whitespace-nowrap">
+                                                        {`${Math.abs(openingBalance).toLocaleString(undefined, {minimumFractionDigits: 2})} ${openingBalance < 0 ? 'Cr' : 'Dr'}`}
+                                                    </td>
+                                                </tr>
                                                 {stats.entries.map(entry => {
-                                                    let debitVal = entry.debit; let creditVal = entry.credit;
-                                                    if (showFcy) { if (entry.currency === activeEntity.currency) { debitVal = entry.debit > 0 ? entry.fcyAmount : 0; creditVal = entry.credit > 0 ? entry.fcyAmount : 0; } else { debitVal = 0; creditVal = 0; } }
-                                                    runningBalance = runningBalance + entry.debit - entry.credit;
-                                                    return ( <tr key={entry.id} className="hover:bg-slate-50"><td className="px-6 py-3 whitespace-nowrap text-slate-600">{entry.date}</td><td className="px-6 py-3"><button onClick={() => setViewVoucherId(entry.transactionId)} className="text-blue-600 hover:underline font-mono text-xs font-bold">{entry.transactionId}</button></td><td className="px-6 py-3 text-slate-700 max-w-xs truncate" title={entry.narration}>{entry.narration}</td><td className="px-6 py-3 text-right font-mono bg-emerald-50/10 text-emerald-700">{debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td><td className="px-6 py-3 text-right font-mono bg-red-50/10 text-red-600">{creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td><td className="px-6 py-3 text-right font-mono font-bold bg-slate-50 text-slate-700">{showFcy ? '-' : `${Math.abs(runningBalance).toLocaleString(undefined, {minimumFractionDigits: 2})} ${runningBalance < 0 ? 'Cr' : 'Dr'}`}</td></tr> );
+                                                    let debitVal = entry.debit;
+                                                    let creditVal = entry.credit;
+                                                    
+                                                    // Convert to default currency if toggle is on
+                                                    if (showFcy && activeEntity.currency !== 'USD') {
+                                                        // Convert USD amounts to account's default currency
+                                                        debitVal = entry.debit > 0 ? entry.debit * accountCurrencyRate : 0;
+                                                        creditVal = entry.credit > 0 ? entry.credit * accountCurrencyRate : 0;
+                                                    }
+                                                    
+                                                    // Update running balance in the selected currency
+                                                    if (showFcy && activeEntity.currency !== 'USD') {
+                                                        runningBalance = runningBalance + (entry.debit * accountCurrencyRate) - (entry.credit * accountCurrencyRate);
+                                                    } else {
+                                                        runningBalance = runningBalance + entry.debit - entry.credit;
+                                                    }
+                                                    
+                                                    return ( 
+                                                        <tr key={entry.id} className="hover:bg-slate-50">
+                                                            <td className="px-4 py-3 whitespace-nowrap text-slate-600">{entry.date}</td>
+                                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                                <button onClick={() => setViewVoucherId(entry.transactionId)} className="text-blue-600 hover:underline font-mono text-xs font-bold">
+                                                                    {entry.transactionId}
+                                                                </button>
+                                                            </td>
+                                                            <td className="px-4 py-3 text-slate-700" title={entry.narration}>{entry.narration}</td>
+                                                            <td className="px-4 py-3 text-right font-mono bg-emerald-50/10 text-emerald-700 whitespace-nowrap">
+                                                                {debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-3 text-right font-mono bg-red-50/10 text-red-600 whitespace-nowrap">
+                                                                {creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-3 text-right font-mono font-bold bg-slate-50 text-slate-700 whitespace-nowrap">
+                                                                {`${Math.abs(runningBalance).toLocaleString(undefined, {minimumFractionDigits: 2})} ${runningBalance < 0 ? 'Cr' : 'Dr'}`}
+                                                            </td>
+                                                        </tr> 
+                                                    );
                                                 })}
-                                                <tr className="bg-slate-100 font-bold text-slate-800 border-t-2 border-slate-300"><td className="px-6 py-4" colSpan={3}>Closing Balance c/f</td><td className="px-6 py-4 text-right bg-emerald-50/30 text-emerald-800">{showFcy ? '-' : stats.debit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td><td className="px-6 py-4 text-right bg-red-50/30 text-red-800">{showFcy ? '-' : stats.credit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td><td className="px-6 py-4 text-right bg-slate-200">{showFcy ? '-' : `${Math.abs(stats.closing).toLocaleString(undefined, {minimumFractionDigits: 2})} ${stats.closing < 0 ? 'Cr' : 'Dr'}`}</td></tr>
+                                                <tr className="bg-slate-100 font-bold text-slate-800 border-t-2 border-slate-300">
+                                                    <td className="px-4 py-4" colSpan={3}>Closing Balance c/f</td>
+                                                    <td className="px-4 py-4 text-right bg-emerald-50/30 text-emerald-800 whitespace-nowrap">
+                                                        {showFcy && activeEntity.currency !== 'USD' 
+                                                            ? (stats.debit * accountCurrencyRate).toLocaleString(undefined, {minimumFractionDigits: 2})
+                                                            : stats.debit.toLocaleString(undefined, {minimumFractionDigits: 2})
+                                                        }
+                                                    </td>
+                                                    <td className="px-4 py-4 text-right bg-red-50/30 text-red-800 whitespace-nowrap">
+                                                        {showFcy && activeEntity.currency !== 'USD'
+                                                            ? (stats.credit * accountCurrencyRate).toLocaleString(undefined, {minimumFractionDigits: 2})
+                                                            : stats.credit.toLocaleString(undefined, {minimumFractionDigits: 2})
+                                                        }
+                                                    </td>
+                                                    <td className="px-4 py-4 text-right bg-slate-200 whitespace-nowrap">
+                                                        {showFcy && activeEntity.currency !== 'USD'
+                                                            ? `${Math.abs(stats.closing * accountCurrencyRate).toLocaleString(undefined, {minimumFractionDigits: 2})} ${stats.closing < 0 ? 'Cr' : 'Dr'}`
+                                                            : `${Math.abs(stats.closing).toLocaleString(undefined, {minimumFractionDigits: 2})} ${stats.closing < 0 ? 'Cr' : 'Dr'}`
+                                                        }
+                                                    </td>
+                                                </tr>
                                             </>
                                         );
                                     })()}
@@ -1493,10 +1658,32 @@ const LedgerReport: React.FC = () => {
             {/* Drill Down Modal */}
             {viewVoucherId && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-2xl w-full animate-in zoom-in-95">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-5xl w-full animate-in zoom-in-95">
                         <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4"><h3 className="text-xl font-bold text-slate-800">Transaction Details</h3><button onClick={() => setViewVoucherId(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button></div>
                         <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4"><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs font-bold text-slate-400 uppercase">Voucher ID</span><span className="font-mono font-bold text-blue-600">{viewVoucherId}</span></div><div><span className="block text-xs font-bold text-slate-400 uppercase">Date</span><span className="font-medium text-slate-700">{state.ledger.find(e => e.transactionId === viewVoucherId)?.date}</span></div></div></div>
-                        <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs"><tr><th>Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead><tbody className="divide-y divide-slate-100">{state.ledger.filter(e => e.transactionId === viewVoucherId).map((row, i) => ( <tr key={i}><td className="py-2 pr-4"><div className="font-medium text-slate-800">{row.accountName}</div><div className="text-xs text-slate-500">{row.narration}</div></td><td className="py-2 text-right font-mono">{row.debit > 0 ? row.debit.toLocaleString() : '-'}</td><td className="py-2 text-right font-mono">{row.credit > 0 ? row.credit.toLocaleString() : '-'}</td></tr> ))}</tbody></table>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left min-w-full">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs">
+                                    <tr>
+                                        <th className="px-4 py-3 min-w-[300px]">Account</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Debit</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Credit</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {state.ledger.filter(e => e.transactionId === viewVoucherId).map((row, i) => ( 
+                                        <tr key={i}>
+                                            <td className="px-4 py-2">
+                                                <div className="font-medium text-slate-800">{row.accountName}</div>
+                                                <div className="text-xs text-slate-500">{row.narration}</div>
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">{row.debit > 0 ? row.debit.toLocaleString() : '-'}</td>
+                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">{row.credit > 0 ? row.credit.toLocaleString() : '-'}</td>
+                                        </tr> 
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                         <div className="mt-6 text-right"><button onClick={() => setViewVoucherId(null)} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-700">Close</button></div>
                     </div>
                 </div>

@@ -294,7 +294,7 @@ export const AdminModule: React.FC = () => {
             return;
         }
 
-        const pin = prompt('Enter Supervisor PIN (7860) to delete ALL items for this factory:');
+        const pin = prompt('Enter Supervisor PIN to delete ALL items for this factory:');
         if (pin !== SUPERVISOR_PIN) {
             alert('Invalid PIN. Operation cancelled.');
             return;
@@ -925,7 +925,7 @@ export const AdminModule: React.FC = () => {
                                 return;
                             }
 
-                            const pin = prompt('Enter Supervisor PIN (7860):');
+                            const pin = prompt('Enter Supervisor PIN:');
                             if (pin !== SUPERVISOR_PIN) {
                                 alert('Invalid PIN. Operation cancelled.');
                                 return;
@@ -1193,7 +1193,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in related collections</li>
                                 <li>Delete old Original Type documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -1496,7 +1496,7 @@ export const AdminModule: React.FC = () => {
                 <div className="mt-4 space-y-3">
                     <button
                         onClick={async () => {
-                            const pin = prompt('Enter Supervisor PIN (7860) to scan invoices:');
+                            const pin = prompt('Enter Supervisor PIN to scan invoices:');
                             if (pin !== SUPERVISOR_PIN) {
                                 alert('Invalid PIN. Operation cancelled.');
                                 return;
@@ -1589,7 +1589,7 @@ export const AdminModule: React.FC = () => {
                 <div className="mt-4 space-y-3">
                     <button
                         onClick={async () => {
-                            const pin = prompt('Enter Supervisor PIN (7860) to scan ledger:');
+                            const pin = prompt('Enter Supervisor PIN to scan ledger:');
                             if (pin !== SUPERVISOR_PIN) {
                                 alert('Invalid PIN. Operation cancelled.');
                                 return;
@@ -1822,7 +1822,7 @@ export const AdminModule: React.FC = () => {
                                                 return;
                                             }
 
-                                            const pin = prompt('Enter Supervisor PIN (7860) to remove duplicates:');
+                                            const pin = prompt('Enter Supervisor PIN to remove duplicates:');
                                             if (pin !== SUPERVISOR_PIN) {
                                                 alert('Invalid PIN. Operation cancelled.');
                                                 return;
@@ -1934,7 +1934,7 @@ export const AdminModule: React.FC = () => {
                                                 return;
                                             }
 
-                                            const pin = prompt('Enter Supervisor PIN (7860) to rebuild invoices:');
+                                            const pin = prompt('Enter Supervisor PIN to rebuild invoices:');
                                             if (pin !== SUPERVISOR_PIN) {
                                                 alert('Invalid PIN. Operation cancelled.');
                                                 return;
@@ -2085,7 +2085,7 @@ export const AdminModule: React.FC = () => {
                             <li>Purchases, Productions, or other transactions</li>
                         </ul>
                         <p className="text-xs text-amber-700 mt-2">
-                            <strong>Requires Supervisor PIN (7860)</strong>
+                            <strong>Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -2096,7 +2096,7 @@ export const AdminModule: React.FC = () => {
                                 return;
                             }
 
-                            const pin = prompt('Enter Supervisor PIN (7860) to delete ALL Sales Invoices:');
+                            const pin = prompt('Enter Supervisor PIN to delete ALL Sales Invoices:');
                             if (pin !== SUPERVISOR_PIN) {
                                 alert('Invalid PIN. Operation cancelled.');
                                 return;
@@ -2347,7 +2347,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in related collections</li>
                                 <li>Delete old Division documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -2662,7 +2662,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in related collections</li>
                                 <li>Delete old Sub Division documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -2952,7 +2952,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in related collections</li>
                                 <li>Delete old Original Product documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -3225,7 +3225,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in Items collection</li>
                                 <li>Delete old Category documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -3483,7 +3483,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Update all references in Items collection</li>
                                 <li>Delete old Section documents</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -3742,7 +3742,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Debit: Inventory - Raw Materials (by purchase totalLandedCost)</li>
                                 <li>Credit: Capital (by purchase totalLandedCost)</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 
@@ -4016,7 +4016,7 @@ export const AdminModule: React.FC = () => {
                                 <li>Delete all related LogisticsEntry records</li>
                                 <li>This action cannot be undone</li>
                             </ul>
-                            <strong className="block mt-2">Requires Supervisor PIN (7860)</strong>
+                            <strong className="block mt-2">Requires Supervisor PIN</strong>
                         </p>
                     </div>
 

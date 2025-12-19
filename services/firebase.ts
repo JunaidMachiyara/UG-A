@@ -1,6 +1,6 @@
 // Firebase Configuration and Initialization
 import { initializeApp } from "firebase/app";
-import { initializeFirestore } from "firebase/firestore";
+import { getFirestore } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
 
 // Your web app's Firebase configuration (loaded from environment variables)
@@ -18,9 +18,7 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 
 // Initialize Firestore
-// Important: Firestore rejects `undefined` field values by default.
-// This setting makes Firestore ignore `undefined` properties instead of throwing.
-export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
+export const db = getFirestore(app);
 
 // Initialize Analytics (optional, only in browser environment)
 let analytics;

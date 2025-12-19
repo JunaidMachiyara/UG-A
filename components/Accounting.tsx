@@ -16,6 +16,7 @@ interface JvRow {
     credit: number;
     currency: Currency;
     exchangeRate: number;
+    baseAmount?: number; // Base Amount in USD - when entered, auto-calculates exchange rate
 }
 
 // Supervisor PIN for secure actions (Hardcoded for clone)
@@ -331,10 +332,53 @@ export const Accounting: React.FC = () => {
                 }
             }
         } else if (vType === 'JV') {
-            const totalDr = jvRows.reduce((sum, r) => sum + (r.debit / r.exchangeRate), 0);
-            const totalCr = jvRows.reduce((sum, r) => sum + (r.credit / r.exchangeRate), 0);
+            // Calculate totals using base amount if available, otherwise use exchange rate
+            const totalDr = jvRows.reduce((sum, r) => {
+                if (r.baseAmount !== undefined && r.baseAmount !== null && r.debit > 0) {
+                    return sum + r.baseAmount;
+                }
+                return sum + (r.debit / r.exchangeRate);
+            }, 0);
+            const totalCr = jvRows.reduce((sum, r) => {
+                if (r.baseAmount !== undefined && r.baseAmount !== null && r.credit > 0) {
+                    return sum + r.baseAmount;
+                }
+                return sum + (r.credit / r.exchangeRate);
+            }, 0);
             if (Math.abs(totalDr - totalCr) > 0.01) return alert(`Journal is unbalanced! Diff: $${(totalDr - totalCr).toFixed(2)}`);
-            entries = jvRows.map(row => ({ date, transactionId: voucherNo, transactionType: TransactionType.JOURNAL_VOUCHER, accountId: row.accountId, accountName: 'Journal Entry', currency: row.currency, exchangeRate: row.exchangeRate, fcyAmount: row.debit > 0 ? row.debit : row.credit, debit: row.debit / row.exchangeRate, credit: row.credit / row.exchangeRate, narration: row.desc || description || 'Manual Journal' }));
+            entries = jvRows.map(row => {
+                // Get actual account name
+                const account = state.accounts.find(a => a.id === row.accountId);
+                const partner = state.partners.find(p => p.id === row.accountId);
+                const accountName = account?.name || partner?.name || 'Unknown Account';
+                
+                // Use base amount if available, otherwise calculate from exchange rate
+                const baseDebit = row.baseAmount !== undefined && row.baseAmount !== null && row.debit > 0 
+                    ? row.baseAmount 
+                    : row.debit / row.exchangeRate;
+                const baseCredit = row.baseAmount !== undefined && row.baseAmount !== null && row.credit > 0 
+                    ? row.baseAmount 
+                    : row.credit / row.exchangeRate;
+                // Recalculate exchange rate if base amount was used (for accurate fcyAmount)
+                const effectiveRate = row.baseAmount !== undefined && row.baseAmount !== null && row.baseAmount > 0
+                    ? (row.debit > 0 ? row.debit : row.credit) / row.baseAmount
+                    : row.exchangeRate;
+                
+                return { 
+                    date, 
+                    transactionId: voucherNo, 
+                    transactionType: TransactionType.JOURNAL_VOUCHER, 
+                    accountId: row.accountId, 
+                    accountName: accountName, 
+                    currency: row.currency, 
+                    exchangeRate: effectiveRate, 
+                    fcyAmount: row.debit > 0 ? row.debit : row.credit, 
+                    debit: baseDebit, 
+                    credit: baseCredit, 
+                    narration: row.desc || description || 'Manual Journal',
+                    factoryId: state.currentFactory?.id || ''
+                };
+            });
         } else if (vType === 'IA') {
             // Inventory Adjustment
             if (!iaItemId || !iaQty || parseFloat(iaQty) <= 0) return alert("Select item and enter valid quantity");
@@ -451,7 +495,52 @@ export const Accounting: React.FC = () => {
     };
 
     // JV Helpers
-    const updateJvRow = (id: string, field: keyof JvRow, value: any) => setJvRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+    const updateJvRow = (id: string, field: keyof JvRow, value: any) => {
+        setJvRows(prev => prev.map(r => {
+            if (r.id !== id) return r;
+            
+            const updatedRow = { ...r, [field]: value };
+            
+            // Auto-calculate exchange rate when base amount is entered (PRIORITY: Base Amount takes precedence)
+            if (field === 'baseAmount') {
+                if (value !== undefined && value !== null && value !== '') {
+                    const baseAmt = parseFloat(value);
+                    const foreignAmt = updatedRow.debit > 0 ? updatedRow.debit : updatedRow.credit;
+                    if (foreignAmt > 0 && baseAmt > 0 && !isNaN(baseAmt)) {
+                        updatedRow.exchangeRate = foreignAmt / baseAmt;
+                    }
+                } else {
+                    // When base amount is cleared, revert to default exchange rate for currency
+                    const selectedCurrency = state.currencies.find(curr => curr.code === updatedRow.currency);
+                    if (selectedCurrency) {
+                        updatedRow.exchangeRate = selectedCurrency.exchangeRate || 1;
+                    }
+                }
+            }
+            // Auto-calculate base amount when exchange rate is manually changed (only if base amount wasn't set)
+            else if (field === 'exchangeRate' && updatedRow.exchangeRate > 0) {
+                // Only auto-calculate if base amount is not set (user preference: base amount takes priority)
+                if (updatedRow.baseAmount === undefined || updatedRow.baseAmount === null || updatedRow.baseAmount === 0) {
+                    const foreignAmt = updatedRow.debit > 0 ? updatedRow.debit : updatedRow.credit;
+                    if (foreignAmt > 0) {
+                        updatedRow.baseAmount = foreignAmt / updatedRow.exchangeRate;
+                    }
+                }
+            }
+            // Auto-calculate base amount when debit/credit changes (only if base amount wasn't manually set)
+            else if ((field === 'debit' || field === 'credit') && updatedRow.exchangeRate > 0) {
+                // Only auto-calculate if base amount is not set (user preference: base amount takes priority)
+                if (updatedRow.baseAmount === undefined || updatedRow.baseAmount === null || updatedRow.baseAmount === 0) {
+                    const foreignAmt = updatedRow.debit > 0 ? updatedRow.debit : updatedRow.credit;
+                    if (foreignAmt > 0) {
+                        updatedRow.baseAmount = foreignAmt / updatedRow.exchangeRate;
+                    }
+                }
+            }
+            
+            return updatedRow;
+        }));
+    };
     const addJvRow = () => setJvRows([...jvRows, { id: Math.random().toString(), accountId: '', desc: '', debit: 0, credit: 0, currency: 'USD', exchangeRate: 1 }]);
     const removeJvRow = (id: string) => setJvRows(prev => prev.filter(r => r.id !== id));
 
@@ -517,7 +606,8 @@ export const Accounting: React.FC = () => {
                         debit: e.debit * e.exchangeRate, // Convert back to entered amount
                         credit: e.credit * e.exchangeRate,
                         currency: e.currency,
-                        exchangeRate: e.exchangeRate
+                        exchangeRate: e.exchangeRate,
+                        baseAmount: e.debit > 0 ? e.debit : e.credit // Set base amount from ledger entry
                     })));
                 } else if (loadedType === 'TR') {
                     const creditEntry = entries.find(e => e.credit > 0);
@@ -580,7 +670,7 @@ export const Accounting: React.FC = () => {
     };
 
     return (
-        <div className="space-y-6 max-w-6xl mx-auto">
+        <div className="space-y-6 w-full">
             {/* Navigation Tabs */}
             <div className="flex gap-4 border-b border-slate-200">
                 <button onClick={() => setActiveTab('voucher')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'voucher' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>New Voucher</button>
@@ -659,9 +749,10 @@ export const Accounting: React.FC = () => {
                                                 <th className="px-4 py-3">Account</th>
                                                 <th className="px-4 py-3">Description</th>
                                                 <th className="px-4 py-3 w-24">Currency</th>
-                                                <th className="px-4 py-3 w-20">Rate</th>
-                                                <th className="px-4 py-3 text-right">Debit</th>
-                                                <th className="px-4 py-3 text-right">Credit</th>
+                                                <th className="px-4 py-3 w-28">Base Amount (USD)</th>
+                                                <th className="px-4 py-3 w-20">Rate (auto)</th>
+                                                <th className="px-4 py-3 text-right">Debit (FCY)</th>
+                                                <th className="px-4 py-3 text-right">Credit (FCY)</th>
                                                 <th className="px-4 py-3 text-center">Action</th>
                                             </tr>
                                         </thead>
@@ -678,22 +769,66 @@ export const Accounting: React.FC = () => {
                                                     </td>
                                                     <td className="px-2 py-2"><input type="text" className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.desc} onChange={e => updateJvRow(row.id, 'desc', e.target.value)} /></td>
                                                     <td className="px-2 py-2">
-                                                        <select className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.currency} onChange={e => { updateJvRow(row.id, 'currency', e.target.value); const selectedCurrency = state.currencies.find(curr => curr.code === e.target.value); updateJvRow(row.id, 'exchangeRate', selectedCurrency?.exchangeRate || 1); }}>
+                                                        <select className="w-full border border-slate-300 rounded p-2 bg-white text-slate-800" value={row.currency} onChange={e => { 
+                                                            updateJvRow(row.id, 'currency', e.target.value); 
+                                                            const selectedCurrency = state.currencies.find(curr => curr.code === e.target.value); 
+                                                            if (selectedCurrency && (!row.baseAmount || row.baseAmount === 0)) {
+                                                                updateJvRow(row.id, 'exchangeRate', selectedCurrency.exchangeRate || 1);
+                                                            }
+                                                        }}>
                                                             {state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}
                                                         </select>
                                                     </td>
-                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-center bg-white text-slate-800" value={row.exchangeRate} onChange={e => updateJvRow(row.id, 'exchangeRate', parseFloat(e.target.value))} /></td>
-                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.credit > 0} value={row.debit} onChange={e => updateJvRow(row.id, 'debit', parseFloat(e.target.value))} /></td>
-                                                    <td className="px-2 py-2"><input type="number" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.debit > 0} value={row.credit} onChange={e => updateJvRow(row.id, 'credit', parseFloat(e.target.value))} /></td>
+                                                    <td className="px-2 py-2">
+                                                        <input 
+                                                            type="number" 
+                                                            step="0.01"
+                                                            className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800 font-mono" 
+                                                            placeholder="Enter USD"
+                                                            value={row.baseAmount !== undefined && row.baseAmount !== null ? row.baseAmount : ''} 
+                                                            onChange={e => {
+                                                                const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                                                updateJvRow(row.id, 'baseAmount', val);
+                                                            }}
+                                                            title="Enter base amount in USD - exchange rate will be auto-calculated"
+                                                        />
+                                                    </td>
+                                                    <td className="px-2 py-2">
+                                                        <input 
+                                                            type="number" 
+                                                            step="0.0001"
+                                                            className="w-full border border-slate-300 rounded p-2 text-center bg-slate-50 text-slate-600 font-mono text-xs" 
+                                                            value={row.exchangeRate.toFixed(4)} 
+                                                            onChange={e => updateJvRow(row.id, 'exchangeRate', parseFloat(e.target.value))}
+                                                            title="Auto-calculated when base amount is entered"
+                                                            readOnly={row.baseAmount !== undefined && row.baseAmount !== null && row.baseAmount > 0}
+                                                        />
+                                                    </td>
+                                                    <td className="px-2 py-2"><input type="number" step="0.01" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.credit > 0} value={row.debit} onChange={e => updateJvRow(row.id, 'debit', parseFloat(e.target.value))} /></td>
+                                                    <td className="px-2 py-2"><input type="number" step="0.01" className="w-full border border-slate-300 rounded p-2 text-right bg-white text-slate-800" disabled={row.debit > 0} value={row.credit} onChange={e => updateJvRow(row.id, 'credit', parseFloat(e.target.value))} /></td>
                                                     <td className="px-2 py-2 text-center"><button onClick={() => removeJvRow(row.id)} className="text-red-500 hover:text-red-700"><Trash2 size={16}/></button></td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                         <tfoot className="bg-slate-50 font-bold text-slate-700">
                                             <tr>
-                                                <td colSpan={4} className="px-4 py-3 text-right">Totals (Base USD):</td>
-                                                <td className="px-4 py-3 text-right">{jvRows.reduce((s, r) => s + (r.debit/r.exchangeRate), 0).toFixed(2)}</td>
-                                                <td className="px-4 py-3 text-right">{jvRows.reduce((s, r) => s + (r.credit/r.exchangeRate), 0).toFixed(2)}</td>
+                                                <td colSpan={5} className="px-4 py-3 text-right">Totals (Base USD):</td>
+                                                <td className="px-4 py-3 text-right">
+                                                    {jvRows.reduce((s, r) => {
+                                                        if (r.baseAmount !== undefined && r.baseAmount !== null && r.debit > 0) {
+                                                            return s + r.baseAmount;
+                                                        }
+                                                        return s + (r.debit / r.exchangeRate);
+                                                    }, 0).toFixed(2)}
+                                                </td>
+                                                <td className="px-4 py-3 text-right">
+                                                    {jvRows.reduce((s, r) => {
+                                                        if (r.baseAmount !== undefined && r.baseAmount !== null && r.credit > 0) {
+                                                            return s + r.baseAmount;
+                                                        }
+                                                        return s + (r.credit / r.exchangeRate);
+                                                    }, 0).toFixed(2)}
+                                                </td>
                                                 <td></td>
                                             </tr>
                                         </tfoot>
@@ -1162,7 +1297,7 @@ export const Accounting: React.FC = () => {
                                         return;
                                     }
 
-                                    const pin = prompt(`Enter Supervisor PIN (7860) to delete voucher "${voucherToDelete}":`);
+                                    const pin = prompt(`Enter Supervisor PIN to delete voucher "${voucherToDelete}":`);
                                     if (pin !== SUPERVISOR_PIN) {
                                         alert('Invalid PIN. Operation cancelled.');
                                         return;
@@ -1196,53 +1331,55 @@ export const Accounting: React.FC = () => {
                             </button>
                         </div>
                         <p className="text-xs text-red-600 mt-2">
-                            ⚠️ This will delete ALL ledger entries for the selected voucher. Requires Supervisor PIN (7860).
+                            ⚠️ This will delete ALL ledger entries for the selected voucher. Requires Supervisor PIN.
                         </p>
                     </div>
 
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                        <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
-                                <tr>
-                                    <th className="px-6 py-4">Date</th>
-                                    <th className="px-6 py-4">Voucher</th>
-                                    <th className="px-6 py-4">Account</th>
-                                    <th className="px-6 py-4 text-right bg-blue-50/50">Amount (FCY)</th>
-                                    <th className="px-6 py-4 text-center">Rate</th>
-                                    <th className="px-6 py-4 text-right">Debit ($)</th>
-                                    <th className="px-6 py-4 text-right">Credit ($)</th>
-                                    <th className="px-6 py-4">Narration</th>
-                                    <th className="px-6 py-4 text-center">Manage</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200 text-slate-700">
-                                {filteredLedger.map((entry) => (
-                                    <tr key={entry.id} className="hover:bg-slate-50 group">
-                                        <td className="px-6 py-4 whitespace-nowrap">{new Date(entry.date).toLocaleDateString()}</td>
-                                        <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                                            <div className="font-bold text-slate-700">{entry.transactionId}</div>
-                                            <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
-                                        </td>
-                                        <td className="px-6 py-4 font-medium">{entry.accountName}</td>
-                                        <td className="px-6 py-4 text-right font-mono bg-blue-50/30">
-                                            {entry.fcyAmount ? (
-                                                <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
-                                            ) : '-'}
-                                        </td>
-                                        <td className="px-6 py-4 text-center text-xs text-slate-500">{entry.exchangeRate !== 1 ? entry.exchangeRate.toFixed(4) : '-'}</td>
-                                        <td className="px-6 py-4 text-right font-mono">{entry.debit > 0 ? entry.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                                        <td className="px-6 py-4 text-right font-mono">{entry.credit > 0 ? entry.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                                        <td className="px-6 py-4 max-w-xs truncate text-slate-500">{entry.narration}</td>
-                                        <td className="px-6 py-4 text-center">
-                                            <div className="flex justify-center gap-2">
-                                                <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
-                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
-                                            </div>
-                                        </td>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm min-w-full">
+                                <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
+                                    <tr>
+                                        <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                        <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
+                                        <th className="px-4 py-4 whitespace-nowrap min-w-[200px]">Account</th>
+                                        <th className="px-4 py-4 text-right bg-blue-50/50 whitespace-nowrap">Amount (FCY)</th>
+                                        <th className="px-4 py-4 text-center whitespace-nowrap">Rate</th>
+                                        <th className="px-4 py-4 text-right whitespace-nowrap">Debit ($)</th>
+                                        <th className="px-4 py-4 text-right whitespace-nowrap">Credit ($)</th>
+                                        <th className="px-4 py-4 min-w-[300px]">Narration</th>
+                                        <th className="px-4 py-4 text-center whitespace-nowrap">Manage</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200 text-slate-700">
+                                    {filteredLedger.map((entry) => (
+                                        <tr key={entry.id} className="hover:bg-slate-50 group">
+                                            <td className="px-4 py-4 whitespace-nowrap">{new Date(entry.date).toLocaleDateString()}</td>
+                                            <td className="px-4 py-4 font-mono text-xs text-slate-500 whitespace-nowrap">
+                                                <div className="font-bold text-slate-700">{entry.transactionId}</div>
+                                                <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
+                                            </td>
+                                            <td className="px-4 py-4 font-medium">{entry.accountName}</td>
+                                            <td className="px-4 py-4 text-right font-mono bg-blue-50/30 whitespace-nowrap">
+                                                {entry.fcyAmount ? (
+                                                    <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                                ) : '-'}
+                                            </td>
+                                            <td className="px-4 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{entry.exchangeRate !== 1 ? entry.exchangeRate.toFixed(4) : '-'}</td>
+                                            <td className="px-4 py-4 text-right font-mono whitespace-nowrap">{entry.debit > 0 ? entry.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                            <td className="px-4 py-4 text-right font-mono whitespace-nowrap">{entry.credit > 0 ? entry.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                                            <td className="px-4 py-4 text-slate-500">{entry.narration}</td>
+                                            <td className="px-4 py-4 text-center whitespace-nowrap">
+                                                <div className="flex justify-center gap-2">
+                                                    <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
+                                                    <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             )}

@@ -6,6 +6,7 @@ interface ProductionRecord {
   productionDate: string;
   itemId: string;
   quantity: number;
+  productionPrice?: number;
 }
 
 interface ProductionCSVUploadProps {
@@ -40,6 +41,7 @@ const ProductionCSVUpload: React.FC<ProductionCSVUploadProps> = ({ onSubmitRecor
             productionDate: row['Production Date'],
             itemId: row['Item ID'],
             quantity: Number(row['Quantity']),
+            productionPrice: row['Production Price'] ? Number(row['Production Price']) : undefined,
           });
         }
         setRecords(parsed);
@@ -84,6 +86,7 @@ const ProductionCSVUpload: React.FC<ProductionCSVUploadProps> = ({ onSubmitRecor
                 <th className="px-2 py-1">Production Date</th>
                 <th className="px-2 py-1">Item ID</th>
                 <th className="px-2 py-1">Quantity</th>
+                <th className="px-2 py-1">Production Price</th>
               </tr>
             </thead>
             <tbody>
@@ -92,6 +95,7 @@ const ProductionCSVUpload: React.FC<ProductionCSVUploadProps> = ({ onSubmitRecor
                   <td className="px-2 py-1">{rec.productionDate}</td>
                   <td className="px-2 py-1">{rec.itemId}</td>
                   <td className="px-2 py-1">{rec.quantity}</td>
+                  <td className="px-2 py-1">{rec.productionPrice !== undefined ? rec.productionPrice.toFixed(2) : '-'}</td>
                 </tr>
               ))}
             </tbody>

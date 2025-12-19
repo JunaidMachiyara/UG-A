@@ -464,6 +464,7 @@ export interface ProductionEntry {
     serialStart?: number; // Was baleStart. Start of the sequence for this batch
     serialEnd?: number;   // Was baleEnd. End of the sequence for this batch
     isRebaling?: boolean; // Flag to distinguish re-baling from actual production
+    productionPrice?: number; // Production price per unit (from CSV or avgProdPrice from form)
 }
 
 export interface InvoiceItem {

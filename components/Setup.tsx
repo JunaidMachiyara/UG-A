@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
-import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
 import { PartnerType, AccountType, PackingType } from '../types';
 import { EXCHANGE_RATES, INITIAL_ACCOUNTS } from '../constants';
 import { EntitySelector } from './EntitySelector';
@@ -26,7 +26,6 @@ export interface FieldDef {
     readOnly?: boolean; 
     compute?: (formData: any, allData: any[]) => any; 
     hidden?: (formData: any) => boolean;
-    validate?: (value: any, formData: any, allData: any[]) => string | null; // Returns error message or null
 }
 
 export interface ColumnDef {
@@ -42,7 +41,6 @@ export interface CrudConfig {
     fields: FieldDef[];
     onSave: (data: any) => void;
     onDelete: (id: string) => void;
-    onUpdate?: (id: string, data: any) => void;
 }
 
 // --- Generic Form Component (Exported for Reuse) ---
@@ -69,35 +67,9 @@ export const GenericForm: React.FC<{
         // Apply overrides
         if (initialOverrides) {
             Object.assign(initialData, initialOverrides);
-            // Backward compatibility: If editing and code field is missing but id exists, use id as code
-            if (initialOverrides.id && !initialOverrides.code && config.fields.find(f => f.name === 'code')) {
-                initialData.code = initialOverrides.id;
-            }
         }
         return initialData;
     });
-
-    // Update form data when initialOverrides changes (for editing)
-    useEffect(() => {
-        if (initialOverrides) {
-            const updatedData: any = {};
-            config.fields.forEach(field => {
-                if (field.defaultValue !== undefined) {
-                    if (typeof field.defaultValue === 'function') {
-                        updatedData[field.name] = field.defaultValue(data);
-                    } else {
-                        updatedData[field.name] = field.defaultValue;
-                    }
-                }
-            });
-            Object.assign(updatedData, initialOverrides);
-            // Backward compatibility: If editing and code field is missing but id exists, use id as code
-            if (initialOverrides.id && !initialOverrides.code && config.fields.find(f => f.name === 'code')) {
-                updatedData.code = initialOverrides.id;
-            }
-            setFormData(updatedData);
-        }
-    }, [initialOverrides, config, data]);
 
     const handleChange = (fieldName: string, value: any) => {
         let updatedData = { ...formData, [fieldName]: value };
@@ -112,7 +84,7 @@ export const GenericForm: React.FC<{
         setFormData(updatedData);
     };
 
-    const handleSave = async (e: React.FormEvent) => {
+    const handleSave = (e: React.FormEvent) => {
         e.preventDefault();
         // Basic validation for visible fields only
         for (const field of config.fields) {
@@ -120,15 +92,6 @@ export const GenericForm: React.FC<{
             if (!isHidden && field.required && !formData[field.name]) {
                 alert(`${field.label} is required`);
                 return;
-            }
-            
-            // Run custom validation if provided
-            if (!isHidden && field.validate) {
-                const error = field.validate(formData[field.name], formData, data);
-                if (error) {
-                    alert(error);
-                    return;
-                }
             }
         }
         
@@ -144,29 +107,13 @@ export const GenericForm: React.FC<{
             }
         }
         
-        
         // If editing (has id in formData), call onUpdate, otherwise call onSave
         if (formData.id && config.onUpdate) {
-            try {
-                console.log('Updating account:', formData.id, formData);
-                await config.onUpdate(formData.id, formData);
-                console.log('Account updated successfully');
-                onSuccess();
-            } catch (error: any) {
-                console.error('Error updating:', error);
-                alert(`Failed to update: ${error.message || 'Unknown error'}`);
-            }
+            config.onUpdate(formData.id, formData);
         } else {
-            try {
-                console.log('Saving new account:', formData);
-                await config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
-                console.log('Account saved successfully');
-                onSuccess();
-            } catch (error: any) {
-                console.error('Error saving:', error);
-                alert(`Failed to save: ${error.message || 'Unknown error'}`);
-            }
+            config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
         }
+        onSuccess();
     };
 
     return (
@@ -393,7 +340,6 @@ const HRModule: React.FC = () => {
         title: 'Employee Register',
         entityKey: 'employees',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name', render: (r) => <div className="font-medium text-slate-800">{r.name}</div> },
             { header: 'Passport', key: 'passportNumber' },
             { header: 'Role', key: 'role', render: (r) => r.role || '-' },
@@ -401,29 +347,6 @@ const HRModule: React.FC = () => {
             { header: 'Status', key: 'status', render: (r) => <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{r.status || 'Active'}</span> },
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Employee ID', 
-                type: 'text', 
-                required: false,
-                placeholder: 'Auto-generated (e.g., EMP-1001)',
-                readOnly: true,
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^EMP-\d+$/)) {
-                        return formData.id;
-                    }
-                    const prefix = 'EMP';
-                    const existingIds = allData
-                        .map((e: any) => {
-                            const match = e.id?.match(/^EMP-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
             { name: 'name', label: 'Full Name', type: 'text', required: true },
             { name: 'passportNumber', label: 'Passport Number', type: 'text', required: true },
             { name: 'role', label: 'Designation', type: 'text', required: false },
@@ -485,6 +408,38 @@ const HRModule: React.FC = () => {
     );
 };
 
+const DataImporter: React.FC = () => {
+    const { cleanupOrphanedLedger } = useData();
+    
+    return (
+        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 mb-6 text-white shadow-lg">
+            <div className="flex items-center gap-4">
+                <div className="bg-white/20 p-3 rounded-lg">
+                    <FileSpreadsheet size={24} className="text-white" />
+                </div>
+                <div>
+                    <h3 className="font-bold text-lg">Bulk Data Import & Utilities</h3>
+                    <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import data or cleanup orphaned records.</p>
+                </div>
+                <div className="ml-auto flex gap-2">
+                    <button 
+                        onClick={() => {
+                            if (confirm('This will delete all ledger entries for purchases/invoices that no longer exist. Continue?')) {
+                                cleanupOrphanedLedger();
+                            }
+                        }}
+                        className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
+                    >
+                        <Trash2 size={16} /> Cleanup Ledger
+                    </button>
+                    <button className="bg-white text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors">
+                        <Upload size={16} /> Upload CSV
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // --- Hook for Configurations (Exported for Reuse) ---
 export const useSetupConfigs = () => {
@@ -496,9 +451,7 @@ export const useSetupConfigs = () => {
         addAccount, 
         deleteEntity, 
         addDivision,
-        updateDivision,
         addSubDivision,
-        updateSubDivision,
         addLogo,
         addWarehouse,
         addOriginalType,
@@ -511,8 +464,6 @@ export const useSetupConfigs = () => {
         title: 'Business Partners',
         entityKey: 'partners',
         columns: [
-            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs font-semibold text-blue-600">{(r as any).code || r.id}</span> },
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-400">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type', render: (r) => <span className="text-xs font-mono bg-slate-100 px-1 rounded">{r.type}</span> },
             { header: 'Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || '-' },
@@ -521,62 +472,6 @@ export const useSetupConfigs = () => {
         ],
         fields: [
             { name: 'type', label: 'Partner Type', type: 'select', options: Object.values(PartnerType), required: true },
-            { 
-                name: 'id', 
-                label: 'Partner ID', 
-                type: 'text', 
-                required: false,
-                placeholder: 'Enter ID (e.g., SUP-1001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    // If ID is provided, check for duplicates
-                    if (value && value.trim() !== '') {
-                        const trimmedId = value.trim();
-                        // Check if this ID already exists (excluding current record if editing)
-                        const existing = allData.find((p: any) => p.id === trimmedId);
-                        // If editing, formData.id will be the current ID, so exclude it from duplicate check
-                        if (existing && existing.id !== formData.id) {
-                            return `Partner ID "${trimmedId}" already exists. Please use a different ID.`;
-                        }
-                    }
-                    return null; // No error
-                },
-                compute: (formData, allData) => {
-                    // If user has manually entered an ID, use it
-                    if (formData.id && formData.id.trim() !== '') {
-                        return formData.id.trim();
-                    }
-                    
-                    // Auto-generate ID based on partner type if not provided
-                    if (!formData.type) return ''; // No type selected yet
-                    
-                    // Get prefix based on partner type
-                    let prefix = 'PTN'; // Default prefix
-                    switch(formData.type) {
-                        case PartnerType.SUPPLIER: prefix = 'SUP'; break;
-                        case PartnerType.CUSTOMER: prefix = 'CUS'; break;
-                        case PartnerType.SUB_SUPPLIER: prefix = 'SUB'; break;
-                        case PartnerType.VENDOR: prefix = 'VEN'; break;
-                        case PartnerType.CLEARING_AGENT: prefix = 'CLA'; break;
-                        case PartnerType.FREIGHT_FORWARDER: prefix = 'FFW'; break;
-                        case PartnerType.COMMISSION_AGENT: prefix = 'COM'; break;
-                    }
-                    
-                    // Find existing partners of same type to get next number
-                    const sameTypePartners = allData.filter((p: any) => p.type === formData.type);
-                    const existingIds = sameTypePartners
-                        .map((p: any) => {
-                            // Extract number from IDs like SUP-1001, CUS-1002, etc.
-                            const match = p.id?.match(new RegExp(`^${prefix}-(\\d+)$`));
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
             { name: 'name', label: 'Company Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
@@ -595,22 +490,7 @@ export const useSetupConfigs = () => {
                 required: false,
                 hidden: (data) => !data.divisionId
             },
-            { 
-                name: 'defaultCurrency', 
-                label: 'Default Currency', 
-                type: 'select', 
-                options: (allData, formData) => {
-                    // Access current state from closure - state is from useSetupConfigs hook
-                    // Return currency codes from state.currencies
-                    if (state.currencies && state.currencies.length > 0) {
-                        return state.currencies.map(c => c.code);
-                    }
-                    // Fallback to USD if no currencies
-                    return ['USD'];
-                }, 
-                required: true, 
-                defaultValue: 'USD' 
-            },
+            { name: 'defaultCurrency', label: 'Default Currency', type: 'select', options: () => state.currencies.length > 0 ? state.currencies.map(c => c.code) : ['USD'], required: true, defaultValue: 'USD' },
             { name: 'contact', label: 'Contact Person', type: 'text' },
             { name: 'phone', label: 'Phone', type: 'text' },
             { name: 'email', label: 'Email', type: 'text' },
@@ -662,50 +542,14 @@ export const useSetupConfigs = () => {
         title: 'Divisions (Business Units)',
         entityKey: 'divisions',
         columns: [
-            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs text-slate-500">{r.code || r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location/HQ', key: 'location' }
         ],
         fields: [
-            {
-                name: 'code',
-                label: 'Division Code',
-                type: 'text',
-                required: false,
-                placeholder: 'Enter Code (e.g., DIV-001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    if (value && value.trim() !== '') {
-                        const trimmedCode = value.trim();
-                        const existing = allData.find((d: any) => (d.code || d.id) === trimmedCode && d.id !== formData.id);
-                        if (existing) {
-                            return `Division Code "${trimmedCode}" already exists. Please use a different code.`;
-                        }
-                    }
-                    return null;
-                },
-                compute: (formData, allData) => {
-                    if (formData.code && formData.code.trim() !== '') {
-                        return formData.code.trim();
-                    }
-                    const prefix = 'DIV';
-                    const existingCodes = allData
-                        .map((d: any) => {
-                            const code = d.code || d.id;
-                            const match = code?.match(/^DIV-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
-                    return `${prefix}-${String(nextNumber).padStart(3, '0')}`;
-                }
-            },
             { name: 'name', label: 'Division Name', type: 'text', required: true },
             { name: 'location', label: 'Location/HQ', type: 'text', required: false }
         ],
         onSave: (data) => addDivision(data),
-        onUpdate: (id, data) => updateDivision(id, data),
         onDelete: (id) => deleteEntity('divisions', id)
     };
 
@@ -713,69 +557,27 @@ export const useSetupConfigs = () => {
         title: 'Sub-Divisions',
         entityKey: 'subDivisions',
         columns: [
-            { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs text-slate-500">{r.code || r.id}</span> },
             { header: 'Name', key: 'name' },
-            { header: 'Parent Division', key: 'divisionId', render: (r) => {
-                const division = state.divisions.find(d => (d.code || d.id) === r.divisionId || d.id === r.divisionId);
-                return division?.name || r.divisionId;
-            }}
+            { header: 'Parent Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || r.divisionId }
         ],
         fields: [
-            {
-                name: 'code',
-                label: 'Sub-Division Code',
-                type: 'text',
-                required: false,
-                placeholder: 'Enter Code (e.g., SUBDIV-001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    if (value && value.trim() !== '') {
-                        const trimmedCode = value.trim();
-                        const existing = allData.find((sd: any) => (sd.code || sd.id) === trimmedCode && sd.id !== formData.id);
-                        if (existing) {
-                            return `Sub-Division Code "${trimmedCode}" already exists. Please use a different code.`;
-                        }
-                    }
-                    return null;
-                },
-                compute: (formData, allData) => {
-                    if (formData.code && formData.code.trim() !== '') {
-                        return formData.code.trim();
-                    }
-                    const prefix = 'SUBDIV';
-                    const existingCodes = allData
-                        .map((sd: any) => {
-                            const code = sd.code || sd.id;
-                            const match = code?.match(/^SUBDIV-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingCodes.length > 0 ? existingCodes[0] + 1 : 1001;
-                    return `${prefix}-${String(nextNumber).padStart(3, '0')}`;
-                }
-            },
             { name: 'name', label: 'Sub-Division Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
                 label: 'Parent Division', 
                 type: 'select', 
-                options: () => state.divisions.map(d => ({ label: d.name, value: d.code || d.id })),
+                options: () => state.divisions.map(d => ({ label: d.name, value: d.id })),
                 required: true 
             }
         ],
         onSave: (data) => addSubDivision(data),
-        onUpdate: (id, data) => updateSubDivision(id, data),
         onDelete: (id) => deleteEntity('subDivisions', id)
     };
 
     const logoConfig: CrudConfig = {
         title: 'Brand Logos',
         entityKey: 'logos',
-        columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
-            { header: 'Brand Name', key: 'name' }
-        ],
+        columns: [ { header: 'Brand Name', key: 'name' } ],
         fields: [ { name: 'name', label: 'Brand Name', type: 'text', required: true } ],
         onSave: (data) => addLogo(data),
         onDelete: (id) => deleteEntity('logos', id)
@@ -785,7 +587,6 @@ export const useSetupConfigs = () => {
         title: 'Inventory Items (Finished Goods)',
         entityKey: 'items',
         columns: [
-            // Show only business code as the visible ID for users
             { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Category', key: 'category' },
@@ -798,27 +599,8 @@ export const useSetupConfigs = () => {
                 name: 'code', 
                 label: 'Item Code', 
                 type: 'text', 
-                required: true,
-                placeholder: 'Enter Item Code or leave blank for auto-generation',
-                compute: (formData, allData) => {
-                    // If user has manually entered a code, always respect it
-                    if (formData.code && String(formData.code).trim() !== '') {
-                        return String(formData.code).trim();
-                    }
-
-                    // Auto-generate ITEM-XXXX based on last code for THIS factory only
-                    const prefix = 'ITEM-';
-                    const existingNums = (allData as any[])
-                        .map((item: any) => {
-                            const match = String(item.code || '').match(/^ITEM-(\d+)$/i);
-                            return match ? parseInt(match[1], 10) : 0;
-                        })
-                        .filter((n: number) => n > 0)
-                        .sort((a: number, b: number) => b - a);
-
-                    const nextNumber = existingNums.length > 0 ? existingNums[0] + 1 : 1001;
-                    return `${prefix}${nextNumber}`;
-                }
+                required: true, 
+                defaultValue: (data: any[]) => `ITEM-${1001 + data.length}` 
             },
             { name: 'name', label: 'Item Name', type: 'text', required: true },
             { 
@@ -837,7 +619,7 @@ export const useSetupConfigs = () => {
             },
             { name: 'packingType', label: 'Packing Type', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'weightPerUnit', label: 'Package Size (Kg)', type: 'number', required: true },
-            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage' },
+            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage', step: 'any' },
             { name: 'salePrice', label: 'Avg Sale Price', type: 'number' },
             { name: 'stockQty', label: 'Opening Stock Qty', type: 'number', placeholder: 'For Opening Balance Only' }
         ],
@@ -850,34 +632,10 @@ export const useSetupConfigs = () => {
         title: 'Warehouses',
         entityKey: 'warehouses',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location', key: 'location' }
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Warehouse ID', 
-                type: 'text', 
-                required: false,
-                placeholder: 'Auto-generated (e.g., WH-1001)',
-                readOnly: true,
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^WH-\d+$/)) {
-                        return formData.id;
-                    }
-                    const prefix = 'WH';
-                    const existingIds = allData
-                        .map((w: any) => {
-                            const match = w.id?.match(/^WH-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
             { name: 'name', label: 'Warehouse Name', type: 'text', required: true },
             { name: 'location', label: 'Location/Address', type: 'text', required: false },
         ],
@@ -888,49 +646,8 @@ export const useSetupConfigs = () => {
     const categoryConfig: CrudConfig = {
         title: 'Product Categories',
         entityKey: 'categories',
-        columns: [
-            { header: 'ID / Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
-            { header: 'Name', key: 'name' }
-        ],
-        fields: [
-            {
-                name: 'id',
-                label: 'Category ID',
-                type: 'text',
-                required: false,
-                placeholder: 'Enter ID (e.g., CAT-1001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    if (value && value.trim() !== '') {
-                        const trimmedId = value.trim();
-                        const existing = allData.find((c: any) => c.id === trimmedId);
-                        if (existing && existing.id !== formData.id) {
-                            return `Category ID "${trimmedId}" already exists. Please use a different ID.`;
-                        }
-                    }
-                    return null;
-                },
-                compute: (formData, allData) => {
-                    // If user entered an ID, respect it
-                    if (formData.id && formData.id.trim() !== '') {
-                        return formData.id.trim();
-                    }
-
-                    // Auto-generate next CAT-XXXX
-                    const prefix = 'CAT';
-                    const existingIds = allData
-                        .map((c: any) => {
-                            const match = c.id?.match(/^CAT-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter((n: number) => n > 0)
-                        .sort((a: number, b: number) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
-            { name: 'name', label: 'Category Name', type: 'text', required: true }
-        ],
+        columns: [{ header: 'Name', key: 'name' }],
+        fields: [{ name: 'name', label: 'Category Name', type: 'text', required: true }],
         onSave: (data) => addCategory(data),
         onDelete: (id) => deleteEntity('categories', id)
     };
@@ -938,47 +655,8 @@ export const useSetupConfigs = () => {
     const sectionConfig: CrudConfig = {
         title: 'Factory Sections',
         entityKey: 'sections',
-        columns: [
-            { header: 'ID / Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
-            { header: 'Name', key: 'name' }
-        ],
-        fields: [
-            {
-                name: 'id',
-                label: 'Section ID',
-                type: 'text',
-                required: false,
-                placeholder: 'Enter ID (e.g., SEC-1001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    if (value && value.trim() !== '') {
-                        const trimmedId = value.trim();
-                        const existing = allData.find((s: any) => s.id === trimmedId);
-                        if (existing && existing.id !== formData.id) {
-                            return `Section ID "${trimmedId}" already exists. Please use a different ID.`;
-                        }
-                    }
-                    return null;
-                },
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '') {
-                        return formData.id.trim();
-                    }
-
-                    const prefix = 'SEC';
-                    const existingIds = allData
-                        .map((s: any) => {
-                            const match = s.id?.match(/^SEC-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter((n: number) => n > 0)
-                        .sort((a: number, b: number) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
-            { name: 'name', label: 'Section Name', type: 'text', required: true }
-        ],
+        columns: [{ header: 'Name', key: 'name' }],
+        fields: [{ name: 'name', label: 'Section Name', type: 'text', required: true }],
         onSave: (data) => addSection(data),
         onDelete: (id) => deleteEntity('sections', id)
     };
@@ -987,51 +665,11 @@ export const useSetupConfigs = () => {
         title: 'Original Types',
         entityKey: 'originalTypes',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Packing', key: 'packingType' },
             { header: 'Size (Kg)', key: 'packingSize' }
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Original Type ID', 
-                type: 'text', 
-                required: false,
-                placeholder: 'Enter ID (e.g., OT-1001) or leave blank for auto-generation',
-                readOnly: false,
-                validate: (value: string, formData: any, allData: any[]) => {
-                    // If ID is provided, check for duplicates
-                    if (value && value.trim() !== '') {
-                        const trimmedId = value.trim();
-                        // Check if this ID already exists (excluding current record if editing)
-                        const existing = allData.find((ot: any) => ot.id === trimmedId);
-                        // If editing, formData.id will be the current ID, so exclude it from duplicate check
-                        if (existing && existing.id !== formData.id) {
-                            return `Original Type ID "${trimmedId}" already exists. Please use a different ID.`;
-                        }
-                    }
-                    return null; // No error
-                },
-                compute: (formData, allData) => {
-                    // If user has manually entered an ID, use it
-                    if (formData.id && formData.id.trim() !== '') {
-                        return formData.id.trim();
-                    }
-                    
-                    // Auto-generate ID if not provided
-                    const prefix = 'OT';
-                    const existingIds = allData
-                        .map((ot: any) => {
-                            const match = ot.id?.match(/^OT-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
             { name: 'name', label: 'Type Name (e.g. KSA Mix)', type: 'text', required: true },
             { name: 'packingType', label: 'Packing', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'packingSize', label: 'Standard Weight (Kg)', type: 'number', required: true }
@@ -1044,35 +682,10 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
-            // Display the business code the user assigned (stored in the `id` field)
-            { header: 'Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-600 font-medium">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
         fields: [
-            { 
-                name: 'id', 
-                label: 'Original Product Code', 
-                type: 'text', 
-                required: false,
-                placeholder: 'Enter ID (e.g., ORP-1001) or leave blank for auto-generation',
-                readOnly: false,
-                compute: (formData, allData) => {
-                    if (formData.id && formData.id.trim() !== '' && !formData.id.match(/^ORP-\d+$/)) {
-                        return formData.id;
-                    }
-                    const prefix = 'ORP';
-                    const existingIds = allData
-                        .map((op: any) => {
-                            const match = op.id?.match(/^ORP-(\d+)$/);
-                            return match ? parseInt(match[1]) : 0;
-                        })
-                        .filter(n => n > 0)
-                        .sort((a, b) => b - a);
-                    const nextNumber = existingIds.length > 0 ? existingIds[0] + 1 : 1001;
-                    return `${prefix}-${nextNumber}`;
-                }
-            },
             { 
                 name: 'originalTypeId', 
                 label: 'Original Type', 
@@ -1104,7 +717,7 @@ export const useSetupConfigs = () => {
 const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
     const { addCurrency, updateCurrency, deleteEntity } = useData();
     const [showForm, setShowForm] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(false); // Collapsed by default
+    const [isExpanded, setIsExpanded] = useState(false);
     const [editingCurrency, setEditingCurrency] = useState<any>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [formData, setFormData] = useState({
@@ -1149,35 +762,24 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
     return (
         <div className="bg-white rounded-xl shadow-md p-6 border border-slate-200">
-            <div className="flex justify-between items-center mb-4">
-                <div 
-                    className="flex items-center gap-2 cursor-pointer select-none"
-                    onClick={() => setIsExpanded(!isExpanded)}
-                >
-                    <CreditCard className="text-blue-500" size={24} />
-                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                        Currency Management
-                        {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                    </h3>
-                </div>
+            <div 
+                className="flex justify-between items-center mb-4 cursor-pointer select-none"
+                onClick={() => setIsExpanded(!isExpanded)}
+            >
+                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    Currency Management
+                    {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                </h3>
                 <button 
                     onClick={(e) => {
                         e.stopPropagation();
-                        setIsExpanded(true); // Auto-expand when adding
                         setShowForm(!showForm);
                     }} 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
-                    <Plus size={18} />
                     {showForm ? 'Cancel' : '+ Add Currency'}
                 </button>
             </div>
-            
-            {!isExpanded && data.length > 0 && (
-                <div className="text-sm text-slate-600 mb-2">
-                    {data.length} currency{data.length !== 1 ? 'ies' : ''} configured. Click to expand and manage.
-                </div>
-            )}
 
             {isExpanded && (
                 <div>
@@ -1197,7 +799,7 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
                     {showForm && (
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Currency Code *</label>
                             <input
@@ -1311,10 +913,9 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
 // --- Chart of Accounts Manager with Bulk Import ---
 const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
-    const { addAccount, updateAccount, deleteEntity } = useData();
+    const { addAccount, deleteEntity } = useData();
     const [isImporting, setIsImporting] = useState(false);
     const [showForm, setShowForm] = useState(false);
-    const [editingAccount, setEditingAccount] = useState<any>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
 
@@ -1361,7 +962,6 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
         title: 'Chart of Accounts',
         entityKey: 'accounts',
         columns: [
-            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
             { header: 'Code', key: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type' },
@@ -1410,7 +1010,6 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
             { name: 'balance', label: 'Opening Balance', type: 'number', defaultValue: 0 }
         ],
         onSave: (data) => addAccount(data),
-        onUpdate: (id, data) => updateAccount(id, data),
         onDelete: (id) => deleteEntity('accounts', id)
     };
 
@@ -1471,20 +1070,13 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 </div>
             )}
 
-            {(showForm || editingAccount) && (
+            {showForm && (
                 <div className="mb-4 border-t pt-4">
                     <GenericForm 
                         config={accountConfig} 
                         data={data} 
-                        onCancel={() => {
-                            setShowForm(false);
-                            setEditingAccount(null);
-                        }} 
-                        onSuccess={() => {
-                            setShowForm(false);
-                            setEditingAccount(null);
-                        }}
-                        initialOverrides={editingAccount || undefined}
+                        onCancel={() => setShowForm(false)} 
+                        onSuccess={() => setShowForm(false)} 
                     />
                 </div>
             )}
@@ -1515,22 +1107,12 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                                     <td className="px-4 py-2 text-sm">{account.type}</td>
                                     <td className="px-4 py-2 text-sm text-right">${account.balance || 0}</td>
                                     <td className="px-4 py-2 text-right">
-                                        <div className="flex items-center justify-end gap-2">
-                                            <button
-                                                onClick={() => setEditingAccount(account)}
-                                                className="text-blue-600 hover:text-blue-800"
-                                                title="Edit Account"
-                                            >
-                                                <Edit2 size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => deleteEntity('accounts', account.id)}
-                                                className="text-red-600 hover:text-red-800"
-                                                title="Delete Account"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
-                                        </div>
+                                        <button
+                                            onClick={() => deleteEntity('accounts', account.id)}
+                                            className="text-red-600 hover:text-red-800"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
                                     </td>
                                 </tr>
                             ))}
@@ -1575,7 +1157,9 @@ export const SetupModule: React.FC = () => {
 
     return (
         <div className="max-w-7xl mx-auto space-y-8">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 lg:gap-8">
+            <DataImporter />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="space-y-6">
                     <div className="flex items-center gap-2 mb-2">
                         <Users className="text-slate-400" size={20} />
