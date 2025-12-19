@@ -453,6 +453,7 @@ export const useSetupConfigs = () => {
         addDivision,
         addSubDivision,
         addLogo,
+        addPort,
         addWarehouse,
         addOriginalType,
         addOriginalProduct,
@@ -583,6 +584,19 @@ export const useSetupConfigs = () => {
         onDelete: (id) => deleteEntity('logos', id)
     };
 
+    const portConfig: CrudConfig = {
+        title: 'Ports of Destination',
+        entityKey: 'ports',
+        columns: [ { header: 'Port Name', key: 'name' }, { header: 'Code', key: 'code' }, { header: 'Country', key: 'country' } ],
+        fields: [
+            { name: 'name', label: 'Port Name', type: 'text', required: true },
+            { name: 'code', label: 'Port Code', type: 'text', required: false },
+            { name: 'country', label: 'Country', type: 'text', required: false }
+        ],
+        onSave: (data) => addPort(data),
+        onDelete: (id) => deleteEntity('ports', id)
+    };
+
     const itemConfig: CrudConfig = {
         title: 'Inventory Items (Finished Goods)',
         entityKey: 'items',
@@ -704,6 +718,7 @@ export const useSetupConfigs = () => {
         divisionConfig,
         subDivisionConfig,
         logoConfig,
+        portConfig,
         itemConfig,
         warehouseConfig,
         categoryConfig,

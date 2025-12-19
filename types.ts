@@ -563,6 +563,7 @@ export interface SalesInvoice {
     containerNumber?: string;
     divisionId?: string;
     subDivisionId?: string;
+    portOfDestinationId?: string; // Port of destination
     
     // Financials
     currency: Currency; // Invoice Currency (always USD for accounting)
@@ -687,6 +688,7 @@ export interface AppState {
     subDivisions: SubDivision[];
     logos: Logo[];
     warehouses: Warehouse[];
+    ports: Port[];
     currencies: CurrencyRate[]; // Currency management
     
     // HR & Fleet

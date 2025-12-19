@@ -1,5 +1,5 @@
 
-import { Account, AccountType, AppState, Item, PackingType, Partner, PartnerType, TransactionType, LedgerEntry, Category, Section, OriginalType, OriginalProduct, Division, SubDivision, Logo, Purchase, LogisticsEntry, SalesInvoice, InvoiceAdditionalCost, Warehouse, OngoingOrder, Employee, Task, Vehicle, ChatMessage, OriginalOpening, ProductionEntry, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate } from './types';
+import { Account, AccountType, AppState, Item, PackingType, Partner, PartnerType, TransactionType, LedgerEntry, Category, Section, OriginalType, OriginalProduct, Division, SubDivision, Logo, Port, Purchase, LogisticsEntry, SalesInvoice, InvoiceAdditionalCost, Warehouse, OngoingOrder, Employee, Task, Vehicle, ChatMessage, OriginalOpening, ProductionEntry, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate } from './types';
 
 // Initial Currency Rates
 export const INITIAL_CURRENCIES: CurrencyRate[] = [
@@ -202,6 +202,8 @@ export const INITIAL_DIVISIONS: Division[] = [];
 export const INITIAL_SUB_DIVISIONS: SubDivision[] = [];
 
 export const INITIAL_LOGOS: Logo[] = [];
+
+export const INITIAL_PORTS: Port[] = [];
 
 export const INITIAL_WAREHOUSES: Warehouse[] = [];
 

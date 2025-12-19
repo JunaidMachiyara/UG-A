@@ -1240,7 +1240,7 @@ const SmartExplorer: React.FC = () => {
                                 )}
                                 {mode === 'PURCHASE' && (
                                     <>
-                                        <td className="px-6 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
+                                        <td className="px-4 py-3 whitespace-nowrap text-slate-600">{row.date}</td>
                                         <td className="px-4 py-3 font-mono text-xs font-bold text-blue-600 whitespace-nowrap">{row.batchNumber}</td>
                                         <td className="px-4 py-3 font-medium text-slate-800">{state.partners.find(p => p.id === row.supplierId)?.name}</td>
                                         <td className="px-4 py-3 text-slate-500">{row.originalType}</td>
@@ -1251,7 +1251,8 @@ const SmartExplorer: React.FC = () => {
                             </tr>
                         ))}
                     </tbody>
-                </table>
+                    </table>
+                </div>
             </div>
         </div>
     );

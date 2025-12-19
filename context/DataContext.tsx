@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useState, useRef } from 'react';
-import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
-import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
+import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Port, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
+import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PORTS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
 import { db } from '../services/firebase';
 import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
@@ -22,6 +22,7 @@ type Action =
     | { type: 'LOAD_DIVISIONS'; payload: Division[] }
     | { type: 'LOAD_SUBDIVISIONS'; payload: SubDivision[] }
     | { type: 'LOAD_LOGOS'; payload: Logo[] }
+    | { type: 'LOAD_PORTS'; payload: Port[] }
     | { type: 'LOAD_ORIGINAL_TYPES'; payload: OriginalType[] }
     | { type: 'LOAD_ORIGINAL_PRODUCTS'; payload: OriginalProduct[] }
     | { type: 'LOAD_EMPLOYEES'; payload: Employee[] }
@@ -41,6 +42,7 @@ type Action =
     | { type: 'ADD_DIVISION'; payload: Division }
     | { type: 'ADD_SUB_DIVISION'; payload: SubDivision }
     | { type: 'ADD_LOGO'; payload: Logo }
+    | { type: 'ADD_PORT'; payload: Port }
     | { type: 'ADD_WAREHOUSE'; payload: Warehouse }
     | { type: 'ADD_EMPLOYEE'; payload: Employee }
     | { type: 'UPDATE_EMPLOYEE'; payload: Employee }
@@ -93,6 +95,7 @@ const initialState: AppState = {
     divisions: INITIAL_DIVISIONS,
     subDivisions: INITIAL_SUB_DIVISIONS,
     logos: INITIAL_LOGOS,
+    ports: INITIAL_PORTS,
     warehouses: INITIAL_WAREHOUSES,
     currencies: [], // Will load from Firebase
     employees: INITIAL_EMPLOYEES,
@@ -175,6 +178,10 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'LOAD_LOGOS': {
             console.log('✅ LOADED LOGOS FROM FIREBASE:', action.payload.length);
             return { ...state, logos: action.payload };
+        }
+        case 'LOAD_PORTS': {
+            console.log('✅ LOADED PORTS FROM FIREBASE:', action.payload.length);
+            return { ...state, ports: action.payload };
         }
         case 'LOAD_ORIGINAL_TYPES': {
             console.log('✅ LOADED ORIGINAL_TYPES FROM FIREBASE:', action.payload.length);
@@ -316,6 +323,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'ADD_DIVISION': return { ...state, divisions: [...state.divisions, action.payload] };
         case 'ADD_SUB_DIVISION': return { ...state, subDivisions: [...state.subDivisions, action.payload] };
         case 'ADD_LOGO': return { ...state, logos: [...state.logos, action.payload] };
+        case 'ADD_PORT': return { ...state, ports: [...state.ports, action.payload] };
         case 'ADD_WAREHOUSE': return { ...state, warehouses: [...state.warehouses, action.payload] };
         case 'ADD_EMPLOYEE': return { ...state, employees: [...state.employees, action.payload] };
         case 'UPDATE_EMPLOYEE': return { ...state, employees: state.employees.map(e => e.id === action.payload.id ? action.payload : e) };
@@ -694,6 +702,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (error) => console.error('❌ Error loading logos:', error)
         );
 
+        // Listen to Ports collection - FILTERED by factoryId
+        const portsQuery = query(collection(db, 'ports'), where('factoryId', '==', currentFactory.id));
+        const unsubscribePorts = onSnapshot(
+            portsQuery,
+            (snapshot) => {
+                const ports: Port[] = [];
+                snapshot.forEach((doc) => {
+                    ports.push({ id: doc.id, ...doc.data() } as Port);
+                });
+                isUpdatingFromFirestore.current = true;
+                dispatch({ type: 'LOAD_PORTS', payload: ports });
+                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+            },
+            (error) => console.error('❌ Error loading ports:', error)
+        );
+
         // Listen to OriginalTypes collection - FILTERED by factoryId
         const originalTypesQuery = query(collection(db, 'originalTypes'), where('factoryId', '==', currentFactory.id));
         const unsubscribeOriginalTypes = onSnapshot(
@@ -918,6 +942,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             unsubscribeDivisions();
             unsubscribeSubDivisions();
             unsubscribeLogos();
+            unsubscribePorts();
             unsubscribeOriginalTypes();
             unsubscribeOriginalProducts();
             unsubscribeEmployees();
@@ -2097,6 +2122,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .then(() => console.log('✅ Logo saved'))
             .catch((error) => console.error('❌ Error saving logo:', error));
     };
+    const addPort = (port: Port) => {
+        const portWithFactory = { ...port, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'ADD_PORT', payload: portWithFactory });
+        const { id: _, ...portData } = portWithFactory;
+        addDoc(collection(db, 'ports'), { ...portData, createdAt: serverTimestamp() })
+            .then(() => console.log('✅ Port saved'))
+            .catch((error) => console.error('❌ Error saving port:', error));
+    };
     const addWarehouse = (warehouse: Warehouse) => {
         const warehouseWithFactory = { ...warehouse, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_WAREHOUSE', payload: warehouseWithFactory });
@@ -2274,6 +2307,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addDivision,
             addSubDivision,
             addLogo,
+            addPort,
             addWarehouse,
             addEmployee,
             updateEmployee,

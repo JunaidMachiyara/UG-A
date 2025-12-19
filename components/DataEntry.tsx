@@ -203,6 +203,9 @@ export const DataEntry: React.FC = () => {
 
     // --- Sales Invoice State ---
     const [siMode, setSiMode] = useState<'create' | 'view'>('create');
+    // Sales Invoice View/Update Filters
+    const [siFilterDate, setSiFilterDate] = useState('');
+    const [siFilterCustomer, setSiFilterCustomer] = useState('');
     const [siId, setSiId] = useState(''); // Internal ID for editing
     const [siInvoiceNo, setSiInvoiceNo] = useState('SINV-1001');
     const [siDate, setSiDate] = useState(new Date().toISOString().split('T')[0]);
@@ -216,6 +219,7 @@ export const DataEntry: React.FC = () => {
     const [siContainer, setSiContainer] = useState('');
     const [siDivision, setSiDivision] = useState('');
     const [siSubDivision, setSiSubDivision] = useState('');
+    const [siPortOfDestination, setSiPortOfDestination] = useState('');
     const [siDiscount, setSiDiscount] = useState('');
     const [siSurcharge, setSiSurcharge] = useState('');
 
@@ -1175,6 +1179,7 @@ export const DataEntry: React.FC = () => {
         setSiContainer(inv.containerNumber || '');
         setSiDivision(inv.divisionId || '');
         setSiSubDivision(inv.subDivisionId || '');
+        setSiPortOfDestination(inv.portOfDestinationId || '');
         setSiDiscount(inv.discount.toString());
         setSiSurcharge(inv.surcharge.toString());
         setSiCart(inv.items);
@@ -2896,7 +2901,7 @@ export const DataEntry: React.FC = () => {
                                             </div>
                                             
                                             <div>
-                                                <label className="block text-sm font-medium text-slate-600 mb-1">Branding / Logo</label>
+                                                <label className="block text-sm font-medium text-slate-600 mb-1">Branding / Logo <span className="text-red-500">*</span></label>
                                                 <EntitySelector 
                                                     entities={state.logos} 
                                                     selectedId={siLogo} 
@@ -2924,7 +2929,7 @@ export const DataEntry: React.FC = () => {
                                             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                                 <div><label className="block text-xs font-semibold text-slate-500 mb-1">Container</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siContainer} onChange={e => setSiContainer(e.target.value)} /></div>
                                                 <div>
-                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Division</label>
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Division <span className="text-red-500">*</span></label>
                                                     <EntitySelector 
                                                         entities={state.divisions} 
                                                         selectedId={siDivision} 
@@ -2944,10 +2949,20 @@ export const DataEntry: React.FC = () => {
                                                         onQuickAdd={() => openQuickAdd(setupConfigs.subDivisionConfig, { divisionId: siDivision })}
                                                     />
                                                 </div>
-                                                <div className="grid grid-cols-2 gap-2">
-                                                    <div><label className="block text-xs font-semibold text-slate-500 mb-1">Discount</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" placeholder="0.00" value={siDiscount} onChange={e => setSiDiscount(e.target.value)} /></div>
-                                                    <div><label className="block text-xs font-semibold text-slate-500 mb-1">Surcharge</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" placeholder="0.00" value={siSurcharge} onChange={e => setSiSurcharge(e.target.value)} /></div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Port of Destination</label>
+                                                    <EntitySelector 
+                                                        entities={state.ports} 
+                                                        selectedId={siPortOfDestination} 
+                                                        onSelect={setSiPortOfDestination} 
+                                                        placeholder="Select Port..." 
+                                                        onQuickAdd={() => openQuickAdd(setupConfigs.portConfig)}
+                                                    />
                                                 </div>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2 mt-4">
+                                                <div><label className="block text-xs font-semibold text-slate-500 mb-1">Discount</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" placeholder="0.00" value={siDiscount} onChange={e => setSiDiscount(e.target.value)} /></div>
+                                                <div><label className="block text-xs font-semibold text-slate-500 mb-1">Surcharge</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" placeholder="0.00" value={siSurcharge} onChange={e => setSiSurcharge(e.target.value)} /></div>
                                             </div>
                                         </div>
                                         
@@ -3022,10 +3037,50 @@ export const DataEntry: React.FC = () => {
                                     </div>
                                 ) : (
                                     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                                        {/* Filters */}
+                                        <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-wrap gap-4 items-end">
+                                            <div className="flex-1 min-w-[200px]">
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Filter by Date</label>
+                                                <input 
+                                                    type="date" 
+                                                    className="w-full bg-white border border-slate-300 rounded-lg p-2 text-sm text-slate-800" 
+                                                    value={siFilterDate} 
+                                                    onChange={e => setSiFilterDate(e.target.value)} 
+                                                />
+                                            </div>
+                                            <div className="flex-1 min-w-[200px]">
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Filter by Customer</label>
+                                                <EntitySelector 
+                                                    entities={state.partners.filter(p => p.type === PartnerType.CUSTOMER)} 
+                                                    selectedId={siFilterCustomer} 
+                                                    onSelect={setSiFilterCustomer} 
+                                                    placeholder="All Customers" 
+                                                />
+                                            </div>
+                                            <div>
+                                                <button 
+                                                    onClick={() => {
+                                                        setSiFilterDate('');
+                                                        setSiFilterCustomer('');
+                                                    }} 
+                                                    className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300"
+                                                >
+                                                    Clear Filters
+                                                </button>
+                                            </div>
+                                        </div>
                                         <table className="w-full text-sm text-left">
                                             <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-xs"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Invoice #</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3 text-right">Net Total</th><th className="px-4 py-3 text-center">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
                                             <tbody className="divide-y divide-slate-100">
-                                                {state.salesInvoices.map(inv => (
+                                                {state.salesInvoices
+                                                    .filter(inv => {
+                                                        // Date filter
+                                                        if (siFilterDate && inv.date !== siFilterDate) return false;
+                                                        // Customer filter
+                                                        if (siFilterCustomer && inv.customerId !== siFilterCustomer) return false;
+                                                        return true;
+                                                    })
+                                                    .map(inv => (
                                                     <tr key={inv.id} className="hover:bg-slate-50">
                                                         <td className="px-4 py-3">{inv.date}</td>
                                                         <td className="px-4 py-3 font-mono font-bold text-blue-600">{inv.invoiceNo}</td>
@@ -3038,7 +3093,11 @@ export const DataEntry: React.FC = () => {
                                                         </td>
                                                     </tr>
                                                 ))}
-                                                {state.salesInvoices.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-slate-400">No invoices found.</td></tr>}
+                                                {state.salesInvoices.filter(inv => {
+                                                    if (siFilterDate && inv.date !== siFilterDate) return false;
+                                                    if (siFilterCustomer && inv.customerId !== siFilterCustomer) return false;
+                                                    return true;
+                                                }).length === 0 && <tr><td colSpan={6} className="text-center py-8 text-slate-400">No invoices found.</td></tr>}
                                             </tbody>
                                         </table>
                                     </div>
@@ -3280,9 +3339,54 @@ export const DataEntry: React.FC = () => {
             {/* Production Summary Modal */}
             {showProdSummary && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><CheckCircle className="text-emerald-500" /> Confirm Production</h3><button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button></div>
-                        <div className="p-6"><p className="text-sm text-slate-500 mb-4">Please review the staged items before saving. Compare with yesterday's output to ensure consistency.</p><table className="w-full text-sm text-left mb-6"><thead className="bg-slate-50 text-slate-500 uppercase text-xs"><tr><th className="px-4 py-3">Item</th><th className="px-4 py-3 text-right">Qty (Today)</th><th className="px-4 py-3 text-right">Yesterday</th><th className="px-4 py-3 text-right">Variance</th></tr></thead><tbody className="divide-y divide-slate-100">{stagedProds.map(p => { const yesterdayQty = getYesterdayProduction(p.itemId); const variance = p.qtyProduced - yesterdayQty; return ( <tr key={p.id}><td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td><td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td><td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td><td className={`px-4 py-3 text-right ${variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'}`}>{variance > 0 ? '+' : ''}{variance}</td></tr> ); })}</tbody></table><div className="flex justify-end gap-3"><button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">Cancel</button><button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">Save & Continue</button></div></div>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] animate-in zoom-in-95 duration-200 flex flex-col">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <CheckCircle className="text-emerald-500" /> Confirm Production ({stagedProds.length} entries)
+                            </h3>
+                            <button onClick={() => setShowProdSummary(false)} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 flex-1 overflow-y-auto min-h-0">
+                            <p className="text-sm text-slate-500 mb-4">Please review the staged items before saving. Compare with yesterday's output to ensure consistency.</p>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-slate-50 text-slate-500 uppercase text-xs sticky top-0">
+                                        <tr>
+                                            <th className="px-4 py-3">Item</th>
+                                            <th className="px-4 py-3 text-right">Qty (Today)</th>
+                                            <th className="px-4 py-3 text-right">Yesterday</th>
+                                            <th className="px-4 py-3 text-right">Variance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {stagedProds.map(p => { 
+                                            const yesterdayQty = getYesterdayProduction(p.itemId); 
+                                            const variance = p.qtyProduced - yesterdayQty; 
+                                            return ( 
+                                                <tr key={p.id}>
+                                                    <td className="px-4 py-3 font-medium text-slate-800">{p.itemName}</td>
+                                                    <td className="px-4 py-3 text-right font-bold">{p.qtyProduced}</td>
+                                                    <td className="px-4 py-3 text-right text-slate-500">{yesterdayQty}</td>
+                                                    <td className={`px-4 py-3 text-right ${variance > 0 ? 'text-emerald-600' : variance < 0 ? 'text-red-500' : 'text-slate-400'}`}>
+                                                        {variance > 0 ? '+' : ''}{variance}
+                                                    </td>
+                                                </tr> 
+                                            ); 
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 flex justify-end gap-3 shrink-0">
+                            <button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">
+                                Cancel
+                            </button>
+                            <button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">
+                                Save & Continue
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
