@@ -1044,8 +1044,7 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
-            // Treat the business ID as a Code for display
-            { header: 'Code', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-500">{r.id}</span> },
+            { header: 'ID', key: 'id', render: (r) => <span className="font-mono text-xs text-slate-600 font-medium">{r.id}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
