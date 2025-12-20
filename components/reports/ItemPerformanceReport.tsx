@@ -27,11 +27,18 @@ export const ItemPerformanceReport: React.FC = () => {
 
     // Get unique categories and sections
     const categories = useMemo(() => {
-        return Array.from(new Set(state.items.map(item => item.category)));
-    }, [state.items]);
+        const uniqueCategoryIds = Array.from(new Set(state.items.map(item => item.category).filter(Boolean)));
+        return uniqueCategoryIds.map(catId => {
+            const category = state.categories.find(c => c.id === catId);
+            return {
+                id: catId,
+                name: category?.name || catId // Use category name if found, otherwise fallback to ID
+            };
+        });
+    }, [state.items, state.categories]);
 
     const sections = useMemo(() => {
-        return Array.from(new Set(state.items.map(item => item.section)));
+        return Array.from(new Set(state.items.map(item => item.section).filter(Boolean)));
     }, [state.items]);
 
     // Calculate item performance
@@ -188,7 +195,7 @@ export const ItemPerformanceReport: React.FC = () => {
                         >
                             <option value="all">All Categories</option>
                             {categories.map(cat => (
-                                <option key={cat} value={cat}>{cat}</option>
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
                             ))}
                         </select>
                     </div>
@@ -333,7 +340,7 @@ export const ItemPerformanceReport: React.FC = () => {
                                         {item.itemName}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-slate-600">
-                                        {item.category}
+                                        {state.categories.find(c => c.id === item.category)?.name || item.category}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-slate-700">
                                         {item.openingStock.toFixed(0)}

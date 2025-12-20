@@ -46,7 +46,7 @@ type ModuleType = 'production' | 'purchase' | 'sales';
 const SUPERVISOR_PIN = '7860';
 
 export const DataEntry: React.FC = () => {
-    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
+    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, deleteProductionsByDate, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
     const location = useLocation();
     const setupConfigs = useSetupConfigs();
     
@@ -246,24 +246,53 @@ export const DataEntry: React.FC = () => {
         const [prodReportEnd, setProdReportEnd] = useState(new Date().toISOString().split('T')[0]);
         const [prodReportItem, setProdReportItem] = useState('');
         const [prodReportSort, setProdReportSort] = useState({ col: 'Timestamp', asc: false });
+        const [deleteProdDate, setDeleteProdDate] = useState('');
+        const [isDeletingProductions, setIsDeletingProductions] = useState(false);
+
+        // Helper function to normalize date to YYYY-MM-DD (local timezone)
+        const normalizeDate = (dateStr: string): string => {
+            if (!dateStr) return '';
+            // If already in YYYY-MM-DD format, use as-is
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                return dateStr;
+            }
+            // Parse and convert to YYYY-MM-DD using local timezone
+            const dateObj = new Date(dateStr);
+            if (!isNaN(dateObj.getTime())) {
+                const year = dateObj.getFullYear();
+                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                const day = String(dateObj.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+            return dateStr; // Return as-is if parsing fails
+        };
 
         // Filter and sort produced entries
         const filteredProducedEntries = useMemo(() => {
             let entries = state.productions.filter(p => {
-                // Support both Firestore timestamp and date string
-                let entryDateObj;
-                if (p.createdAt?.seconds) {
-                    entryDateObj = new Date(p.createdAt.seconds * 1000);
-                } else if (p.date) {
-                    // If p.date is 'YYYY-MM-DD', parse as local date
-                    entryDateObj = new Date(p.date + 'T00:00:00');
+                // Use production date (p.date) for filtering, not createdAt timestamp
+                let entryDateStr = '';
+                if (p.date) {
+                    entryDateStr = normalizeDate(p.date);
                 } else {
-                    return false;
+                    // Fallback to createdAt if date is missing (shouldn't happen)
+                    if (p.createdAt?.seconds) {
+                        const dateObj = new Date(p.createdAt.seconds * 1000);
+                        const year = dateObj.getFullYear();
+                        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                        const day = String(dateObj.getDate()).padStart(2, '0');
+                        entryDateStr = `${year}-${month}-${day}`;
+                    } else {
+                        return false;
+                    }
                 }
-                // Compare only date part for string dates
-                const startDateObj = new Date(prodReportStart + 'T00:00:00');
-                const endDateObj = new Date(prodReportEnd + 'T23:59:59');
-                return entryDateObj >= startDateObj && entryDateObj <= endDateObj && (prodReportItem === '' || p.itemId === prodReportItem);
+                
+                // Normalize filter dates to YYYY-MM-DD format
+                const startDateStr = normalizeDate(prodReportStart);
+                const endDateStr = normalizeDate(prodReportEnd);
+                
+                // Compare as strings (YYYY-MM-DD format)
+                return entryDateStr >= startDateStr && entryDateStr <= endDateStr && (prodReportItem === '' || p.itemId === prodReportItem);
             });
             if (prodReportSort.col) {
                 entries = [...entries].sort((a, b) => {
@@ -1493,11 +1522,19 @@ export const DataEntry: React.FC = () => {
                         continue;
                     }
                     
-                    // Parse Production Price from CSV (required for CSV uploads)
-                    const productionPrice = row['Production Price'] ? parseFloat(row['Production Price']) : undefined;
-                    if (productionPrice === undefined || isNaN(productionPrice)) {
-                        errors.push(`Row ${idx + 2}: Production Price is required for CSV uploads`);
-                        continue;
+                    // Parse Production Price from CSV
+                    // If not provided, use item's avgCost (AvgProductionPrice from Setup) as fallback
+                    let productionPrice: number | undefined;
+                    if (row['Production Price'] && row['Production Price'].trim() !== '') {
+                        const parsedPrice = parseFloat(row['Production Price']);
+                        if (!isNaN(parsedPrice)) {
+                            productionPrice = parsedPrice;
+                        }
+                    }
+                    
+                    // If Production Price not provided in CSV, use item's avgCost as fallback
+                    if (productionPrice === undefined) {
+                        productionPrice = item.avgCost || 0;
                     }
                     
                     let serialStart: number | undefined;
@@ -1511,9 +1548,40 @@ export const DataEntry: React.FC = () => {
                         setTempSerialTracker(prev => ({ ...prev, [item.id]: (serialEnd || 0) + 1 }));
                     }
                     
+                    // Parse and normalize the production date from CSV
+                    let productionDate = row['Production Date'];
+                    // Ensure date is in YYYY-MM-DD format (avoid timezone issues)
+                    if (productionDate) {
+                        // Handle different date formats
+                        // Try parsing as date first
+                        let dateObj: Date | null = null;
+                        
+                        // Check if already in YYYY-MM-DD format
+                        if (/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+                            // Already in correct format, use as-is
+                            productionDate = productionDate;
+                        } else {
+                            // Try parsing various date formats
+                            dateObj = new Date(productionDate);
+                            if (!isNaN(dateObj.getTime())) {
+                                // Convert to YYYY-MM-DD format using local timezone (not UTC)
+                                const year = dateObj.getFullYear();
+                                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                const day = String(dateObj.getDate()).padStart(2, '0');
+                                productionDate = `${year}-${month}-${day}`;
+                            } else {
+                                errors.push(`Row ${idx + 2}: Invalid date format "${row['Production Date']}". Use YYYY-MM-DD format (e.g., 2025-12-16).`);
+                                continue;
+                            }
+                        }
+                    } else {
+                        errors.push(`Row ${idx + 2}: Production Date is required.`);
+                        continue;
+                    }
+                    
                     parsedEntries.push({
                         id: Math.random().toString(36).substr(2, 9),
-                        date: row['Production Date'],
+                        date: productionDate, // Use normalized date
                         itemId: item.id,
                         itemName: item.name,
                         packingType: item.packingType,
@@ -1522,7 +1590,7 @@ export const DataEntry: React.FC = () => {
                         serialStart,
                         serialEnd,
                         factoryId: state.currentFactory?.id || '',
-                        productionPrice: productionPrice // Use Production Price from CSV
+                        productionPrice: productionPrice // Use Production Price from CSV, or item.avgCost as fallback
                     });
                 }
                 
@@ -3123,29 +3191,192 @@ export const DataEntry: React.FC = () => {
                                                 {/* --- PRODUCED PRODUCTION REPORT TAB --- */}
                                                 {activeSubModule === 'produced-production' && (
                                                     <div className="animate-in fade-in duration-300 grid grid-cols-1 md:grid-cols-12 gap-8">
-                                                        <div className="md:col-span-12 mb-6 flex gap-4 items-center">
-                                                            <div>
-                                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Date Range</label>
-                                                                <input type="date" value={prodReportStart} onChange={e => setProdReportStart(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm mr-2" />
-                                                                <input type="date" value={prodReportEnd} onChange={e => setProdReportEnd(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm" />
-                                                            </div>
-                                                            <div className="ml-6">
-                                                                <label className="block text-xs font-semibold text-slate-500 mb-1">Item</label>
-                                                                <select value={prodReportItem} onChange={e => setProdReportItem(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm">
-                                                                    <option value="">All Items</option>
-                                                                    {state.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                                                                </select>
-                                                            </div>
-                                                            {/* Cards for Total Packages and Total Weight */}
-                                                            <div className="ml-auto flex gap-4">
-                                                                <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
-                                                                    <span className="text-xs text-slate-500 font-semibold mb-1">Total Packages (Qty)</span>
-                                                                    <span className="text-2xl font-bold text-blue-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.qtyProduced, 0)}</span>
+                                                        <div className="md:col-span-12 mb-6 space-y-4">
+                                                            <div className="flex gap-4 items-center">
+                                                                <div>
+                                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Date Range</label>
+                                                                    <input type="date" value={prodReportStart} onChange={e => setProdReportStart(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm mr-2" />
+                                                                    <input type="date" value={prodReportEnd} onChange={e => setProdReportEnd(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm" />
                                                                 </div>
-                                                                <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
-                                                                    <span className="text-xs text-slate-500 font-semibold mb-1">Total Weight</span>
-                                                                    <span className="text-2xl font-bold text-emerald-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.weightProduced, 0)}</span>
+                                                                <div className="ml-6 flex items-end gap-2">
+                                                                    <div>
+                                                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Item</label>
+                                                                        <select value={prodReportItem} onChange={e => setProdReportItem(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm">
+                                                                            <option value="">All Items</option>
+                                                                            {state.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            if (filteredProducedEntries.length === 0) {
+                                                                                alert('No data to export. Please adjust your filters.');
+                                                                                return;
+                                                                            }
+                                                                            
+                                                                            // Prepare CSV data
+                                                                            const csvData = [
+                                                                                ['Item', 'Category', 'Bale Size', 'Qty', 'Weight (Kg)', 'Timestamp'],
+                                                                                ...filteredProducedEntries.map(entry => {
+                                                                                    const item = state.items.find(i => i.id === entry.itemId);
+                                                                                    const packageSize = item?.weightPerUnit !== undefined ? Number(item.weightPerUnit) : '';
+                                                                                    const timestamp = entry.createdAt 
+                                                                                        ? new Date(entry.createdAt.seconds * 1000).toLocaleString()
+                                                                                        : (entry.date ? new Date(entry.date + 'T00:00:00').toLocaleString() : '');
+                                                                                    
+                                                                                    return [
+                                                                                        item?.name || entry.itemId || '',
+                                                                                        item?.category || '-',
+                                                                                        packageSize !== null && packageSize !== undefined ? packageSize.toString() : '-',
+                                                                                        entry.qtyProduced.toString(),
+                                                                                        entry.weightProduced.toString(),
+                                                                                        timestamp
+                                                                                    ];
+                                                                                })
+                                                                            ];
+                                                                            
+                                                                            // Convert to CSV string
+                                                                            const csv = csvData.map(row => 
+                                                                                row.map(cell => {
+                                                                                    // Escape commas and quotes in cell values
+                                                                                    const cellStr = String(cell || '');
+                                                                                    if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                                                                                        return `"${cellStr.replace(/"/g, '""')}"`;
+                                                                                    }
+                                                                                    return cellStr;
+                                                                                }).join(',')
+                                                                            ).join('\n');
+                                                                            
+                                                                            // Create and download file
+                                                                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                                                                            const url = window.URL.createObjectURL(blob);
+                                                                            const a = document.createElement('a');
+                                                                            a.href = url;
+                                                                            const dateRange = prodReportStart && prodReportEnd 
+                                                                                ? `${prodReportStart}_to_${prodReportEnd}`
+                                                                                : new Date().toISOString().split('T')[0];
+                                                                            a.download = `produced-production-${dateRange}.csv`;
+                                                                            document.body.appendChild(a);
+                                                                            a.click();
+                                                                            document.body.removeChild(a);
+                                                                            window.URL.revokeObjectURL(url);
+                                                                        }}
+                                                                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                                                                        title="Export filtered production data to CSV"
+                                                                    >
+                                                                        <Download size={16} />
+                                                                        Export Excel
+                                                                    </button>
                                                                 </div>
+                                                                {/* Cards for Total Packages and Total Weight */}
+                                                                <div className="ml-auto flex gap-4">
+                                                                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
+                                                                        <span className="text-xs text-slate-500 font-semibold mb-1">Total Packages (Qty)</span>
+                                                                        <span className="text-2xl font-bold text-blue-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.qtyProduced, 0)}</span>
+                                                                    </div>
+                                                                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
+                                                                        <span className="text-xs text-slate-500 font-semibold mb-1">Total Weight</span>
+                                                                        <span className="text-2xl font-bold text-emerald-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.weightProduced, 0)}</span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            
+                                                            {/* Delete Productions by Date Section */}
+                                                            <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4">
+                                                                <div className="flex items-center gap-3 mb-3">
+                                                                    <Trash2 className="text-red-600" size={20} />
+                                                                    <h4 className="font-bold text-slate-800">Delete Productions by Date</h4>
+                                                                </div>
+                                                                <div className="flex gap-3 items-end">
+                                                                    <div className="flex-1">
+                                                                        <label className="block text-xs font-semibold text-slate-600 mb-1">Select Date to Delete</label>
+                                                                        <input
+                                                                            type="date"
+                                                                            value={deleteProdDate}
+                                                                            onChange={e => setDeleteProdDate(e.target.value)}
+                                                                            className="w-full border border-slate-300 rounded-lg p-2 text-sm"
+                                                                            placeholder="Select date..."
+                                                                        />
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={async () => {
+                                                                            if (!deleteProdDate) {
+                                                                                alert('Please select a date to delete.');
+                                                                                return;
+                                                                            }
+
+                                                                            // Normalize dates for comparison (handle different formats, use local timezone)
+                                                                            const normalizeDateForCompare = (dateStr: string): string => {
+                                                                                if (!dateStr) return '';
+                                                                                if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                                                                                    return dateStr;
+                                                                                }
+                                                                                const dateObj = new Date(dateStr);
+                                                                                if (!isNaN(dateObj.getTime())) {
+                                                                                    const year = dateObj.getFullYear();
+                                                                                    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                                                                    const day = String(dateObj.getDate()).padStart(2, '0');
+                                                                                    return `${year}-${month}-${day}`;
+                                                                                }
+                                                                                return dateStr;
+                                                                            };
+                                                                            
+                                                                            const normalizedDeleteDate = normalizeDateForCompare(deleteProdDate);
+                                                                            const productionsForDate = state.productions.filter(p => {
+                                                                                if (!p.date) return false;
+                                                                                const normalizedProdDate = normalizeDateForCompare(p.date);
+                                                                                return normalizedProdDate === normalizedDeleteDate;
+                                                                            });
+                                                                            if (productionsForDate.length === 0) {
+                                                                                alert(`No production entries found for ${deleteProdDate}`);
+                                                                                return;
+                                                                            }
+
+                                                                            const pin = prompt(`Enter Supervisor PIN to delete ${productionsForDate.length} production entries for ${deleteProdDate}:`);
+                                                                            if (pin !== SUPERVISOR_PIN) {
+                                                                                alert('❌ Invalid PIN! Deletion cancelled.');
+                                                                                return;
+                                                                            }
+
+                                                                            const confirmText = prompt(
+                                                                                `⚠️ WARNING: This will delete ALL ${productionsForDate.length} production entries for ${deleteProdDate}.\n\n` +
+                                                                                `This will also delete all associated ledger entries.\n\n` +
+                                                                                `This action cannot be undone.\n\n` +
+                                                                                `Type "DELETE ${deleteProdDate}" to confirm:`
+                                                                            );
+
+                                                                            if (confirmText !== `DELETE ${deleteProdDate}`) {
+                                                                                alert('Confirmation text does not match. Operation cancelled.');
+                                                                                return;
+                                                                            }
+
+                                                                            setIsDeletingProductions(true);
+                                                                            try {
+                                                                                await deleteProductionsByDate(deleteProdDate);
+                                                                                setDeleteProdDate('');
+                                                                            } catch (error: any) {
+                                                                                console.error('❌ Error deleting productions:', error);
+                                                                                alert(`❌ Error deleting productions: ${error.message || 'Unknown error'}`);
+                                                                            } finally {
+                                                                                setIsDeletingProductions(false);
+                                                                            }
+                                                                        }}
+                                                                        disabled={!deleteProdDate || isDeletingProductions}
+                                                                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                                    >
+                                                                        {isDeletingProductions ? (
+                                                                            <>
+                                                                                <RefreshCw size={16} className="animate-spin" /> Deleting...
+                                                                            </>
+                                                                        ) : (
+                                                                            <>
+                                                                                <Trash2 size={16} /> Delete All for Date
+                                                                            </>
+                                                                        )}
+                                                                    </button>
+                                                                </div>
+                                                                <p className="text-xs text-red-600 mt-2">
+                                                                    ⚠️ This will delete ALL production entries for the selected date and their associated ledger entries. Requires Supervisor PIN.
+                                                                </p>
                                                             </div>
                                                         </div>
                                                         <div className="md:col-span-12">
@@ -3217,7 +3448,7 @@ export const DataEntry: React.FC = () => {
                                                     <FileText size={18} /> Template
                                                 </a>
                                             </div>
-                                            <p className="text-xs text-slate-500 mt-2">CSV must include: Production Date, Item ID, Quantity, Production Price</p>
+                                            <p className="text-xs text-slate-500 mt-2">CSV must include: Production Date, Item ID, Quantity. Production Price is optional (will use Avg Production Price from Setup if not provided)</p>
                                         </div>
                                         
                                         <div className="relative">

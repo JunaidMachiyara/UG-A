@@ -150,6 +150,7 @@ export interface Account {
 
 export interface Partner {
     id: string;
+    code?: string; // User-created partner code/identifier
     name: string;
     type: PartnerType;
     balance: number; // In USD
@@ -722,6 +723,10 @@ export interface AppState {
     
     // Reports
     planners: PlannerEntry[];
+    plannerCustomerIds: string[]; // List of customer IDs currently in the planner
+    plannerSupplierIds: string[]; // List of supplier IDs currently in the planner
+    plannerLastWeeklyReset: string; // YYYY-MM-DD format
+    plannerLastMonthlyReset: string; // YYYY-MM-DD format
 
     // Customs Module
     guaranteeCheques: GuaranteeCheque[];

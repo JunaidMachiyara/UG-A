@@ -721,86 +721,198 @@ const BalanceSheet: React.FC = () => {
 };
 
 const ReceiptsPaymentsPlanner: React.FC = () => {
-    const { state, addPlannerEntry, updatePlannerEntry, deleteEntity } = useData();
+    const { 
+        state, 
+        addPlannerEntry, 
+        updatePlannerEntry, 
+        deleteEntity,
+        addPlannerCustomer,
+        removePlannerCustomer,
+        addPlannerSupplier,
+        removePlannerSupplier,
+        setPlannerWeeklyReset,
+        setPlannerMonthlyReset
+    } = useData();
     const [periodType, setPeriodType] = useState<PlannerPeriodType>('MONTHLY');
     const [currentDate, setCurrentDate] = useState(new Date());
     const [addCustomerModalOpen, setAddCustomerModalOpen] = useState(false);
     const [addSupplierModalOpen, setAddSupplierModalOpen] = useState(false);
+    const [resetPromptShown, setResetPromptShown] = useState(false);
 
     const { currentPeriod, nextPeriodStartDate, lastPeriodStartDate, lastPeriodEndDate } = useMemo(() => 
         getNextPeriodDates(periodType, currentDate), 
     [periodType, currentDate]);
 
+    // Auto-prompt reset mechanism when new period detected
     useEffect(() => {
-        const latestPlannedPeriod = state.planners.reduce((latest: string, p) => 
-            p.period > latest ? p.period : latest, 
-            '');
+        if (resetPromptShown) return; // Only show once per page load
+        
+        const lastResetDate = periodType === 'WEEKLY' 
+            ? state.plannerLastWeeklyReset 
+            : state.plannerLastMonthlyReset;
+        
+        if (!lastResetDate) {
+            // First time - set current period start as reset date
+            const resetDate = lastPeriodStartDate.toISOString().split('T')[0];
+            if (periodType === 'WEEKLY') {
+                setPlannerWeeklyReset(resetDate);
+            } else {
+                setPlannerMonthlyReset(resetDate);
+            }
+            return;
+        }
 
-        if (latestPlannedPeriod && latestPlannedPeriod !== currentPeriod) {
-            const today = new Date();
-            if (lastPeriodEndDate < today) { 
-                 if (window.confirm(`A new ${periodType.toLowerCase()} period (${currentPeriod}) has started! Would you like to carry forward last period's actuals to this period's plan?`)) {
-                    const plansToCarryForward = state.planners.filter(p => p.period === latestPlannedPeriod);
-                    plansToCarryForward.forEach(plan => {
-                        const lastActual = calculatePeriodActuals(state.ledger, plan.entityId, plan.entityType, lastPeriodStartDate, lastPeriodEndDate);
-                        const existingCurrentPeriodPlan = state.planners.find(p => p.period === currentPeriod && p.entityId === plan.entityId && p.entityType === plan.entityType);
-
-                        if (existingCurrentPeriodPlan) {
-                            updatePlannerEntry({ 
-                                ...existingCurrentPeriodPlan, 
-                                plannedAmount: lastActual, 
-                                lastPlanAmount: existingCurrentPeriodPlan.plannedAmount, 
-                                lastActualAmount: lastActual 
+        const lastReset = new Date(lastResetDate);
+        const currentPeriodStart = lastPeriodStartDate;
+        
+        // Check if we're in a new period
+        if (currentPeriodStart > lastReset) {
+            setResetPromptShown(true);
+            
+            const userChoice = window.confirm(
+                `A new ${periodType.toLowerCase()} period (${currentPeriod}) has started!\n\n` +
+                `Would you like to:\n` +
+                `• Click OK: Start New Plan (archive current plan, calculate actuals, reset to zero)\n` +
+                `• Click Cancel: Continue with Old Plan (keep current values)`
+            );
+            
+            if (userChoice) {
+                // Option 1: Start New Plan (Rolling Logic)
+                // Get plans from the period that just ended (matching the current period type)
+                const periodPattern = periodType === 'WEEKLY' ? /^\d{4}-W\d{2}$/ : /^\d{4}-\d{2}$/;
+                const latestPeriod = state.planners
+                    .filter(p => {
+                        // Match period type (weekly: YYYY-WW, monthly: YYYY-MM)
+                        return periodPattern.test(p.period) && p.period !== currentPeriod;
+                    })
+                    .reduce((latest, p) => p.period > latest ? p.period : latest, '');
+                
+                if (latestPeriod) {
+                    const plansToArchive = state.planners.filter(p => p.period === latestPeriod);
+                    
+                    plansToArchive.forEach(plan => {
+                        // Calculate last period's actual (only receipts/payments)
+                        const lastActual = calculatePeriodActuals(
+                            state.ledger, 
+                            plan.entityId, 
+                            plan.entityType, 
+                            lastPeriodStartDate, 
+                            lastPeriodEndDate
+                        );
+                        
+                        // Check if plan exists for current period
+                        const existingCurrentPlan = state.planners.find(
+                            p => p.period === currentPeriod && 
+                                 p.entityId === plan.entityId && 
+                                 p.entityType === plan.entityType
+                        );
+                        
+                        if (existingCurrentPlan) {
+                            // Update: Archive current plan to last plan, calculate actuals, clear current
+                            updatePlannerEntry({
+                                ...existingCurrentPlan,
+                                lastPlanAmount: existingCurrentPlan.plannedAmount,
+                                lastActualAmount: lastActual,
+                                plannedAmount: 0 // Reset to zero
                             });
                         } else {
+                            // Create new entry with archived data
                             addPlannerEntry({
-                                id: Math.random().toString(36).substr(2,9),
+                                id: Math.random().toString(36).substr(2, 9),
                                 period: currentPeriod,
                                 entityId: plan.entityId,
                                 entityType: plan.entityType,
-                                plannedAmount: lastActual, 
-                                lastPlanAmount: plan.plannedAmount, 
-                                lastActualAmount: lastActual 
+                                plannedAmount: 0, // Reset to zero
+                                lastPlanAmount: plan.plannedAmount,
+                                lastActualAmount: lastActual
                             });
                         }
                     });
                 }
+                
+                // Update reset date
+                const resetDate = currentPeriodStart.toISOString().split('T')[0];
+                if (periodType === 'WEEKLY') {
+                    setPlannerWeeklyReset(resetDate);
+                } else {
+                    setPlannerMonthlyReset(resetDate);
+                }
+            } else {
+                // Option 2: Continue with Old Plan
+                const resetDate = new Date().toISOString().split('T')[0];
+                if (periodType === 'WEEKLY') {
+                    setPlannerWeeklyReset(resetDate);
+                } else {
+                    setPlannerMonthlyReset(resetDate);
+                }
             }
         }
-    }, [currentPeriod, periodType, state.planners, state.ledger, lastPeriodEndDate, lastPeriodStartDate, updatePlannerEntry, addPlannerEntry]);
+    }, [periodType, currentPeriod, lastPeriodStartDate, state.plannerLastWeeklyReset, state.plannerLastMonthlyReset, state.planners, state.ledger, lastPeriodEndDate, resetPromptShown, addPlannerEntry, updatePlannerEntry, setPlannerWeeklyReset, setPlannerMonthlyReset]);
 
 
     const currentPeriodPlans = useMemo(() => state.planners.filter(p => p.period === currentPeriod), [state.planners, currentPeriod]);
 
+    // Only show customers that are in plannerCustomerIds list
     const customerPlans = useMemo(() => {
-        return state.partners.filter(p => p.type === PartnerType.CUSTOMER).map(cust => {
-            const plan = currentPeriodPlans.find(p => p.entityId === cust.id && p.entityType === PlannerEntityType.CUSTOMER);
-            const lastActual = calculatePeriodActuals(state.ledger, cust.id, PlannerEntityType.CUSTOMER, lastPeriodStartDate, lastPeriodEndDate);
-            return {
-                customer: cust,
-                receivable: cust.balance,
-                lastPlan: plan?.lastPlanAmount || 0, 
-                lastActual,
-                currentPlan: plan?.plannedAmount || 0,
-                plannerId: plan?.id
-            };
-        }).filter(p => p.plannerId || p.currentPlan > 0 || p.receivable !== 0);
-    }, [state.partners, currentPeriodPlans, state.ledger, lastPeriodStartDate, lastPeriodEndDate]);
+        return state.plannerCustomerIds
+            .map(customerId => {
+                const customer = state.partners.find(p => p.id === customerId && p.type === PartnerType.CUSTOMER);
+                if (!customer) return null;
+                
+                const plan = currentPeriodPlans.find(
+                    p => p.entityId === customer.id && p.entityType === PlannerEntityType.CUSTOMER
+                );
+                const lastActual = calculatePeriodActuals(
+                    state.ledger, 
+                    customer.id, 
+                    PlannerEntityType.CUSTOMER, 
+                    lastPeriodStartDate, 
+                    lastPeriodEndDate
+                );
+                
+                return {
+                    customer,
+                    receivable: customer.balance, // Total receivable till date
+                    lastPlan: plan?.lastPlanAmount || 0,
+                    lastActual, // Last period's actual (receipts only)
+                    lastActivity: lastActual, // Same as lastActual (for display)
+                    currentPlan: plan?.plannedAmount || 0,
+                    plannerId: plan?.id
+                };
+            })
+            .filter((p): p is NonNullable<typeof p> => p !== null);
+    }, [state.plannerCustomerIds, state.partners, currentPeriodPlans, state.ledger, lastPeriodStartDate, lastPeriodEndDate]);
 
+    // Only show suppliers that are in plannerSupplierIds list
     const supplierPlans = useMemo(() => {
-        return state.partners.filter(p => p.type === PartnerType.SUPPLIER).map(sup => {
-            const plan = currentPeriodPlans.find(p => p.entityId === sup.id && p.entityType === PlannerEntityType.SUPPLIER);
-            const lastActual = calculatePeriodActuals(state.ledger, sup.id, PlannerEntityType.SUPPLIER, lastPeriodStartDate, lastPeriodEndDate);
-            return {
-                supplier: sup,
-                payable: sup.balance,
-                lastPlan: plan?.lastPlanAmount || 0,
-                lastActual,
-                currentPlan: plan?.plannedAmount || 0,
-                plannerId: plan?.id
-            };
-        }).filter(p => p.plannerId || p.currentPlan > 0 || p.payable !== 0);
-    }, [state.partners, currentPeriodPlans, state.ledger, lastPeriodStartDate, lastPeriodEndDate]);
+        return state.plannerSupplierIds
+            .map(supplierId => {
+                const supplier = state.partners.find(p => p.id === supplierId && p.type === PartnerType.SUPPLIER);
+                if (!supplier) return null;
+                
+                const plan = currentPeriodPlans.find(
+                    p => p.entityId === supplier.id && p.entityType === PlannerEntityType.SUPPLIER
+                );
+                const lastActual = calculatePeriodActuals(
+                    state.ledger, 
+                    supplier.id, 
+                    PlannerEntityType.SUPPLIER, 
+                    lastPeriodStartDate, 
+                    lastPeriodEndDate
+                );
+                
+                return {
+                    supplier,
+                    payable: supplier.balance, // Total payable till date
+                    lastPlan: plan?.lastPlanAmount || 0,
+                    lastActual, // Last period's actual (payments only)
+                    lastActivity: lastActual, // Same as lastActual (for display)
+                    currentPlan: plan?.plannedAmount || 0,
+                    plannerId: plan?.id
+                };
+            })
+            .filter((p): p is NonNullable<typeof p> => p !== null);
+    }, [state.plannerSupplierIds, state.partners, currentPeriodPlans, state.ledger, lastPeriodStartDate, lastPeriodEndDate]);
 
     const handlePlanChange = useCallback((entityId: string, entityType: PlannerEntityType, value: number, plannerId?: string) => {
         const existingPlan = state.planners.find(p => p.id === plannerId);
@@ -808,16 +920,42 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
             updatePlannerEntry({ ...existingPlan, plannedAmount: value });
         } else {
             addPlannerEntry({
-                id: Math.random().toString(36).substr(2,9),
+                id: Math.random().toString(36).substr(2, 9),
                 period: currentPeriod,
                 entityId,
                 entityType,
                 plannedAmount: value,
-                lastActualAmount: 0, 
-                lastPlanAmount: 0 
+                lastActualAmount: 0,
+                lastPlanAmount: 0
             });
         }
     }, [state.planners, currentPeriod, addPlannerEntry, updatePlannerEntry]);
+
+    const handleAddCustomer = useCallback((customerId: string) => {
+        addPlannerCustomer(customerId);
+        handlePlanChange(customerId, PlannerEntityType.CUSTOMER, 0);
+        setAddCustomerModalOpen(false);
+    }, [addPlannerCustomer, handlePlanChange]);
+
+    const handleRemoveCustomer = useCallback((customerId: string, plannerId?: string) => {
+        if (plannerId) {
+            deleteEntity('planners', plannerId);
+        }
+        removePlannerCustomer(customerId);
+    }, [deleteEntity, removePlannerCustomer]);
+
+    const handleAddSupplier = useCallback((supplierId: string) => {
+        addPlannerSupplier(supplierId);
+        handlePlanChange(supplierId, PlannerEntityType.SUPPLIER, 0);
+        setAddSupplierModalOpen(false);
+    }, [addPlannerSupplier, handlePlanChange]);
+
+    const handleRemoveSupplier = useCallback((supplierId: string, plannerId?: string) => {
+        if (plannerId) {
+            deleteEntity('planners', plannerId);
+        }
+        removePlannerSupplier(supplierId);
+    }, [deleteEntity, removePlannerSupplier]);
     
     const totalPlannedReceipts = customerPlans.reduce((sum, p) => sum + p.currentPlan, 0);
     const totalPlannedPayments = supplierPlans.reduce((sum, p) => sum + p.currentPlan, 0);
@@ -843,32 +981,63 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                         <table className="w-full text-sm text-left min-w-full">
                             <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                                 <tr>
-                                    <th className="px-4 py-2 min-w-[250px]">Customer</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">Receivable</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Actual</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Plan</th>
+                                    <th className="px-4 py-2 min-w-[200px]">Customer</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Current Balance</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Activity</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Period's Plan</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Period's Actual</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Period's Plan</th>
                                     <th className="px-4 py-2 text-center whitespace-nowrap">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {customerPlans.map(p => (
-                                    <tr key={p.customer.id} className="hover:bg-slate-50">
-                                        <td className="px-4 py-2 font-medium text-slate-700">{p.customer.name}</td>
-                                        <td className="px-4 py-2 text-right font-mono">${p.receivable.toLocaleString()}</td>
-                                        <td className={`px-4 py-2 text-right font-mono ${p.lastActual >= p.lastPlan ? 'text-emerald-600' : 'text-red-500'}`}>${p.lastActual.toLocaleString()}</td>
-                                        <td className="px-4 py-2 text-right">
-                                            <input 
-                                                type="number" 
-                                                value={p.currentPlan} 
-                                                onChange={e => handlePlanChange(p.customer.id, PlannerEntityType.CUSTOMER, parseFloat(e.target.value || '0'), p.plannerId)} 
-                                                className="w-24 border border-blue-300 rounded-lg p-1 text-right bg-blue-50 text-blue-700 text-sm font-bold"
-                                            />
-                                        </td>
-                                        <td className="px-4 py-2 text-center">
-                                            <button onClick={() => p.plannerId && deleteEntity('planners', p.plannerId)} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button>
+                                {customerPlans.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={7} className="text-center py-8 text-slate-400">
+                                            No customers added to planner. Click the + button to add.
                                         </td>
                                     </tr>
-                                ))}
+                                ) : (
+                                    customerPlans.map(p => (
+                                        <tr key={p.customer.id} className="hover:bg-slate-50">
+                                            <td className="px-4 py-2 font-medium text-slate-700">{p.customer.name}</td>
+                                            <td className="px-4 py-2 text-right font-mono">${p.receivable.toLocaleString()}</td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-600">${p.lastActivity.toLocaleString()}</td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-500">${p.lastPlan.toLocaleString()}</td>
+                                            <td className={`px-4 py-2 text-right font-mono ${p.lastActual >= p.lastPlan ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                ${p.lastActual.toLocaleString()}
+                                            </td>
+                                            <td className="px-4 py-2 text-right">
+                                                <input 
+                                                    type="number" 
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={p.currentPlan} 
+                                                    onChange={e => {
+                                                        const value = parseFloat(e.target.value || '0');
+                                                        if (value >= 0) {
+                                                            handlePlanChange(p.customer.id, PlannerEntityType.CUSTOMER, value, p.plannerId);
+                                                        }
+                                                    }} 
+                                                    className="w-24 border border-blue-300 rounded-lg p-1 text-right bg-blue-50 text-blue-700 text-sm font-bold"
+                                                />
+                                            </td>
+                                            <td className="px-4 py-2 text-center">
+                                                <button 
+                                                    onClick={() => {
+                                                        if (window.confirm(`Are you sure you want to remove "${p.customer.name}" from the planner?`)) {
+                                                            handleRemoveCustomer(p.customer.id, p.plannerId);
+                                                        }
+                                                    }} 
+                                                    className="text-red-400 hover:text-red-600 transition-colors cursor-pointer"
+                                                    title="Remove from planner"
+                                                >
+                                                    <Trash2 size={16}/>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
                     </div>
@@ -888,32 +1057,63 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                         <table className="w-full text-sm text-left min-w-full">
                             <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                                 <tr>
-                                    <th className="px-4 py-2 min-w-[250px]">Supplier</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">Payable</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Actual</th>
-                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Plan</th>
+                                    <th className="px-4 py-2 min-w-[200px]">Supplier</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Current Balance</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Activity</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Period's Plan</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">Last Period's Actual</th>
+                                    <th className="px-4 py-2 text-right whitespace-nowrap">This Period's Plan</th>
                                     <th className="px-4 py-2 text-center whitespace-nowrap">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {supplierPlans.map(p => (
-                                    <tr key={p.supplier.id} className="hover:bg-slate-50">
-                                        <td className="px-4 py-2 font-medium text-slate-700">{p.supplier.name}</td>
-                                        <td className="px-4 py-2 text-right font-mono">${Math.abs(p.payable).toLocaleString()}</td>
-                                        <td className={`px-4 py-2 text-right font-mono ${p.lastActual <= p.lastPlan ? 'text-emerald-600' : 'text-red-500'}`}>${p.lastActual.toLocaleString()}</td>
-                                        <td className="px-4 py-2 text-right">
-                                            <input 
-                                                type="number" 
-                                                value={p.currentPlan} 
-                                                onChange={e => handlePlanChange(p.supplier.id, PlannerEntityType.SUPPLIER, parseFloat(e.target.value || '0'), p.plannerId)} 
-                                                className="w-24 border border-red-300 rounded-lg p-1 text-right bg-red-50 text-red-700 text-sm font-bold"
-                                            />
-                                        </td>
-                                        <td className="px-4 py-2 text-center">
-                                            <button onClick={() => p.plannerId && deleteEntity('planners', p.plannerId)} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button>
+                                {supplierPlans.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={7} className="text-center py-8 text-slate-400">
+                                            No suppliers added to planner. Click the + button to add.
                                         </td>
                                     </tr>
-                                ))}
+                                ) : (
+                                    supplierPlans.map(p => (
+                                        <tr key={p.supplier.id} className="hover:bg-slate-50">
+                                            <td className="px-4 py-2 font-medium text-slate-700">{p.supplier.name}</td>
+                                            <td className="px-4 py-2 text-right font-mono">${Math.abs(p.payable).toLocaleString()}</td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-600">${p.lastActivity.toLocaleString()}</td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-500">${p.lastPlan.toLocaleString()}</td>
+                                            <td className={`px-4 py-2 text-right font-mono ${p.lastActual <= p.lastPlan ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                ${p.lastActual.toLocaleString()}
+                                            </td>
+                                            <td className="px-4 py-2 text-right">
+                                                <input 
+                                                    type="number" 
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={p.currentPlan} 
+                                                    onChange={e => {
+                                                        const value = parseFloat(e.target.value || '0');
+                                                        if (value >= 0) {
+                                                            handlePlanChange(p.supplier.id, PlannerEntityType.SUPPLIER, value, p.plannerId);
+                                                        }
+                                                    }} 
+                                                    className="w-24 border border-red-300 rounded-lg p-1 text-right bg-red-50 text-red-700 text-sm font-bold"
+                                                />
+                                            </td>
+                                            <td className="px-4 py-2 text-center">
+                                                <button 
+                                                    onClick={() => {
+                                                        if (window.confirm(`Are you sure you want to remove "${p.supplier.name}" from the planner?`)) {
+                                                            handleRemoveSupplier(p.supplier.id, p.plannerId);
+                                                        }
+                                                    }} 
+                                                    className="text-red-400 hover:text-red-600 transition-colors cursor-pointer"
+                                                    title="Remove from planner"
+                                                >
+                                                    <Trash2 size={16}/>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
                     </div>
@@ -929,9 +1129,12 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                     <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full">
                         <h3 className="text-lg font-bold text-slate-800 mb-4">Add Customer to Plan</h3>
                         <EntitySelector 
-                            entities={state.partners.filter(p => p.type === PartnerType.CUSTOMER && !customerPlans.some(cp => cp.customer.id === p.id))} 
+                            entities={state.partners.filter(
+                                p => p.type === PartnerType.CUSTOMER && 
+                                     !state.plannerCustomerIds.includes(p.id)
+                            )} 
                             selectedId="" 
-                            onSelect={(id) => { handlePlanChange(id, PlannerEntityType.CUSTOMER, 0); setAddCustomerModalOpen(false); }} 
+                            onSelect={handleAddCustomer} 
                             placeholder="Select Customer..."
                         />
                         <button onClick={() => setAddCustomerModalOpen(false)} className="mt-4 w-full text-sm text-slate-600 hover:text-slate-800">Cancel</button>
@@ -943,9 +1146,12 @@ const ReceiptsPaymentsPlanner: React.FC = () => {
                     <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full">
                         <h3 className="text-lg font-bold text-slate-800 mb-4">Add Supplier to Plan</h3>
                         <EntitySelector 
-                            entities={state.partners.filter(p => p.type === PartnerType.SUPPLIER && !supplierPlans.some(sp => sp.supplier.id === p.id))} 
+                            entities={state.partners.filter(
+                                p => p.type === PartnerType.SUPPLIER && 
+                                     !state.plannerSupplierIds.includes(p.id)
+                            )} 
                             selectedId="" 
-                            onSelect={(id) => { handlePlanChange(id, PlannerEntityType.SUPPLIER, 0); setAddSupplierModalOpen(false); }} 
+                            onSelect={handleAddSupplier} 
                             placeholder="Select Supplier..."
                         />
                         <button onClick={() => setAddSupplierModalOpen(false)} className="mt-4 w-full text-sm text-slate-600 hover:text-slate-800">Cancel</button>

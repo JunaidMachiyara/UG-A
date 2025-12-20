@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Factory, UserRole, PermissionModule } from '../types';
-import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
 interface AuthContextType {
@@ -14,6 +14,7 @@ interface AuthContextType {
     switchFactory: (factoryId: string) => Promise<void>;
     hasPermission: (module: PermissionModule, action: 'view' | 'create' | 'edit' | 'delete') => boolean;
     refreshFactories: () => Promise<void>;
+    refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -45,6 +46,55 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         initializeAuth();
     }, []);
 
+    // Real-time listener for current user's data changes (permissions updates)
+    useEffect(() => {
+        if (!currentUser) return;
+
+        // Set up real-time listener for user document
+        const unsubscribe = onSnapshot(
+            doc(db, 'users', currentUser.id),
+            (userDoc) => {
+                if (userDoc.exists()) {
+                    const freshUser = { id: userDoc.id, ...userDoc.data() } as User;
+                    
+                    // Only update if user is still active
+                    if (freshUser.isActive) {
+                        setCurrentUser(freshUser);
+                        localStorage.setItem('currentUser', JSON.stringify(freshUser));
+                        
+                        // Also refresh factory if it changed
+                        if (freshUser.factoryId !== currentUser.factoryId) {
+                            getDoc(doc(db, 'factories', freshUser.factoryId)).then(factoryDoc => {
+                                if (factoryDoc.exists()) {
+                                    const freshFactory = { id: factoryDoc.id, ...factoryDoc.data() } as Factory;
+                                    setCurrentFactory(freshFactory);
+                                    localStorage.setItem('currentFactory', JSON.stringify(freshFactory));
+                                }
+                            });
+                        }
+                    } else {
+                        // User is inactive, logout
+                        setCurrentUser(null);
+                        setCurrentFactory(null);
+                        localStorage.removeItem('currentUser');
+                        localStorage.removeItem('currentFactory');
+                    }
+                } else {
+                    // User no longer exists, logout
+                    setCurrentUser(null);
+                    setCurrentFactory(null);
+                    localStorage.removeItem('currentUser');
+                    localStorage.removeItem('currentFactory');
+                }
+            },
+            (error) => {
+                console.error('Error listening to user updates:', error);
+            }
+        );
+
+        return () => unsubscribe();
+    }, [currentUser?.id]);
+
     const loadFactories = async () => {
         try {
             const snapshot = await getDocs(collection(db, 'factories'));
@@ -73,16 +123,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             const savedFactory = localStorage.getItem('currentFactory');
             
             if (savedUser && savedFactory) {
-                const user = JSON.parse(savedUser);
-                const factory = JSON.parse(savedFactory);
+                const cachedUser = JSON.parse(savedUser);
+                const cachedFactory = JSON.parse(savedFactory);
                 
-                // Validate that the user and factory still exist in Firebase
-                const userDoc = await getDoc(doc(db, 'users', user.id));
-                const factoryDoc = await getDoc(doc(db, 'factories', factory.id));
+                // Fetch fresh user data from Firebase (not cached data)
+                const userDoc = await getDoc(doc(db, 'users', cachedUser.id));
+                const factoryDoc = await getDoc(doc(db, 'factories', cachedFactory.id));
                 
                 if (userDoc.exists() && factoryDoc.exists()) {
-                    setCurrentUser(user);
-                    setCurrentFactory(factory);
+                    // Use fresh data from Firebase, not cached data
+                    const freshUser = { id: userDoc.id, ...userDoc.data() } as User;
+                    const freshFactory = { id: factoryDoc.id, ...factoryDoc.data() } as Factory;
+                    
+                    // Only set if user is still active
+                    if (freshUser.isActive) {
+                        setCurrentUser(freshUser);
+                        setCurrentFactory(freshFactory);
+                        // Update localStorage with fresh data
+                        localStorage.setItem('currentUser', JSON.stringify(freshUser));
+                        localStorage.setItem('currentFactory', JSON.stringify(freshFactory));
+                    } else {
+                        // User is inactive, clear session
+                        console.log('User is inactive - clearing session');
+                        localStorage.clear();
+                        setCurrentUser(null);
+                        setCurrentFactory(null);
+                    }
                 } else {
                     // Session data is stale, clear it
                     console.log('Session data invalid - clearing');
@@ -98,6 +164,42 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             setCurrentFactory(null);
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const refreshUser = async () => {
+        if (!currentUser) return;
+        
+        try {
+            // Fetch fresh user data from Firebase
+            const userDoc = await getDoc(doc(db, 'users', currentUser.id));
+            if (userDoc.exists()) {
+                const freshUser = { id: userDoc.id, ...userDoc.data() } as User;
+                
+                // Only update if user is still active
+                if (freshUser.isActive) {
+                    setCurrentUser(freshUser);
+                    localStorage.setItem('currentUser', JSON.stringify(freshUser));
+                    
+                    // Also refresh factory if it changed
+                    if (freshUser.factoryId !== currentUser.factoryId) {
+                        const factoryDoc = await getDoc(doc(db, 'factories', freshUser.factoryId));
+                        if (factoryDoc.exists()) {
+                            const freshFactory = { id: factoryDoc.id, ...factoryDoc.data() } as Factory;
+                            setCurrentFactory(freshFactory);
+                            localStorage.setItem('currentFactory', JSON.stringify(freshFactory));
+                        }
+                    }
+                } else {
+                    // User is inactive, logout
+                    logout();
+                }
+            } else {
+                // User no longer exists, logout
+                logout();
+            }
+        } catch (error) {
+            console.error('Failed to refresh user:', error);
         }
     };
 
@@ -238,7 +340,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                 logout,
                 switchFactory,
                 hasPermission,
-                refreshFactories
+                refreshFactories,
+                refreshUser
             }}
         >
             {children}

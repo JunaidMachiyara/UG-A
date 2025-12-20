@@ -246,6 +246,10 @@ export const INITIAL_ORIGINAL_OPENINGS: OriginalOpening[] = [];
 export const INITIAL_PRODUCTIONS: ProductionEntry[] = [];
 
 export const INITIAL_PLANNERS: PlannerEntry[] = [];
+export const INITIAL_PLANNER_CUSTOMER_IDS: string[] = [];
+export const INITIAL_PLANNER_SUPPLIER_IDS: string[] = [];
+export const INITIAL_PLANNER_LAST_WEEKLY_RESET: string = '';
+export const INITIAL_PLANNER_LAST_MONTHLY_RESET: string = '';
 
 export const INITIAL_GUARANTEE_CHEQUES: GuaranteeCheque[] = [];
 

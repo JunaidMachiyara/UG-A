@@ -6,7 +6,7 @@ import { collection, addDoc, updateDoc, doc, getDocs } from 'firebase/firestore'
 import { db } from '../services/firebase';
 
 export const UserManagement: React.FC = () => {
-    const { currentUser } = useAuth();
+    const { currentUser, refreshUser } = useAuth();
     
     // Security: Only Super Admin can access this page
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
@@ -75,6 +75,12 @@ export const UserManagement: React.FC = () => {
                     delete updateData.password;
                 }
                 await updateDoc(doc(db, 'users', editingId), updateData);
+                
+                // If we updated the currently logged-in user, refresh their session
+                if (currentUser && editingId === currentUser.id) {
+                    await refreshUser();
+                    alert('Your permissions have been updated. Please refresh the page to see the changes.');
+                }
             } else {
                 await addDoc(collection(db, 'users'), userData);
             }
@@ -425,6 +431,11 @@ export const UserManagement: React.FC = () => {
                     <li>• <strong>Data Entry (Inventory):</strong> Sales, Purchase, Production, Logistics entry only (cannot delete)</li>
                     <li>• <strong>Data Entry (Accounting):</strong> Accounting vouchers and ledger entry only (cannot delete)</li>
                 </ul>
+                <div className="mt-3 pt-3 border-t border-blue-300">
+                    <p className="text-xs text-blue-700">
+                        <strong>💡 Note:</strong> When you update a user's permissions, they need to refresh the page or log out and log back in for the changes to take effect.
+                    </p>
+                </div>
             </div>
         </div>
     );

@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
 import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
@@ -40,6 +40,7 @@ export interface CrudConfig {
     columns: ColumnDef[];
     fields: FieldDef[];
     onSave: (data: any) => void;
+    onUpdate?: (id: string, data: any) => void | Promise<void>;
     onDelete: (id: string) => void;
 }
 
@@ -52,6 +53,9 @@ export const GenericForm: React.FC<{
     onSuccess: () => void;
     initialOverrides?: any; // NEW: Allow pre-filling fields
 }> = ({ config, data, onCancel, onSuccess, initialOverrides }) => {
+    // Use ref to track the original ID from initialOverrides
+    const originalIdRef = React.useRef<string | undefined>(initialOverrides?.id);
+    
     const [formData, setFormData] = useState<any>(() => {
         // Calculate default values dynamically on mount
         const initialData: any = {};
@@ -64,15 +68,41 @@ export const GenericForm: React.FC<{
                 }
             }
         });
-        // Apply overrides
+        // Apply overrides - CRITICAL: Preserve the ID when editing
         if (initialOverrides) {
+            console.log('📝 Initializing form with overrides:', initialOverrides.id ? `EDIT mode (ID: ${initialOverrides.id})` : 'NEW mode', initialOverrides);
             Object.assign(initialData, initialOverrides);
+            // Ensure ID is always preserved when editing - CRITICAL FIX
+            if (initialOverrides.id) {
+                initialData.id = initialOverrides.id;
+                console.log('✅ ID preserved in formData:', initialData.id);
+            } else {
+                console.log('⚠️ No ID in initialOverrides - this is a NEW entry');
+            }
+        } else {
+            console.log('📝 Initializing form for NEW entry (no overrides)');
         }
+        console.log('📋 Final initialData:', initialData);
         return initialData;
     });
 
+    // CRITICAL: Preserve ID when initialOverrides changes (e.g., when editing)
+    useEffect(() => {
+        if (initialOverrides?.id && formData.id !== initialOverrides.id) {
+            console.log('🔄 Restoring ID from initialOverrides:', initialOverrides.id);
+            setFormData(prev => ({ ...prev, id: initialOverrides.id }));
+        }
+    }, [initialOverrides?.id]);
+
     const handleChange = (fieldName: string, value: any) => {
         let updatedData = { ...formData, [fieldName]: value };
+
+        // CRITICAL: Always preserve the ID if it exists
+        if (formData.id) {
+            updatedData.id = formData.id;
+        } else if (originalIdRef.current) {
+            updatedData.id = originalIdRef.current;
+        }
 
         // Process computed fields
         config.fields.forEach(field => {
@@ -84,8 +114,43 @@ export const GenericForm: React.FC<{
         setFormData(updatedData);
     };
 
-    const handleSave = (e: React.FormEvent) => {
+    const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
+        
+        // CRITICAL CHECK: If we have original ID but formData lost it, restore it
+        if (originalIdRef.current && !formData.id) {
+            console.warn('⚠️ ID was lost from formData, restoring from originalIdRef:', originalIdRef.current);
+            const restoredFormData = { ...formData, id: originalIdRef.current };
+            setFormData(restoredFormData);
+            // Use the restored data for the rest of the function
+            const finalFormData = restoredFormData;
+            
+            // Continue with validation and save using restored data
+            for (const field of config.fields) {
+                const isHidden = field.hidden ? field.hidden(finalFormData) : false;
+                if (!isHidden && field.required && !finalFormData[field.name]) {
+                    alert(`${field.label} is required`);
+                    return;
+                }
+            }
+            
+            // Use finalFormData for the rest of the logic
+            if (finalFormData.id && config.onUpdate) {
+                const existingEntity = data.find((item: any) => item.id === finalFormData.id);
+                if (!existingEntity) {
+                    alert(`Error: Cannot find entity with ID ${finalFormData.id}. This might be a duplicate.`);
+                    return;
+                }
+                try {
+                    await config.onUpdate(finalFormData.id, finalFormData);
+                    onSuccess();
+                } catch (error) {
+                    return;
+                }
+                return;
+            }
+        }
+        
         // Basic validation for visible fields only
         for (const field of config.fields) {
             const isHidden = field.hidden ? field.hidden(formData) : false;
@@ -107,17 +172,101 @@ export const GenericForm: React.FC<{
             }
         }
         
-        // If editing (has id in formData), call onUpdate, otherwise call onSave
-        if (formData.id && config.onUpdate) {
-            config.onUpdate(formData.id, formData);
-        } else {
-            config.onSave({ ...formData, id: formData.id || Math.random().toString(36).substr(2, 9) });
+        // Check for duplicate partner name when adding new (not when editing)
+        if (config.entityKey === 'partners' && !formData.id) {
+            const existingPartner = data.find((p: any) => 
+                p.name === formData.name && p.type === formData.type
+            );
+            if (existingPartner) {
+                alert(`❌ Partner "${formData.name}" (${formData.type}) already exists! Please edit the existing partner instead.`);
+                return;
+            }
         }
-        onSuccess();
+        
+        // Normalize number fields - preserve negative values
+        const normalizedFormData = { ...formData };
+        config.fields.forEach(field => {
+            if (field.type === 'number' && normalizedFormData[field.name] !== undefined) {
+                const value = normalizedFormData[field.name];
+                // Allow empty, null, undefined to become 0, but preserve negative numbers
+                if (value === '' || value === null || value === undefined) {
+                    normalizedFormData[field.name] = 0;
+                } else if (typeof value === 'string') {
+                    // Handle string values (including negative signs)
+                    if (value === '-') {
+                        // User is typing negative, keep as is temporarily
+                        normalizedFormData[field.name] = 0; // Will be handled on next keystroke
+                    } else {
+                        const parsed = parseFloat(value);
+                        if (!isNaN(parsed)) {
+                            normalizedFormData[field.name] = parsed; // Preserves negative
+                        }
+                    }
+                }
+                // If it's already a number (including negative), keep it as is
+            }
+        });
+        
+        // DEBUG: Log form state
+        console.log('🔍 Form Save - formData:', normalizedFormData);
+        console.log('🔍 Form Save - formData.id:', normalizedFormData.id, 'has onUpdate:', !!config.onUpdate, 'entityKey:', config.entityKey);
+        console.log('🔍 Form Save - originalIdRef.current:', originalIdRef.current);
+        console.log('🔍 Form Save - initialOverrides?.id:', initialOverrides?.id);
+        
+        // CRITICAL: Determine if we're editing or creating
+        const isEditing = !!(normalizedFormData.id || originalIdRef.current || initialOverrides?.id);
+        const editId = normalizedFormData.id || originalIdRef.current || initialOverrides?.id;
+        
+        console.log('🔍 Form Save - isEditing:', isEditing, 'editId:', editId);
+        
+        // If editing (has id in formData, ref, or initialOverrides), call onUpdate, otherwise call onSave
+        if (isEditing && editId && config.onUpdate) {
+            // Use the editId for the update
+            const finalId = editId;
+            
+            // CRITICAL: Verify we're actually editing, not creating a duplicate
+            const existingEntity = data.find((item: any) => item.id === finalId);
+            if (!existingEntity) {
+                alert(`Error: Cannot find entity with ID ${finalId}. This might be a duplicate.`);
+                console.error('❌ Entity not found with ID:', finalId, 'Available IDs:', data.map((d: any) => d.id).slice(0, 5));
+                return;
+            }
+            console.log('✅ Updating existing entity:', finalId, existingEntity.name || existingEntity.code);
+            
+            // Ensure formData has the ID
+            const formDataWithId = { ...normalizedFormData, id: finalId };
+            
+            // Call onUpdate and wait for it to complete
+            try {
+                await config.onUpdate(finalId, formDataWithId);
+                console.log('✅ Update successful');
+                onSuccess();
+            } catch (error) {
+                // Error already handled in onUpdate, don't call onSuccess
+                console.error('❌ Update failed:', error);
+                return;
+            }
+        } else if (isEditing && editId && !config.onUpdate) {
+            // If editing but no onUpdate handler, still try to save (will create duplicate)
+            alert('Update functionality not available for this entity. Please delete and recreate.');
+            console.error('❌ No onUpdate handler but formData has ID:', editId);
+            return;
+        } else {
+            // Creating new - make sure no ID is set
+            console.log('➕ Creating new entity (no ID in formData, ref, or initialOverrides)');
+            const newData = { ...normalizedFormData };
+            delete newData.id; // Remove any ID for new entries
+            config.onSave({ ...newData, id: Math.random().toString(36).substr(2, 9) });
+            onSuccess();
+        }
     };
 
     return (
         <form onSubmit={handleSave} className="space-y-4">
+            {/* Hidden field to preserve ID when editing */}
+            {formData.id && (
+                <input type="hidden" value={formData.id} />
+            )}
             {config.fields.map((field) => {
                 const isHidden = field.hidden ? field.hidden(formData) : false;
                 if (isHidden) return null;
@@ -154,14 +303,26 @@ export const GenericForm: React.FC<{
                                 onChange={e => {
                                     let value = e.target.value;
                                     if (field.type === 'number') {
-                                        value = value === '' ? 0 : parseFloat(value);
-                                        if (isNaN(value)) value = 0;
+                                        // Allow negative values - don't convert empty to 0 immediately
+                                        if (value === '' || value === '-') {
+                                            // Allow user to type negative sign
+                                            handleChange(field.name, value);
+                                            return;
+                                        }
+                                        const parsed = parseFloat(value);
+                                        if (!isNaN(parsed)) {
+                                            value = parsed;
+                                        } else {
+                                            // If invalid, keep the string value to allow user to continue typing
+                                            value = value;
+                                        }
                                     }
                                     handleChange(field.name, value);
                                 }}
                                 placeholder={field.placeholder}
                                 required={field.required}
                                 disabled={field.readOnly}
+                                step={field.name === 'balance' ? 'any' : undefined}
                             />
                         )}
                     </div>
@@ -257,7 +418,12 @@ const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, da
                             />
                         </div>
                         <button 
-                            onClick={(e) => { e.stopPropagation(); setIsModalOpen(true); }}
+                            onClick={(e) => { 
+                                e.stopPropagation(); 
+                                console.log('➕ Add New button clicked - clearing editingEntity');
+                                setEditingEntity(null); // CRITICAL: Clear any editing state
+                                setIsModalOpen(true); 
+                            }}
                             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
                         >
                             <Plus size={16} /> Add New
@@ -289,7 +455,9 @@ const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, da
                                                 <div className="flex items-center justify-end gap-2">
                                                     <button 
                                                         onClick={() => {
-                                                            setEditingEntity(row);
+                                                            console.log('✏️ Edit button clicked for row:', row.id, row);
+                                                            // CRITICAL: Ensure the full row object with ID is passed
+                                                            setEditingEntity({ ...row }); // Create a copy to ensure ID is preserved
                                                             setIsModalOpen(true);
                                                         }}
                                                         className="text-slate-400 hover:text-blue-500 transition-colors"
@@ -324,7 +492,7 @@ const CrudManager: React.FC<{ config: CrudConfig; data: any[] }> = ({ config, da
                     setEditingEntity(null);
                 }}
                 data={data}
-                initialOverrides={editingEntity}
+                initialOverrides={editingEntity ? { ...editingEntity } : undefined} // Ensure ID is preserved
             />
         </div>
     );
@@ -445,7 +613,8 @@ const DataImporter: React.FC = () => {
 export const useSetupConfigs = () => {
     const { 
         state, 
-        addPartner, 
+        addPartner,
+        updatePartner,
         addItem,
         updateItem,
         addAccount, 
@@ -465,14 +634,39 @@ export const useSetupConfigs = () => {
         title: 'Business Partners',
         entityKey: 'partners',
         columns: [
+            { header: 'Code', key: 'code', render: (r) => r.code ? <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200">{r.code}</span> : <span className="text-xs text-slate-400 italic">-</span> },
             { header: 'Name', key: 'name' },
             { header: 'Type', key: 'type', render: (r) => <span className="text-xs font-mono bg-slate-100 px-1 rounded">{r.type}</span> },
             { header: 'Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || '-' },
             { header: 'Currency', key: 'defaultCurrency', render: (r) => <span className="font-mono text-xs">{r.defaultCurrency || 'USD'}</span> },
-            { header: 'Balance', key: 'balance', render: (r) => <span className={r.balance < 0 ? 'text-red-500' : 'text-emerald-600'}>{r.balance}</span> }
+            { header: 'Balance', key: 'balance', render: (r) => <span className={r.balance < 0 ? 'text-red-500' : 'text-emerald-600'}>{r.balance}</span> },
+            { 
+                header: 'In Use', 
+                key: 'id', 
+                render: (r) => {
+                    const ledgerCount = state.ledger.filter(e => e.accountId === r.id).length;
+                    const usedInJV1002 = state.ledger.some(e => e.accountId === r.id && e.transactionId === 'JV-1002');
+                    if (ledgerCount > 0) {
+                        return (
+                            <div className="flex flex-col gap-1">
+                                <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">
+                                    {ledgerCount} entry{ledgerCount !== 1 ? 'ies' : 'y'}
+                                </span>
+                                {usedInJV1002 && (
+                                    <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded" title="Used in JV-1002">
+                                        JV-1002
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    }
+                    return <span className="text-xs text-slate-400 italic">Unused</span>;
+                }
+            }
         ],
         fields: [
             { name: 'type', label: 'Partner Type', type: 'select', options: Object.values(PartnerType), required: true },
+            { name: 'code', label: 'Partner Code', type: 'text', placeholder: 'e.g., FSK-001, CUST-100', required: false },
             { name: 'name', label: 'Company Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
@@ -536,6 +730,18 @@ export const useSetupConfigs = () => {
             { name: 'balance', label: 'Opening Balance (USD)', type: 'number', placeholder: 'Positive for Receivable, Negative for Payable' }
         ],
         onSave: (data) => addPartner(data),
+        onUpdate: async (id, data) => {
+            // Remove id from data before updating (id should not be updated)
+            const { id: _, ...updateData } = data;
+            try {
+                await updatePartner(id, updateData);
+                console.log('✅ Partner updated successfully:', id);
+            } catch (error) {
+                console.error('❌ Error updating partner:', error);
+                alert('Failed to update partner. Please try again.');
+                throw error; // Prevent onSuccess from being called
+            }
+        },
         onDelete: (id) => deleteEntity('partners', id)
     };
 
@@ -633,7 +839,7 @@ export const useSetupConfigs = () => {
             },
             { name: 'packingType', label: 'Packing Type', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'weightPerUnit', label: 'Package Size (Kg)', type: 'number', required: true },
-            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage', step: 'any' },
+            { name: 'avgCost', label: 'Avg Production Price (Per Unit)', type: 'number', placeholder: 'Can be negative for waste/garbage' },
             { name: 'salePrice', label: 'Avg Sale Price', type: 'number' },
             { name: 'stockQty', label: 'Opening Stock Qty', type: 'number', placeholder: 'For Opening Balance Only' }
         ],

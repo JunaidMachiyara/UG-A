@@ -1,9 +1,9 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useState, useRef } from 'react';
 import { AppState, LedgerEntry, Partner, Account, Item, TransactionType, AccountType, PartnerType, Division, SubDivision, Logo, Port, Warehouse, Employee, AttendanceRecord, Purchase, OriginalOpening, ProductionEntry, OriginalType, OriginalProduct, Category, Section, BundlePurchase, PackingType, LogisticsEntry, SalesInvoice, OngoingOrder, SalesInvoiceItem, ArchivedTransaction, Task, Enquiry, Vehicle, VehicleCharge, SalaryPayment, ChatMessage, PlannerEntry, PlannerEntityType, PlannerPeriodType, GuaranteeCheque, CustomsDocument, CurrencyRate, Currency } from '../types';
-import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PORTS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
+import { INITIAL_ACCOUNTS, INITIAL_ITEMS, INITIAL_LEDGER, INITIAL_PARTNERS, EXCHANGE_RATES, INITIAL_ORIGINAL_TYPES, INITIAL_ORIGINAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SECTIONS, INITIAL_DIVISIONS, INITIAL_SUB_DIVISIONS, INITIAL_LOGOS, INITIAL_PORTS, INITIAL_PURCHASES, INITIAL_LOGISTICS_ENTRIES, INITIAL_SALES_INVOICES, INITIAL_WAREHOUSES, INITIAL_ONGOING_ORDERS, INITIAL_EMPLOYEES, INITIAL_TASKS, INITIAL_VEHICLES, INITIAL_CHAT_MESSAGES, CURRENT_USER, INITIAL_ORIGINAL_OPENINGS, INITIAL_PRODUCTIONS, INITIAL_PLANNERS, INITIAL_PLANNER_CUSTOMER_IDS, INITIAL_PLANNER_SUPPLIER_IDS, INITIAL_PLANNER_LAST_WEEKLY_RESET, INITIAL_PLANNER_LAST_MONTHLY_RESET, INITIAL_GUARANTEE_CHEQUES, INITIAL_CUSTOMS_DOCUMENTS, INITIAL_CURRENCIES } from '../constants';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { getAccountId } from '../services/accountMap';
 
@@ -52,6 +52,7 @@ type Action =
     | { type: 'ADD_SECTION'; payload: Section }
     | { type: 'ADD_CURRENCY'; payload: CurrencyRate }
     | { type: 'UPDATE_STOCK'; payload: { itemId: string; qtyChange: number } }
+    | { type: 'UPDATE_ENTITY'; payload: { type: 'partners' | 'items' | 'accounts' | 'employees' | 'divisions' | 'subDivisions' | 'logos' | 'warehouses' | 'originalTypes' | 'originalProducts' | 'categories' | 'sections' | 'originalOpenings' | 'salesInvoices' | 'ongoingOrders' | 'tasks' | 'enquiries' | 'vehicles' | 'planners' | 'guaranteeCheques' | 'customsDocuments' | 'currencies'; id: string; data: any } }
     | { type: 'DELETE_ENTITY'; payload: { type: 'partners' | 'items' | 'accounts' | 'employees' | 'divisions' | 'subDivisions' | 'logos' | 'warehouses' | 'originalTypes' | 'originalProducts' | 'categories' | 'sections' | 'originalOpenings' | 'salesInvoices' | 'ongoingOrders' | 'tasks' | 'enquiries' | 'vehicles' | 'planners' | 'guaranteeCheques' | 'customsDocuments' | 'currencies'; id: string } }
     | { type: 'DELETE_LEDGER_ENTRIES'; payload: { transactionId: string; reason?: string; user?: string } }
     | { type: 'ADD_ORIGINAL_OPENING'; payload: OriginalOpening }
@@ -78,6 +79,12 @@ type Action =
     | { type: 'MARK_CHAT_READ'; payload: { chatId: string, userId: string } }
     | { type: 'ADD_PLANNER_ENTRY'; payload: PlannerEntry }
     | { type: 'UPDATE_PLANNER_ENTRY'; payload: PlannerEntry }
+    | { type: 'ADD_PLANNER_CUSTOMER'; payload: string } // customer ID
+    | { type: 'REMOVE_PLANNER_CUSTOMER'; payload: string } // customer ID
+    | { type: 'ADD_PLANNER_SUPPLIER'; payload: string } // supplier ID
+    | { type: 'REMOVE_PLANNER_SUPPLIER'; payload: string } // supplier ID
+    | { type: 'SET_PLANNER_WEEKLY_RESET'; payload: string } // YYYY-MM-DD
+    | { type: 'SET_PLANNER_MONTHLY_RESET'; payload: string } // YYYY-MM-DD
     | { type: 'ADD_GUARANTEE_CHEQUE'; payload: GuaranteeCheque }
     | { type: 'UPDATE_GUARANTEE_CHEQUE'; payload: GuaranteeCheque }
     | { type: 'ADD_CUSTOMS_DOCUMENT'; payload: CustomsDocument };
@@ -121,6 +128,10 @@ const initialState: AppState = {
     ongoingOrders: INITIAL_ONGOING_ORDERS,
     chatMessages: INITIAL_CHAT_MESSAGES,
     planners: INITIAL_PLANNERS,
+    plannerCustomerIds: INITIAL_PLANNER_CUSTOMER_IDS,
+    plannerSupplierIds: INITIAL_PLANNER_SUPPLIER_IDS,
+    plannerLastWeeklyReset: INITIAL_PLANNER_LAST_WEEKLY_RESET,
+    plannerLastMonthlyReset: INITIAL_PLANNER_LAST_MONTHLY_RESET,
     guaranteeCheques: INITIAL_GUARANTEE_CHEQUES,
     customsDocuments: INITIAL_CUSTOMS_DOCUMENTS
 };
@@ -354,6 +365,12 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         }
         case 'ADD_PLANNER_ENTRY': return { ...state, planners: [...state.planners, action.payload] };
         case 'UPDATE_PLANNER_ENTRY': return { ...state, planners: state.planners.map(p => p.id === action.payload.id ? action.payload : p) };
+        case 'ADD_PLANNER_CUSTOMER': return { ...state, plannerCustomerIds: state.plannerCustomerIds.includes(action.payload) ? state.plannerCustomerIds : [...state.plannerCustomerIds, action.payload] };
+        case 'REMOVE_PLANNER_CUSTOMER': return { ...state, plannerCustomerIds: state.plannerCustomerIds.filter(id => id !== action.payload) };
+        case 'ADD_PLANNER_SUPPLIER': return { ...state, plannerSupplierIds: state.plannerSupplierIds.includes(action.payload) ? state.plannerSupplierIds : [...state.plannerSupplierIds, action.payload] };
+        case 'REMOVE_PLANNER_SUPPLIER': return { ...state, plannerSupplierIds: state.plannerSupplierIds.filter(id => id !== action.payload) };
+        case 'SET_PLANNER_WEEKLY_RESET': return { ...state, plannerLastWeeklyReset: action.payload };
+        case 'SET_PLANNER_MONTHLY_RESET': return { ...state, plannerLastMonthlyReset: action.payload };
         case 'ADD_ORIGINAL_TYPE': return { ...state, originalTypes: [...state.originalTypes, action.payload] };
         case 'ADD_ORIGINAL_PRODUCT': return { ...state, originalProducts: [...state.originalProducts, action.payload] };
         case 'ADD_CATEGORY': return { ...state, categories: [...state.categories, action.payload] };
@@ -423,6 +440,14 @@ const dataReducer = (state: AppState, action: Action): AppState => {
         case 'ADD_GUARANTEE_CHEQUE': return { ...state, guaranteeCheques: [action.payload, ...state.guaranteeCheques] };
         case 'UPDATE_GUARANTEE_CHEQUE': return { ...state, guaranteeCheques: state.guaranteeCheques.map(g => g.id === action.payload.id ? action.payload : g) };
         case 'ADD_CUSTOMS_DOCUMENT': return { ...state, customsDocuments: [action.payload, ...state.customsDocuments] };
+        case 'UPDATE_ENTITY': {
+            const { type, id, data } = action.payload;
+            const entityArray = state[type] as any[];
+            return {
+                ...state,
+                [type]: entityArray.map((item: any) => item.id === id ? { ...item, ...data } : item)
+            };
+        }
         case 'DELETE_ENTITY': return { ...state, [action.payload.type]: (state[action.payload.type] as any[]).filter((i: any) => i.id !== action.payload.id) };
         case 'DELETE_LEDGER_ENTRIES': {
              const entriesToRemove = state.ledger.filter(e => e.transactionId === action.payload.transactionId);
@@ -459,9 +484,10 @@ interface DataContextType {
     isFirestoreLoaded: boolean;
     firestoreStatus: 'disconnected' | 'loading' | 'loaded' | 'error';
     firestoreError: string | null;
-    postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => void;
+    postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => Promise<void>;
     deleteTransaction: (transactionId: string, reason?: string, user?: string) => void;
     addPartner: (partner: Partner) => void;
+    updatePartner: (id: string, partner: Partial<Partner>) => Promise<void>;
     addItem: (item: Item, openingStock?: number) => void;
     addAccount: (account: Account) => Promise<void>;
     addDivision: (division: Division) => void;
@@ -490,6 +516,8 @@ interface DataContextType {
     addOriginalOpening: (opening: OriginalOpening) => void;
     deleteOriginalOpening: (id: string) => void;
     addProduction: (productions: ProductionEntry[]) => Promise<void>;
+    deleteProduction: (id: string) => Promise<void>;
+    deleteProductionsByDate: (date: string) => Promise<void>;
     postBaleOpening: (stagedItems: { itemId: string, qty: number, date: string }[]) => void;
     addPurchase: (purchase: Purchase) => void;
     updatePurchase: (purchase: Purchase) => void;
@@ -505,6 +533,12 @@ interface DataContextType {
     updateStock: (itemId: string, qtyChange: number) => void;
     addPlannerEntry: (entry: PlannerEntry) => void;
     updatePlannerEntry: (entry: PlannerEntry) => void;
+    addPlannerCustomer: (customerId: string) => void;
+    removePlannerCustomer: (customerId: string) => void;
+    addPlannerSupplier: (supplierId: string) => void;
+    removePlannerSupplier: (supplierId: string) => void;
+    setPlannerWeeklyReset: (date: string) => void;
+    setPlannerMonthlyReset: (date: string) => void;
     addGuaranteeCheque: (cheque: GuaranteeCheque) => void;
     updateGuaranteeCheque: (cheque: GuaranteeCheque) => void;
     addCustomsDocument: (doc: CustomsDocument) => void;
@@ -991,35 +1025,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     */
 
 
-    const postTransaction = (entries: Omit<LedgerEntry, 'id'>[]) => {
+    const postTransaction = async (entries: Omit<LedgerEntry, 'id'>[]) => {
         const entriesWithFactory = entries.map(entry => ({
             ...entry,
             factoryId: currentFactory?.id || ''
         }));
         
-        // Save each ledger entry to Firebase
-        if (isFirestoreLoaded) {
-            entriesWithFactory.forEach(entry => {
-                const entryData = {
-                    ...entry,
-                    createdAt: serverTimestamp()
-                };
-                
-                // Remove undefined values
-                Object.keys(entryData).forEach(key => {
-                    if ((entryData as any)[key] === undefined) {
-                        (entryData as any)[key] = null;
-                    }
-                });
-                
-                addDoc(collection(db, 'ledger'), entryData)
-                    .then((docRef) => {
-                        console.log('✅ Ledger entry saved to Firebase:', docRef.id);
-                    })
-                    .catch((error) => {
-                        console.error('❌ Error saving ledger entry to Firebase:', error);
+        // Save ledger entries to Firebase using batch writes for better performance
+        if (isFirestoreLoaded && entriesWithFactory.length > 0) {
+            const LEDGER_BATCH_SIZE = 500; // Firebase batch limit
+            
+            try {
+                for (let i = 0; i < entriesWithFactory.length; i += LEDGER_BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchEntries = entriesWithFactory.slice(i, i + LEDGER_BATCH_SIZE);
+                    const batchNumber = Math.floor(i / LEDGER_BATCH_SIZE) + 1;
+                    
+                    console.log(`📊 Ledger Batch ${batchNumber}: Preparing ${batchEntries.length} ledger entries for Firebase write`);
+                    
+                    batchEntries.forEach(entry => {
+                        const entryData = {
+                            ...entry,
+                            createdAt: serverTimestamp()
+                        };
+                        
+                        // Remove undefined values
+                        Object.keys(entryData).forEach(key => {
+                            if ((entryData as any)[key] === undefined) {
+                                (entryData as any)[key] = null;
+                            }
+                        });
+                        
+                        const ledgerRef = doc(collection(db, 'ledger'));
+                        batch.set(ledgerRef, entryData);
                     });
-            });
+                    
+                    // Commit this batch
+                    await batch.commit();
+                    console.log(`✅ Ledger Batch ${batchNumber}: ${batchEntries.length} ledger entries saved to Firebase`);
+                }
+                
+                console.log(`✅ Successfully saved all ${entriesWithFactory.length} ledger entries to Firebase`);
+            } catch (error) {
+                console.error('❌ Error saving ledger entries to Firebase:', error);
+                // Still dispatch to local state even if Firebase save fails
+            }
         }
         
         dispatch({ type: 'POST_TRANSACTION', payload: { entries: entriesWithFactory } });
@@ -1285,6 +1335,139 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 alert('Failed to save partner: ' + error.message);
             });
     };
+
+    const updatePartner = async (id: string, partner: Partial<Partner>) => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, partner update not saved to database');
+            dispatch({ type: 'UPDATE_ENTITY', payload: { type: 'partners', id, data: partner } });
+            return;
+        }
+
+        // Get existing partner to check for balance changes
+        const existingPartner = state.partners.find(p => p.id === id);
+        const balanceChanged = existingPartner && partner.balance !== undefined && partner.balance !== existingPartner.balance;
+        const newBalance = partner.balance !== undefined ? partner.balance : (existingPartner?.balance || 0);
+
+        // Auto-add factoryId from current factory
+        const partnerWithFactory = {
+            ...partner,
+            factoryId: currentFactory?.id || ''
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        const partnerData: any = {
+            ...partnerWithFactory,
+            updatedAt: serverTimestamp()
+        };
+        
+        // Don't save balance directly - it's calculated from ledger entries
+        // But we'll handle opening balance creation if balance is being set
+        delete partnerData.balance;
+        
+        Object.keys(partnerData).forEach(key => {
+            if (partnerData[key] === undefined) {
+                partnerData[key] = null;
+            }
+        });
+
+        try {
+            await updateDoc(doc(db, 'partners', id), partnerData);
+            console.log('✅ Partner updated in Firebase:', id);
+            
+            // If balance was changed and new balance is not 0, create/update opening balance entries
+            if (balanceChanged && newBalance !== 0 && existingPartner) {
+                // Check if opening balance entries already exist
+                const existingOBEntries = state.ledger.filter(
+                    e => e.transactionId === `OB-${id}` && e.transactionType === TransactionType.OPENING_BALANCE
+                );
+                
+                if (existingOBEntries.length === 0) {
+                    // No opening balance entries exist, create them
+                    console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
+                    const prevYear = new Date().getFullYear() - 1;
+                    const date = `${prevYear}-12-31`;
+                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                    const currency = partner.defaultCurrency || existingPartner.defaultCurrency || 'USD';
+                    const exchangeRates = getExchangeRates(state.currencies);
+                    const rate = exchangeRates[currency] || 1;
+                    const fcyAmt = newBalance * rate;
+                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+                    
+                    if (existingPartner.type === 'CUSTOMER') {
+                        // Customer: Debit customer account, Credit equity
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingPartner.name,
+                                debit: newBalance, // Can be negative
+                                credit: 0,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: 0,
+                                credit: newBalance, // Can be negative
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
+                        // Supplier/Vendor: Credit supplier account, Debit equity
+                        const absBalance = Math.abs(newBalance);
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingPartner.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    }
+                    postTransaction(entries);
+                    console.log('✅ Opening balance entries created');
+                } else {
+                    console.log('⚠️ Opening balance entries already exist. Balance will be recalculated from ledger.');
+                }
+            }
+            
+            // Firebase listener will handle updating local state
+        } catch (error) {
+            console.error('❌ Error updating partner in Firebase:', error);
+            alert('Failed to update partner: ' + (error as Error).message);
+            throw error;
+        }
+    };
+
     const addItem = (item: Item, openingStock: number = 0) => {
                 // Post ledger entries for opening stock if present
         if (openingStock > 0 && item.avgCost > 0) {
@@ -1505,23 +1688,46 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         console.log('🟢 Productions with factory:', productionsWithFactory);
         
-        // Save each production entry to Firebase - collect all promises
-        const productionSavePromises = productionsWithFactory.map(prod => {
-            const { id, ...prodData } = prod;
-            console.log('💾 Saving to Firebase:', prodData);
+        // Save production entries to Firebase using batch writes for better performance
+        // Firebase batch limit is 500 operations per batch
+        const BATCH_SIZE = 500;
+        const productionSavePromises: Promise<void>[] = [];
+        
+        for (let i = 0; i < productionsWithFactory.length; i += BATCH_SIZE) {
+            const batch = writeBatch(db);
+            const batchProductions = productionsWithFactory.slice(i, i + BATCH_SIZE);
+            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
             
-            // Remove undefined fields (Firebase doesn't allow undefined values)
-            const cleanedData = Object.fromEntries(
-                Object.entries(prodData).filter(([_, value]) => value !== undefined)
-            );
+            console.log(`📦 Batch ${batchNumber}: Preparing ${batchProductions.length} production entries for Firebase write`);
             
-            return addDoc(collection(db, 'productions'), { ...cleanedData, createdAt: serverTimestamp() })
-                .then(() => console.log('✅ Production entry saved to Firebase'))
+            batchProductions.forEach(prod => {
+                const { id, ...prodData } = prod;
+                
+                // Remove undefined fields (Firebase doesn't allow undefined values)
+                const cleanedData = Object.fromEntries(
+                    Object.entries(prodData).filter(([_, value]) => value !== undefined)
+                );
+                
+                // IMPORTANT: Store the original production ID so we can match ledger entries when deleting
+                // The ledger entries use transactionId = PROD-{id}, so we need this ID to find them
+                const cleanedDataWithId = { ...cleanedData, originalId: id, createdAt: serverTimestamp() };
+                
+                const prodRef = doc(collection(db, 'productions'));
+                batch.set(prodRef, cleanedDataWithId);
+            });
+            
+            // Commit this batch
+            const batchPromise = batch.commit()
+                .then(() => {
+                    console.log(`✅ Batch ${batchNumber}: ${batchProductions.length} production entries saved to Firebase`);
+                })
                 .catch((error) => {
-                    console.error('❌ Error saving production:', error);
+                    console.error(`❌ Error saving batch ${batchNumber}:`, error);
                     throw error;
                 });
-        });
+            
+            productionSavePromises.push(batchPromise);
+        }
         
         // Create accounting entries for production
         const fgInvId = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'))?.id;
@@ -1620,6 +1826,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 
             } else if (wipId) {
                 // NORMAL PRODUCTION ACCOUNTING: WIP to FG
+                // Batch all ledger entries together for better performance
+                const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
+                
                 productionsWithFactory.forEach(prod => {
                     const item = state.items.find(i => i.id === prod.itemId);
                     if (!item) {
@@ -1695,8 +1904,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         });
                     }
                     
-                    postTransaction(entries);
+                    // Add to batch instead of posting immediately
+                    allLedgerEntries.push(...entries);
                 });
+                
+                // Post all ledger entries in ONE batch call (much faster!)
+                if (allLedgerEntries.length > 0) {
+                    console.log(`📊 Posting ${allLedgerEntries.length} ledger entries in batch for ${productionsWithFactory.length} production entries...`);
+                    await postTransaction(allLedgerEntries);
+                    console.log(`✅ Successfully posted ${allLedgerEntries.length} ledger entries`);
+                }
             }
         }
         
@@ -1717,27 +1934,47 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
         });
         
-        // Apply updates to Firebase - collect all promises
-        const stockUpdatePromises = Array.from(itemStockUpdates.entries()).map(([itemId, { stockQtyDelta, maxSerialEnd }]) => {
-            const item = state.items.find(i => i.id === itemId);
-            if (item) {
-                const updates: any = {
-                    stockQty: item.stockQty + stockQtyDelta
-                };
-                
-                if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
-                    updates.nextSerial = maxSerialEnd + 1;
+        // Apply updates to Firebase using batch writes for better performance
+        const stockUpdatePromises: Promise<void>[] = [];
+        const STOCK_BATCH_SIZE = 500;
+        
+        const stockUpdateEntries = Array.from(itemStockUpdates.entries());
+        
+        for (let i = 0; i < stockUpdateEntries.length; i += STOCK_BATCH_SIZE) {
+            const batch = writeBatch(db);
+            const batchUpdates = stockUpdateEntries.slice(i, i + STOCK_BATCH_SIZE);
+            const batchNumber = Math.floor(i / STOCK_BATCH_SIZE) + 1;
+            
+            console.log(`📦 Stock Batch ${batchNumber}: Preparing ${batchUpdates.length} item stock updates`);
+            
+            batchUpdates.forEach(([itemId, { stockQtyDelta, maxSerialEnd }]) => {
+                const item = state.items.find(i => i.id === itemId);
+                if (item) {
+                    const updates: any = {
+                        stockQty: item.stockQty + stockQtyDelta
+                    };
+                    
+                    if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
+                        updates.nextSerial = maxSerialEnd + 1;
+                    }
+                    
+                    const itemRef = doc(db, 'items', itemId);
+                    batch.update(itemRef, updates);
                 }
-                
-                return updateDoc(doc(db, 'items', itemId), updates)
-                    .then(() => console.log(`✅ Updated stock for item ${itemId}: stockQty +${stockQtyDelta} = ${updates.stockQty}`))
-                    .catch((error) => {
-                        console.error(`❌ Error updating item ${itemId}:`, error);
-                        throw error;
-                    });
-            }
-            return Promise.resolve();
-        });
+            });
+            
+            // Commit this batch
+            const batchPromise = batch.commit()
+                .then(() => {
+                    console.log(`✅ Stock Batch ${batchNumber}: ${batchUpdates.length} item stock updates completed`);
+                })
+                .catch((error) => {
+                    console.error(`❌ Error updating stock batch ${batchNumber}:`, error);
+                    throw error;
+                });
+            
+            stockUpdatePromises.push(batchPromise);
+        }
         
         // Wait for all Firebase operations to complete
         await Promise.all([...productionSavePromises, ...stockUpdatePromises]);
@@ -1789,6 +2026,152 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Auto-refresh to update balances
         console.log('🔄 Refreshing page to update Balance Sheet...');
         setTimeout(() => window.location.reload(), 500);
+    };
+
+    const deleteProductionsByDate = async (date: string) => {
+        if (!isFirestoreLoaded) {
+            alert('⚠️ Firebase not loaded. Cannot delete productions.');
+            return;
+        }
+
+        // Find all productions for this date (normalize dates for comparison, use local timezone)
+        const normalizeDateForCompare = (dateStr: string): string => {
+            if (!dateStr) return '';
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                return dateStr;
+            }
+            const dateObj = new Date(dateStr);
+            if (!isNaN(dateObj.getTime())) {
+                const year = dateObj.getFullYear();
+                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                const day = String(dateObj.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+            return dateStr;
+        };
+        
+        const normalizedDeleteDate = normalizeDateForCompare(date);
+        const productionsToDelete = state.productions.filter(p => {
+            if (!p.date) return false;
+            const normalizedProdDate = normalizeDateForCompare(p.date);
+            return normalizedProdDate === normalizedDeleteDate;
+        });
+        
+        if (productionsToDelete.length === 0) {
+            alert(`No production entries found for date ${date}`);
+            return;
+        }
+
+        console.log(`🗑️ Deleting ${productionsToDelete.length} production entries for date ${date}...`);
+
+        try {
+            // First, get production documents from Firebase to get their original IDs
+            // This ensures we can match ledger entries even if state is out of sync
+            const productionsQuery = query(
+                collection(db, 'productions'),
+                where('date', '==', normalizedDeleteDate),
+                where('factoryId', '==', currentFactory?.id || '')
+            );
+            const productionsSnapshot = await getDocs(productionsQuery);
+            console.log(`📋 Found ${productionsSnapshot.size} production entries in Firebase for date ${normalizedDeleteDate}`);
+            
+            // Collect transaction IDs from both state and Firebase
+            const transactionIdsFromState = productionsToDelete.map(p => `PROD-${p.id}`);
+            const transactionIdsFromFirebase = productionsSnapshot.docs.map(doc => {
+                const prodData = doc.data();
+                // Use originalId if available (new format), otherwise try to extract from transactionId or use doc.id
+                const originalId = prodData.originalId || prodData.id || doc.id;
+                return `PROD-${originalId}`;
+            });
+            
+            // Combine and deduplicate transaction IDs
+            const allTransactionIds = [...new Set([...transactionIdsFromState, ...transactionIdsFromFirebase])];
+            console.log(`🔍 Looking for ledger entries with transaction IDs:`, allTransactionIds);
+            console.log(`   From state: ${transactionIdsFromState.length}, From Firebase: ${transactionIdsFromFirebase.length}, Total unique: ${allTransactionIds.length}`);
+            
+            let ledgerDeleted = 0;
+            
+            // Firestore 'in' operator has a limit of 10 items, so we need to batch queries
+            const QUERY_BATCH_SIZE = 10;
+            const ledgerEntriesToDelete: any[] = [];
+            
+            // Query ledger entries in batches of 10 transaction IDs
+            for (let i = 0; i < allTransactionIds.length; i += QUERY_BATCH_SIZE) {
+                const batchTransactionIds = allTransactionIds.slice(i, i + QUERY_BATCH_SIZE);
+                console.log(`🔍 Querying ledger for transaction IDs batch ${Math.floor(i / QUERY_BATCH_SIZE) + 1}:`, batchTransactionIds);
+                
+                const ledgerQuery = query(
+                    collection(db, 'ledger'),
+                    where('factoryId', '==', currentFactory?.id || ''),
+                    where('transactionId', 'in', batchTransactionIds)
+                );
+                const ledgerSnapshot = await getDocs(ledgerQuery);
+                
+                console.log(`📋 Found ${ledgerSnapshot.size} ledger entries for batch ${Math.floor(i / QUERY_BATCH_SIZE) + 1}`);
+                
+                ledgerSnapshot.docs.forEach(docSnapshot => {
+                    const entry = docSnapshot.data();
+                    console.log(`📝 Ledger entry found: ${entry.transactionId} - ${entry.accountName} - Debit: ${entry.debit}, Credit: ${entry.credit}`);
+                    ledgerEntriesToDelete.push(docSnapshot.ref);
+                });
+            }
+
+            console.log(`📊 Total ledger entries to delete: ${ledgerEntriesToDelete.length}`);
+
+            // Delete ledger entries in batches (Firestore batch limit is 500)
+            const BATCH_SIZE = 500;
+            for (let i = 0; i < ledgerEntriesToDelete.length; i += BATCH_SIZE) {
+                const batch = writeBatch(db);
+                const batchRefs = ledgerEntriesToDelete.slice(i, i + BATCH_SIZE);
+                batchRefs.forEach(ref => batch.delete(ref));
+                await batch.commit();
+                ledgerDeleted += batchRefs.length;
+                console.log(`✅ Deleted ${batchRefs.length} ledger entries (batch ${Math.floor(i / BATCH_SIZE) + 1})`);
+            }
+
+            // Delete production entries from Firebase (we already queried them above)
+            const productionRefsToDelete = productionsSnapshot.docs.map(doc => doc.ref);
+            
+            // Delete in batches
+            for (let i = 0; i < productionRefsToDelete.length; i += BATCH_SIZE) {
+                const batch = writeBatch(db);
+                const batchRefs = productionRefsToDelete.slice(i, i + BATCH_SIZE);
+                batchRefs.forEach(ref => batch.delete(ref));
+                await batch.commit();
+                console.log(`✅ Deleted ${batchRefs.length} production entries (batch ${Math.floor(i / BATCH_SIZE) + 1})`);
+            }
+
+            // Reverse stock changes for each production
+            productionsToDelete.forEach(prod => {
+                const item = state.items.find(i => i.id === prod.itemId);
+                if (item) {
+                    // Reverse the stock change (subtract the qty that was added)
+                    dispatch({ 
+                        type: 'UPDATE_STOCK', 
+                        payload: { 
+                            itemId: prod.itemId, 
+                            qtyChange: -prod.qtyProduced // Negative to reverse
+                        } 
+                    });
+                    console.log(`📦 Reversed stock for ${item.name}: -${prod.qtyProduced} units`);
+                }
+            });
+
+            // Update local state - remove productions and their ledger entries
+            productionsToDelete.forEach(prod => {
+                dispatch({ type: 'DELETE_ENTITY', payload: { type: 'productions', id: prod.id } });
+                dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId: `PROD-${prod.id}`, reason: 'Bulk delete by date', user: CURRENT_USER?.name || 'Admin' } });
+            });
+
+            console.log(`✅ Successfully deleted ${productionsToDelete.length} production entries and ${ledgerDeleted} ledger entries for date ${date}`);
+            alert(`✅ Successfully deleted ${productionsToDelete.length} production entries and ${ledgerDeleted} ledger entries for ${date}.\n\nPage will refresh to update balances.`);
+            
+            // Auto-refresh to update balances
+            setTimeout(() => window.location.reload(), 1000);
+        } catch (error: any) {
+            console.error('❌ Error deleting productions by date:', error);
+            alert(`❌ Error deleting productions: ${error.message}`);
+        }
     };
 
     const postBaleOpening = (stagedItems: { itemId: string, qty: number, date: string }[]) => {
@@ -2226,6 +2609,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updateStock = (itemId: string, qtyChange: number) => dispatch({ type: 'UPDATE_STOCK', payload: { itemId, qtyChange } });
     const addPlannerEntry = (entry: PlannerEntry) => dispatch({ type: 'ADD_PLANNER_ENTRY', payload: entry });
     const updatePlannerEntry = (entry: PlannerEntry) => dispatch({ type: 'UPDATE_PLANNER_ENTRY', payload: entry });
+    const addPlannerCustomer = (customerId: string) => dispatch({ type: 'ADD_PLANNER_CUSTOMER', payload: customerId });
+    const removePlannerCustomer = (customerId: string) => dispatch({ type: 'REMOVE_PLANNER_CUSTOMER', payload: customerId });
+    const addPlannerSupplier = (supplierId: string) => dispatch({ type: 'ADD_PLANNER_SUPPLIER', payload: supplierId });
+    const removePlannerSupplier = (supplierId: string) => dispatch({ type: 'REMOVE_PLANNER_SUPPLIER', payload: supplierId });
+    const setPlannerWeeklyReset = (date: string) => dispatch({ type: 'SET_PLANNER_WEEKLY_RESET', payload: date });
+    const setPlannerMonthlyReset = (date: string) => dispatch({ type: 'SET_PLANNER_MONTHLY_RESET', payload: date });
     const addGuaranteeCheque = (cheque: GuaranteeCheque) => dispatch({ type: 'ADD_GUARANTEE_CHEQUE', payload: cheque });
     const updateGuaranteeCheque = (cheque: GuaranteeCheque) => dispatch({ type: 'UPDATE_GUARANTEE_CHEQUE', payload: cheque });
     const addCustomsDocument = (doc: CustomsDocument) => dispatch({ type: 'ADD_CUSTOMS_DOCUMENT', payload: doc });
@@ -2312,6 +2701,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             postTransaction,
             deleteTransaction,
             addPartner,
+            updatePartner,
             addItem,
             updateItem,
             addAccount,
@@ -2343,6 +2733,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             deleteOriginalOpening,
             addProduction,
             deleteProduction,
+            deleteProductionsByDate,
             postBaleOpening,
             addPurchase,
             updatePurchase,
@@ -2358,6 +2749,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updateStock,
             addPlannerEntry,
             updatePlannerEntry,
+            addPlannerCustomer,
+            removePlannerCustomer,
+            addPlannerSupplier,
+            removePlannerSupplier,
+            setPlannerWeeklyReset,
+            setPlannerMonthlyReset,
             addGuaranteeCheque,
             updateGuaranteeCheque,
             addCustomsDocument,

@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useData } from '../../context/DataContext';
 import { Download, Printer, Package, TrendingDown, TrendingUp, X } from 'lucide-react';
-import { SalesInvoice } from '../../types';
+import { SalesInvoice, PartnerType } from '../../types';
+import { EntitySelector } from '../EntitySelector';
 
 interface StockSummary {
     originalTypeId: string;
@@ -206,20 +207,18 @@ export const OriginalStockReport: React.FC = () => {
             <div className="bg-white rounded-lg border border-slate-200 p-4">
                 <div className="flex gap-4 items-center">
                     <label className="text-sm font-medium text-slate-700">Filter by Supplier:</label>
-                    <select
-                        value={selectedSupplier}
-                        onChange={(e) => setSelectedSupplier(e.target.value)}
-                        className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                        <option value="all">All Suppliers</option>
-                        {state.partners
-                            .filter(p => p.type === 'SUPPLIER')
-                            .map(supplier => (
-                                <option key={supplier.id} value={supplier.id}>
-                                    {supplier.name}
-                                </option>
-                            ))}
-                    </select>
+                    <div className="min-w-[200px]">
+                        <EntitySelector
+                            entities={[
+                                { id: 'all', name: 'All Suppliers' },
+                                ...state.partners.filter(p => p.type === PartnerType.SUPPLIER)
+                            ]}
+                            selectedId={selectedSupplier}
+                            onSelect={(id) => setSelectedSupplier(id || 'all')}
+                            placeholder="All Suppliers"
+                            className="w-full"
+                        />
+                    </div>
                 </div>
             </div>
 

@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload, CheckSquare, LogOut, Building2, ChevronDown, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Database, FileText, PieChart, User, Settings, ShoppingCart, Factory, Truck, Container, ClipboardCheck, Users, MessageSquare, Briefcase, Package, TrendingUp, Upload, CheckSquare, LogOut, Building2, ChevronDown, Menu, X, RefreshCw } from 'lucide-react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { UserRole, PermissionModule } from '../types';
@@ -27,7 +27,7 @@ const SidebarItem = ({ to, icon: Icon, label, badge }: { to: string, icon: any, 
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { state, isFirestoreLoaded, firestoreStatus, firestoreError } = useData();
-    const { currentUser, currentFactory, factories, logout, switchFactory, hasPermission } = useAuth();
+    const { currentUser, currentFactory, factories, logout, switchFactory, hasPermission, refreshUser } = useAuth();
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
     const [showHeaderFactorySwitcher, setShowHeaderFactorySwitcher] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -212,7 +212,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         </div>
                     )}
                     
-                    {/* User Info */}
+                    {/* User Info & Actions - Mobile */}
                    <div className="flex items-center justify-between gap-3">
                        <div className="flex items-center gap-3 flex-1 min-w-0">
                            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold flex-shrink-0">
@@ -223,13 +223,29 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                <div className="text-xs text-emerald-600">Online</div>
                            </div>
                        </div>
-                       <button
-                           onClick={logout}
-                           className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                           title="Logout"
-                       >
-                           <LogOut size={18} />
-                       </button>
+                       <div className="flex items-center gap-1">
+                           <button
+                               onClick={async () => {
+                                   await refreshUser();
+                                   alert('Permissions refreshed! If you still don\'t see new modules, please log out and log back in.');
+                               }}
+                               className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0"
+                               title="Refresh Permissions"
+                           >
+                               <RefreshCw size={18} />
+                           </button>
+                           <button
+                               onClick={() => {
+                                   logout();
+                                   window.location.href = '#/';
+                               }}
+                               className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
+                               title="Logout"
+                           >
+                               <LogOut size={18} />
+                               <span className="hidden sm:inline font-medium">Logout</span>
+                           </button>
+                       </div>
                    </div>
                 </div>
             </aside>
@@ -477,6 +493,39 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                             <span className="text-xs md:text-sm text-slate-500">Cash: <span className="text-emerald-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Cash'))?.balance || 0).toLocaleString()}</span></span>
                             <div className="h-4 w-px bg-slate-300"></div>
                             <span className="text-xs md:text-sm text-slate-500">Bank: <span className="text-blue-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Bank'))?.balance || 0).toLocaleString()}</span></span>
+                        </div>
+                        {/* User Info & Actions - Desktop */}
+                        <div className="hidden lg:flex items-center gap-2 pl-4 border-l border-slate-300">
+                            <div className="flex items-center gap-2 pr-2">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
+                                    {currentUser?.displayName?.charAt(0).toUpperCase() || 'U'}
+                                </div>
+                                <div>
+                                    <div className="text-sm font-medium text-slate-700">{currentUser?.displayName || 'User'}</div>
+                                    <div className="text-xs text-slate-500">{currentFactory?.name || ''}</div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={async () => {
+                                    await refreshUser();
+                                    alert('Permissions refreshed! If you still don\'t see new modules, please log out and log back in.');
+                                }}
+                                className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Refresh Permissions"
+                            >
+                                <RefreshCw size={16} />
+                            </button>
+                            <button
+                                onClick={() => {
+                                    logout();
+                                    window.location.href = '#/';
+                                }}
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Logout"
+                            >
+                                <LogOut size={16} />
+                                <span className="font-medium">Logout</span>
+                            </button>
                         </div>
                     </div>
                 </header>

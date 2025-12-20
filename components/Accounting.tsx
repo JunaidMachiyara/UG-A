@@ -1343,6 +1343,7 @@ export const Accounting: React.FC = () => {
                                         <th className="px-4 py-4 whitespace-nowrap">Date</th>
                                         <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
                                         <th className="px-4 py-4 whitespace-nowrap min-w-[200px]">Account</th>
+                                        <th className="px-4 py-4 whitespace-nowrap">Account ID</th>
                                         <th className="px-4 py-4 text-right bg-blue-50/50 whitespace-nowrap">Amount (FCY)</th>
                                         <th className="px-4 py-4 text-center whitespace-nowrap">Rate</th>
                                         <th className="px-4 py-4 text-right whitespace-nowrap">Debit ($)</th>
@@ -1352,7 +1353,12 @@ export const Accounting: React.FC = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-200 text-slate-700">
-                                    {filteredLedger.map((entry) => (
+                                    {filteredLedger.map((entry) => {
+                                        // Check if this accountId is a partner
+                                        const isPartner = state.partners.some(p => p.id === entry.accountId);
+                                        const partner = state.partners.find(p => p.id === entry.accountId);
+                                        
+                                        return (
                                         <tr key={entry.id} className="hover:bg-slate-50 group">
                                             <td className="px-4 py-4 whitespace-nowrap">{new Date(entry.date).toLocaleDateString()}</td>
                                             <td className="px-4 py-4 font-mono text-xs text-slate-500 whitespace-nowrap">
@@ -1360,6 +1366,15 @@ export const Accounting: React.FC = () => {
                                                 <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
                                             </td>
                                             <td className="px-4 py-4 font-medium">{entry.accountName}</td>
+                                            <td className="px-4 py-4 whitespace-nowrap">
+                                                {isPartner && partner ? (
+                                                    <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200" title={`Partner ID: ${entry.accountId} | ${partner.name} (${partner.type})`}>
+                                                        {partner.code || entry.accountId}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400">-</span>
+                                                )}
+                                            </td>
                                             <td className="px-4 py-4 text-right font-mono bg-blue-50/30 whitespace-nowrap">
                                                 {entry.fcyAmount ? (
                                                     <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
@@ -1376,7 +1391,8 @@ export const Accounting: React.FC = () => {
                                                 </div>
                                             </td>
                                         </tr>
-                                    ))}
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>
