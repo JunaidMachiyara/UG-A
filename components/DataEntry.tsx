@@ -151,6 +151,7 @@ export const DataEntry: React.FC = () => {
     const [stagedProds, setStagedProds] = useState<ProductionEntry[]>([]);
     const [showProdSummary, setShowProdSummary] = useState(false);
     const [tempSerialTracker, setTempSerialTracker] = useState<Record<string, number>>({});
+    const [isProcessingProduction, setIsProcessingProduction] = useState(false);
 
     // --- Re-baling State ---
     const [rbDate, setRbDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1431,19 +1432,32 @@ export const DataEntry: React.FC = () => {
         setProdQty('');
     };
 
-    const handleFinalizeProduction = () => {
+    const handleFinalizeProduction = async () => {
         console.log('🔵 handleFinalizeProduction called');
         console.log('🔵 stagedProds:', stagedProds);
         if (stagedProds.length === 0) {
             console.log('❌ No staged productions');
             return;
         }
-        console.log('✅ Calling addProduction with:', stagedProds);
-        addProduction(stagedProds);
-        setStagedProds([]);
-        setTempSerialTracker({});
-        setShowProdSummary(false);
-        alert("Production Saved Successfully");
+        
+        if (isProcessingProduction) {
+            return; // Prevent multiple clicks
+        }
+        
+        setIsProcessingProduction(true);
+        try {
+            console.log('✅ Calling addProduction with:', stagedProds);
+            await addProduction(stagedProds);
+            setStagedProds([]);
+            setTempSerialTracker({});
+            setShowProdSummary(false);
+            alert("Production Saved Successfully");
+        } catch (error) {
+            console.error('❌ Error saving production:', error);
+            alert("Error saving production. Please try again.");
+        } finally {
+            setIsProcessingProduction(false);
+        }
     };
 
     // --- CSV Upload Handler for Production ---
@@ -3378,13 +3392,33 @@ export const DataEntry: React.FC = () => {
                                     </tbody>
                                 </table>
                             </div>
+                            {isProcessingProduction && (
+                                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+                                    <RefreshCw className="animate-spin text-blue-600" size={20} />
+                                    <div>
+                                        <p className="text-sm font-medium text-blue-900">Processing production entries...</p>
+                                        <p className="text-xs text-blue-700 mt-1">Please wait while we save {stagedProds.length} entries to the ledger. Do not close this window.</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                         <div className="p-6 border-t border-slate-100 flex justify-end gap-3 shrink-0">
-                            <button onClick={() => setShowProdSummary(false)} className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium">
+                            <button 
+                                onClick={() => setShowProdSummary(false)} 
+                                disabled={isProcessingProduction}
+                                className="px-4 py-2 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
                                 Cancel
                             </button>
-                            <button onClick={handleFinalizeProduction} className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm">
-                                Save & Continue
+                            <button 
+                                onClick={handleFinalizeProduction} 
+                                disabled={isProcessingProduction}
+                                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold shadow-sm disabled:opacity-70 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                {isProcessingProduction && (
+                                    <RefreshCw className="animate-spin" size={18} />
+                                )}
+                                {isProcessingProduction ? 'Processing...' : 'Save & Continue'}
                             </button>
                         </div>
                     </div>

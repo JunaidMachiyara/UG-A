@@ -489,7 +489,7 @@ interface DataContextType {
     updateCurrency: (currencyId: string, updates: Partial<CurrencyRate>) => Promise<void>;
     addOriginalOpening: (opening: OriginalOpening) => void;
     deleteOriginalOpening: (id: string) => void;
-    addProduction: (productions: ProductionEntry[]) => void;
+    addProduction: (productions: ProductionEntry[]) => Promise<void>;
     postBaleOpening: (stagedItems: { itemId: string, qty: number, date: string }[]) => void;
     addPurchase: (purchase: Purchase) => void;
     updatePurchase: (purchase: Purchase) => void;
@@ -1491,7 +1491,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log('🔄 Refreshing page to update Balance Sheet...');
         setTimeout(() => window.location.reload(), 500);
     };
-    const addProduction = (productions: ProductionEntry[]) => {
+    const addProduction = async (productions: ProductionEntry[]): Promise<void> => {
         console.log('🟢 addProduction called with:', productions);
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, production not saved to database');
@@ -1505,8 +1505,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         console.log('🟢 Productions with factory:', productionsWithFactory);
         
-        // Save each production entry to Firebase
-        productionsWithFactory.forEach(prod => {
+        // Save each production entry to Firebase - collect all promises
+        const productionSavePromises = productionsWithFactory.map(prod => {
             const { id, ...prodData } = prod;
             console.log('💾 Saving to Firebase:', prodData);
             
@@ -1515,9 +1515,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 Object.entries(prodData).filter(([_, value]) => value !== undefined)
             );
             
-            addDoc(collection(db, 'productions'), { ...cleanedData, createdAt: serverTimestamp() })
+            return addDoc(collection(db, 'productions'), { ...cleanedData, createdAt: serverTimestamp() })
                 .then(() => console.log('✅ Production entry saved to Firebase'))
-                .catch((error) => console.error('❌ Error saving production:', error));
+                .catch((error) => {
+                    console.error('❌ Error saving production:', error);
+                    throw error;
+                });
         });
         
         // Create accounting entries for production
@@ -1714,8 +1717,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
         });
         
-        // Apply updates to Firebase
-        itemStockUpdates.forEach(({ stockQtyDelta, maxSerialEnd }, itemId) => {
+        // Apply updates to Firebase - collect all promises
+        const stockUpdatePromises = Array.from(itemStockUpdates.entries()).map(([itemId, { stockQtyDelta, maxSerialEnd }]) => {
             const item = state.items.find(i => i.id === itemId);
             if (item) {
                 const updates: any = {
@@ -1726,11 +1729,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     updates.nextSerial = maxSerialEnd + 1;
                 }
                 
-                updateDoc(doc(db, 'items', itemId), updates)
+                return updateDoc(doc(db, 'items', itemId), updates)
                     .then(() => console.log(`✅ Updated stock for item ${itemId}: stockQty +${stockQtyDelta} = ${updates.stockQty}`))
-                    .catch((error) => console.error(`❌ Error updating item ${itemId}:`, error));
+                    .catch((error) => {
+                        console.error(`❌ Error updating item ${itemId}:`, error);
+                        throw error;
+                    });
             }
+            return Promise.resolve();
         });
+        
+        // Wait for all Firebase operations to complete
+        await Promise.all([...productionSavePromises, ...stockUpdatePromises]);
+        console.log('✅ All production entries and stock updates completed');
     };
 
     const deleteProduction = async (id: string) => {
