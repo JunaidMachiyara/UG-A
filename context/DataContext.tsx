@@ -1884,9 +1884,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 
             } else if (wipId) {
-                // NORMAL PRODUCTION ACCOUNTING: WIP to FG
+                // NORMAL PRODUCTION ACCOUNTING: WIP to FG (with batch matching)
                 // Batch all ledger entries together for better performance
                 const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
+                
+                // Calculate current WIP balance from ledger (debit - credit)
+                const wipBalance = state.ledger
+                    .filter(e => e.accountId === wipId && e.factoryId === currentFactory?.id)
+                    .reduce((sum, e) => sum + (e.debit || 0) - (e.credit || 0), 0);
+                
+                console.log('📊 Current WIP Balance:', wipBalance);
+                
+                // Track cumulative WIP consumption across all productions in this batch (for FIFO)
+                let cumulativeWipConsumedInBatch = 0;
                 
                 productionsWithFactory.forEach(prod => {
                     const item = state.items.find(i => i.id === prod.itemId);
@@ -1897,18 +1907,94 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     
                     console.log('📦 Item found:', item.name, 'avgCost:', item.avgCost);
                     
-                    // Calculate values using avgCost (can be negative for waste/garbage items)
-                    const finishedGoodsValue = prod.qtyProduced * (item.avgCost || 0);
+                    // Calculate production value: qtyProduced × productionPrice (or avgCost if not set)
+                    const productionPrice = prod.productionPrice || item.avgCost || 0;
+                    const finishedGoodsValue = prod.qtyProduced * productionPrice;
                     const totalKg = prod.weightProduced;
-                    const wipCostPerKg = 1; // This should ideally come from the actual WIP cost tracking
-                    const wipValueConsumed = totalKg * wipCostPerKg;
-                    const productionGain = finishedGoodsValue - wipValueConsumed;
+                    
+                    // Match WIP by batch (FIFO) - consume from Original Opening entries
+                    // Calculate total available WIP balance
+                    const totalWipBalance = state.ledger
+                        .filter(e => e.accountId === wipId && e.factoryId === prod.factoryId)
+                        .reduce((sum, e) => sum + (e.debit || 0) - (e.credit || 0), 0);
+                    
+                    let wipValueConsumed = 0;
+                    
+                    // If WIP balance exists, consume FIFO from opening entries
+                    if (totalWipBalance > 0 && totalKg > 0) {
+                        // Get all Original Opening entries sorted by date (FIFO)
+                        const availableOpenings = state.originalOpenings
+                            .filter(o => o.factoryId === prod.factoryId)
+                            .sort((a, b) => {
+                                const dateDiff = new Date(a.date).getTime() - new Date(b.date).getTime();
+                                if (dateDiff !== 0) return dateDiff;
+                                return (a.batchNumber || '').localeCompare(b.batchNumber || '');
+                            });
+                        
+                        // Calculate total WIP credits from previous productions (already consumed)
+                        const totalWipCreditsFromLedger = state.ledger
+                            .filter(e => 
+                                e.transactionId?.startsWith('PROD-') &&
+                                e.accountId === wipId &&
+                                e.credit > 0 &&
+                                e.factoryId === prod.factoryId
+                            )
+                            .reduce((sum, e) => sum + (e.credit || 0), 0);
+                        
+                        let remainingKgToConsume = totalKg;
+                        const totalConsumedFromLedger = totalWipCreditsFromLedger;
+                        let sumOfPreviousOpenings = 0;
+                        
+                        // Consume FIFO from openings until we've consumed enough or run out
+                        for (const opening of availableOpenings) {
+                            if (remainingKgToConsume <= 0) break;
+                            
+                            // Get opening's WIP value (from its ledger debit entry)
+                            const openingWipDebit = state.ledger
+                                .filter(e => 
+                                    e.transactionId === `OO-${opening.id}` && 
+                                    e.accountId === wipId &&
+                                    e.debit > 0
+                                )
+                                .reduce((sum, e) => sum + (e.debit || 0), 0);
+                            
+                            if (openingWipDebit > 0 && opening.costPerKg > 0) {
+                                // FIFO logic: 
+                                // - sumOfPreviousOpenings = total value of all openings before this one
+                                // - consumedFromPrevious = min(totalConsumed, sumOfPreviousOpenings)
+                                // - consumedFromThis = max(0, totalConsumed - sumOfPreviousOpenings)
+                                // - available = opening value - consumedFromThis
+                                const consumedFromThisOpening = Math.max(0, totalConsumedFromLedger + cumulativeWipConsumedInBatch - sumOfPreviousOpenings);
+                                const availableValue = Math.max(0, openingWipDebit - consumedFromThisOpening);
+                                const availableKgFromThisOpening = availableValue / opening.costPerKg;
+                                
+                                if (availableKgFromThisOpening > 0 && remainingKgToConsume > 0) {
+                                    const kgToConsume = Math.min(remainingKgToConsume, availableKgFromThisOpening);
+                                    const valueToConsume = kgToConsume * opening.costPerKg;
+                                    
+                                    wipValueConsumed += valueToConsume;
+                                    cumulativeWipConsumedInBatch += valueToConsume;
+                                    remainingKgToConsume -= kgToConsume;
+                                }
+                                
+                                // Update sum for next iteration
+                                sumOfPreviousOpenings += openingWipDebit;
+                            }
+                        }
+                        
+                        // Cap WIP consumption at available balance
+                        wipValueConsumed = Math.min(wipValueConsumed, totalWipBalance);
+                    }
+                    
+                    // If no WIP available or remaining after consumption, remainder goes to Capital
+                    const capitalCredit = finishedGoodsValue - wipValueConsumed;
                     
                     console.log('💰 Calculations:', {
                         finishedGoodsValue,
                         totalKg,
                         wipValueConsumed,
-                        productionGain
+                        capitalCredit,
+                        wipBalance: totalWipBalance
                     });
                     
                     const transactionId = `PROD-${prod.id}`;
@@ -1927,9 +2013,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             credit: finishedGoodsValue < 0 ? Math.abs(finishedGoodsValue) : 0,
                             narration: `Production: ${prod.itemName} (${prod.qtyProduced} units, ${totalKg}kg)`,
                             factoryId: prod.factoryId
-                        },
-                        // Credit WIP (reduce work in progress)
-                        {
+                        }
+                    ];
+                    
+                    // Credit WIP only if there's WIP to consume
+                    if (wipValueConsumed > 0) {
+                        entries.push({
                             date: prod.date,
                             transactionId,
                             transactionType: TransactionType.PRODUCTION,
@@ -1942,11 +2031,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             credit: wipValueConsumed,
                             narration: `Production: ${prod.itemName} (${totalKg}kg raw material consumed)`,
                             factoryId: prod.factoryId
-                        }
-                    ];
+                        });
+                    }
                     
-                    // If there's a production gain, credit Production Gain account
-                    if (productionGain !== 0 && productionGainId) {
+                    // Credit Capital/Production Gain for the remainder (or full amount if no WIP)
+                    if (capitalCredit !== 0 && productionGainId) {
                         entries.push({
                             date: prod.date,
                             transactionId,
@@ -1955,10 +2044,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             accountName: 'Production Gain',
                             currency: 'USD',
                             exchangeRate: 1,
-                            fcyAmount: Math.abs(productionGain),
-                            debit: productionGain < 0 ? Math.abs(productionGain) : 0,
-                            credit: productionGain > 0 ? productionGain : 0,
-                            narration: `Production ${productionGain > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}`,
+                            fcyAmount: Math.abs(capitalCredit),
+                            debit: capitalCredit < 0 ? Math.abs(capitalCredit) : 0,
+                            credit: capitalCredit > 0 ? capitalCredit : 0,
+                            narration: `Production ${capitalCredit > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}${wipValueConsumed > 0 ? ` (WIP: $${wipValueConsumed.toFixed(2)})` : ' (No WIP)'}`,
                             factoryId: prod.factoryId
                         });
                     }
