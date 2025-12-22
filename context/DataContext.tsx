@@ -520,7 +520,7 @@ interface DataContextType {
     deleteProductionsByDate: (date: string) => Promise<void>;
     postBaleOpening: (stagedItems: { itemId: string, qty: number, date: string }[]) => void;
     addPurchase: (purchase: Purchase) => void;
-    updatePurchase: (purchase: Purchase) => void;
+    updatePurchase: (purchase: Purchase) => Promise<void>;
     addBundlePurchase: (purchase: BundlePurchase) => void;
     saveLogisticsEntry: (entry: LogisticsEntry) => void;
     addSalesInvoice: (invoice: SalesInvoice) => void;
@@ -1044,18 +1044,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     console.log(`📊 Ledger Batch ${batchNumber}: Preparing ${batchEntries.length} ledger entries for Firebase write`);
                     
                     batchEntries.forEach(entry => {
-                        const entryData = {
-                            ...entry,
-                            createdAt: serverTimestamp()
-                        };
-                        
-                        // Remove undefined values
-                        Object.keys(entryData).forEach(key => {
-                            if ((entryData as any)[key] === undefined) {
-                                (entryData as any)[key] = null;
-                            }
-                        });
-                        
+                const entryData = {
+                    ...entry,
+                    createdAt: serverTimestamp()
+                };
+                
+                // Remove undefined values
+                Object.keys(entryData).forEach(key => {
+                    if ((entryData as any)[key] === undefined) {
+                        (entryData as any)[key] = null;
+                    }
+                });
+                
                         const ledgerRef = doc(collection(db, 'ledger'));
                         batch.set(ledgerRef, entryData);
                     });
@@ -1091,6 +1091,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log(`✅ Deleted all ledger entries for transaction ${transactionId}`);
     };
     
+    // Helper to recursively replace undefined with null (Firestore-safe)
+    const cleanForFirestore = (value: any): any => {
+        if (Array.isArray(value)) {
+            return value.map(cleanForFirestore);
+        }
+        if (value && typeof value === 'object') {
+            const result: any = {};
+            Object.entries(value).forEach(([k, v]) => {
+                if (v === undefined) {
+                    result[k] = null;
+                } else {
+                    result[k] = cleanForFirestore(v);
+                }
+            });
+            return result;
+        }
+        return value;
+    };
+    
     const addPurchase = (purchase: Purchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
         if (!isFirestoreLoaded) {
@@ -1121,17 +1140,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Save to Firebase
         const { id, ...purchaseDataToSave } = purchaseWithQty;
-        const purchaseData = {
+        const purchaseData = cleanForFirestore({
             ...purchaseDataToSave,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
-        };
-
-        // Remove undefined values (Firestore doesn't accept them)
-        Object.keys(purchaseData).forEach(key => {
-            if ((purchaseData as any)[key] === undefined) {
-                (purchaseData as any)[key] = null;
-            }
         });
 
         addDoc(collection(db, 'purchases'), purchaseData)
@@ -1144,33 +1156,80 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 alert('Failed to save purchase: ' + error.message);
             });
 
-        // Create journal entries
+        // Create journal entries for this purchase
+        const buildPurchaseEntries = (): Omit<LedgerEntry, 'id'>[] | null => {
         const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
         const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
-        
+
         if (!inventoryAccount || !apAccount) {
             console.error('❌ Required accounts not found! Inventory:', inventoryAccount, 'AP:', apAccount);
-            alert('Warning: Chart of Accounts is incomplete. Please ensure "Inventory - Raw Materials" and "Accounts Payable" accounts exist.');
-            return;
+            alert(
+                'Warning: Chart of Accounts is incomplete. Please ensure ' +
+                '"Inventory - Raw Materials" and "Accounts Payable" accounts exist.'
+            );
+            return null;
         }
-        
+
         const inventoryId = inventoryAccount.id;
-        const apId = apAccount.id;
         const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            { date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryId, accountName: 'Inventory - Raw Materials', currency: 'USD', exchangeRate: 1, fcyAmount: purchaseWithFactory.totalLandedCost, debit: purchaseWithFactory.totalLandedCost, credit: 0, narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`, factoryId: purchaseWithFactory.factoryId }
+                { 
+                    date: purchaseWithFactory.date, 
+                    transactionId, 
+                    transactionType: TransactionType.PURCHASE_INVOICE, 
+                    accountId: inventoryId, 
+                    accountName: 'Inventory - Raw Materials', 
+                    currency: 'USD', 
+                    exchangeRate: 1, 
+                    fcyAmount: purchaseWithFactory.totalLandedCost, 
+                    debit: purchaseWithFactory.totalLandedCost, 
+                    credit: 0, 
+                    narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`, 
+                    factoryId: purchaseWithFactory.factoryId 
+                }
         ];
         const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
         const supplierName = state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name || 'Unknown Supplier';
         // Credit the SUPPLIER's account directly (not general AP)
-        entries.push({ date: purchaseWithFactory.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: purchaseWithFactory.supplierId, accountName: supplierName, currency: purchaseWithFactory.currency, exchangeRate: purchaseWithFactory.exchangeRate, fcyAmount: purchaseWithFactory.totalCostFCY, debit: 0, credit: materialCostUSD, narration: `Material Cost: ${supplierName}`, factoryId: purchaseWithFactory.factoryId });
-        // ...existing code...
+            entries.push({ 
+                date: purchaseWithFactory.date, 
+                transactionId, 
+                transactionType: TransactionType.PURCHASE_INVOICE, 
+                accountId: purchaseWithFactory.supplierId, 
+                accountName: supplierName, 
+                currency: purchaseWithFactory.currency, 
+                exchangeRate: purchaseWithFactory.exchangeRate, 
+                fcyAmount: purchaseWithFactory.totalCostFCY, 
+                debit: 0, 
+                credit: materialCostUSD, 
+                narration: `Material Cost: ${supplierName}`, 
+                factoryId: purchaseWithFactory.factoryId 
+            });
+            // Additional costs (freight, clearing, etc.) credited to their providers
         purchaseWithFactory.additionalCosts.forEach(cost => {
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
-            // Credit the PROVIDER's account directly (freight forwarder, clearing agent, etc.)
-            entries.push({ date: purchase.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}`, factoryId: purchaseWithFactory.factoryId });
-        });
+                entries.push({ 
+                    date: purchase.date, 
+                    transactionType: TransactionType.PURCHASE_INVOICE,
+                    transactionId, 
+                    accountId: cost.providerId, 
+                    accountName: providerName, 
+                    currency: cost.currency, 
+                    exchangeRate: cost.exchangeRate, 
+                    fcyAmount: cost.amountFCY, 
+                    debit: 0, 
+                    credit: cost.amountUSD, 
+                    narration: `${cost.costType}: ${providerName}`, 
+                    factoryId: purchaseWithFactory.factoryId 
+                });
+            });
+            return entries;
+        };
+
+        const entries = buildPurchaseEntries();
+        if (entries) {
         postTransaction(entries);
+        }
     };
     const addBundlePurchase = (bundle: BundlePurchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
@@ -1701,13 +1760,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.log(`📦 Batch ${batchNumber}: Preparing ${batchProductions.length} production entries for Firebase write`);
             
             batchProductions.forEach(prod => {
-                const { id, ...prodData } = prod;
-                
-                // Remove undefined fields (Firebase doesn't allow undefined values)
-                const cleanedData = Object.fromEntries(
-                    Object.entries(prodData).filter(([_, value]) => value !== undefined)
-                );
-                
+            const { id, ...prodData } = prod;
+            
+            // Remove undefined fields (Firebase doesn't allow undefined values)
+            const cleanedData = Object.fromEntries(
+                Object.entries(prodData).filter(([_, value]) => value !== undefined)
+            );
+            
                 // IMPORTANT: Store the original production ID so we can match ledger entries when deleting
                 // The ledger entries use transactionId = PROD-{id}, so we need this ID to find them
                 const cleanedDataWithId = { ...cleanedData, originalId: id, createdAt: serverTimestamp() };
@@ -1948,16 +2007,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.log(`📦 Stock Batch ${batchNumber}: Preparing ${batchUpdates.length} item stock updates`);
             
             batchUpdates.forEach(([itemId, { stockQtyDelta, maxSerialEnd }]) => {
-                const item = state.items.find(i => i.id === itemId);
-                if (item) {
-                    const updates: any = {
-                        stockQty: item.stockQty + stockQtyDelta
-                    };
-                    
-                    if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
-                        updates.nextSerial = maxSerialEnd + 1;
-                    }
-                    
+            const item = state.items.find(i => i.id === itemId);
+            if (item) {
+                const updates: any = {
+                    stockQty: item.stockQty + stockQtyDelta
+                };
+                
+                if (maxSerialEnd > 0 && item.packingType !== PackingType.KG) {
+                    updates.nextSerial = maxSerialEnd + 1;
+                }
+                
                     const itemRef = doc(db, 'items', itemId);
                     batch.update(itemRef, updates);
                 }
@@ -2224,7 +2283,107 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .catch((error) => console.error('❌ Error saving sales invoice:', error));
     };
     const updateSalesInvoice = (invoice: SalesInvoice) => dispatch({ type: 'UPDATE_SALES_INVOICE', payload: invoice });
-    const updatePurchase = (purchase: Purchase) => dispatch({ type: 'UPDATE_PURCHASE', payload: purchase });
+
+    /**
+     * Update an existing purchase and re-sync its ledger entries.
+     * This is used when the user edits a purchase (e.g. fixing Supplier).
+     */
+    const updatePurchase = async (purchase: Purchase) => {
+        const purchaseWithFactory: Purchase = {
+            ...purchase,
+            factoryId: purchase.factoryId || currentFactory?.id || ''
+        };
+
+        // Update local state
+        dispatch({ type: 'UPDATE_PURCHASE', payload: purchaseWithFactory });
+
+        // Update Firestore
+        if (isFirestoreLoaded) {
+            try {
+                const { id, ...purchaseDataToUpdate } = purchaseWithFactory;
+                const cleanedData = cleanForFirestore({
+                    ...purchaseDataToUpdate,
+                    updatedAt: serverTimestamp()
+                });
+                await updateDoc(doc(db, 'purchases', purchaseWithFactory.id), cleanedData);
+                console.log('✅ Purchase updated in Firebase:', purchaseWithFactory.id);
+            } catch (error) {
+                console.error('❌ Error updating purchase in Firebase:', error);
+                alert('Failed to update purchase: ' + (error as Error).message);
+            }
+        }
+
+        // Rebuild ledger: delete existing PI-* entries and post fresh ones
+        const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
+        await deleteTransaction(transactionId, 'Purchase updated', CURRENT_USER?.name || 'System');
+
+        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
+        const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
+
+        if (!inventoryAccount || !apAccount) {
+            console.error('❌ Required accounts not found when updating purchase! Inventory:', inventoryAccount, 'AP:', apAccount);
+                alert(`Warning: Chart of Accounts is incomplete. Please ensure "Inventory - Raw Materials" and "Accounts Payable" accounts exist.`);
+            return;
+        }
+
+        const inventoryId = inventoryAccount.id;
+        const entries: Omit<LedgerEntry, 'id'>[] = [
+            {
+                date: purchaseWithFactory.date,
+                transactionId,
+                transactionType: TransactionType.PURCHASE_INVOICE,
+                accountId: inventoryId,
+                accountName: 'Inventory - Raw Materials',
+                currency: 'USD',
+                exchangeRate: 1,
+                fcyAmount: purchaseWithFactory.totalLandedCost,
+                debit: purchaseWithFactory.totalLandedCost,
+                credit: 0,
+                narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`,
+                factoryId: purchaseWithFactory.factoryId
+            }
+        ];
+
+        const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
+        const supplierName = state.partners.find(p => p.id === purchaseWithFactory.supplierId)?.name || 'Unknown Supplier';
+
+        // Credit supplier
+        entries.push({
+            date: purchaseWithFactory.date,
+            transactionId,
+            transactionType: TransactionType.PURCHASE_INVOICE,
+            accountId: purchaseWithFactory.supplierId,
+            accountName: supplierName,
+            currency: purchaseWithFactory.currency,
+            exchangeRate: purchaseWithFactory.exchangeRate,
+            fcyAmount: purchaseWithFactory.totalCostFCY,
+            debit: 0,
+            credit: materialCostUSD,
+            narration: `Material Cost: ${supplierName}`,
+            factoryId: purchaseWithFactory.factoryId
+        });
+
+        // Additional costs (freight, clearing etc.)
+        purchaseWithFactory.additionalCosts.forEach(cost => {
+            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+            entries.push({
+                date: purchaseWithFactory.date,
+                transactionId,
+                transactionType: TransactionType.PURCHASE_INVOICE,
+                accountId: cost.providerId,
+                accountName: providerName,
+                currency: cost.currency,
+                exchangeRate: cost.exchangeRate,
+                fcyAmount: cost.amountFCY,
+                debit: 0,
+                credit: cost.amountUSD,
+                narration: `${cost.costType}: ${providerName}`,
+                factoryId: purchaseWithFactory.factoryId
+            });
+        });
+
+        postTransaction(entries);
+    };
     const postSalesInvoice = async (invoice: SalesInvoice) => {
         // Prevent double posting - check if entries already exist
         const transactionId = `INV-${invoice.invoiceNo}`;

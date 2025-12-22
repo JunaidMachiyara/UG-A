@@ -544,6 +544,7 @@ export interface InvoiceAdditionalCost {
     id: string;
     costType: 'Freight' | 'Clearing' | 'Commission' | 'Customs' | 'Other';
     providerId?: string; // Optional for customs
+    customName?: string; // Custom name when costType is 'Customs' or 'Other'
     amount: number;
     currency: Currency;
     exchangeRate: number; // To Invoice Currency

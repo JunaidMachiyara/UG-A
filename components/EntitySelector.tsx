@@ -58,12 +58,24 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
         setHighlightedIndex(0);
     }, [filteredEntities.length, searchTerm]);
 
+    // Track if user is actively typing (to prevent useEffect from overwriting)
+    const isTypingRef = useRef(false);
+
     useEffect(() => {
+        // Don't update searchTerm if user is actively typing
+        if (isTypingRef.current) {
+            isTypingRef.current = false; // Reset flag after one render
+            return;
+        }
+        
         const selected = entities.find(e => e.id === selectedId);
         if (selected) {
             setSearchTerm(formatSelected ? formatSelected(selected) : selected.name);
         } else if (selectedId === '') {
-            setSearchTerm('');
+            // Only clear if searchTerm is empty (don't clear user's typing)
+            if (searchTerm === '') {
+                setSearchTerm('');
+            }
         }
     }, [selectedId, entities, formatSelected]);
 
@@ -167,20 +179,37 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                     placeholder={placeholder}
                     value={searchTerm}
                     onChange={e => {
-                        setSearchTerm(e.target.value);
+                        const newValue = e.target.value;
+                        // Mark that user is actively typing
+                        isTypingRef.current = true;
+                        
+                        // If user starts typing and something is selected, clear the selection to allow searching
+                        if (selectedId) {
+                            const selectedEntity = entities.find(e => e.id === selectedId);
+                            const selectedDisplayName = selectedEntity ? (formatSelected ? formatSelected(selectedEntity) : selectedEntity.name) : '';
+                            // If the new value doesn't match the selected entity's name, user is typing - clear selection
+                            if (newValue !== selectedDisplayName) {
+                                onSelect('');
+                            }
+                        }
+                        setSearchTerm(newValue);
                         setIsOpen(true);
                         setHighlightedIndex(0);
                     }}
                     onFocus={() => {
                         if (!disabled) {
                             setIsOpen(true);
-                            // Clear search term on focus if nothing is selected to show all options
-                            if (!selectedId) {
-                                setSearchTerm('');
-                            }
+                            // Whenever user opens the dropdown, clear the search box
+                            // so that all options are visible and user can start typing
+                            setSearchTerm('');
                         }
                     }}
-                    onClick={() => !disabled && setIsOpen(true)}
+                    onClick={() => {
+                        if (!disabled) {
+                            setIsOpen(true);
+                            setSearchTerm('');
+                        }
+                    }}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
                     required={required && !selectedId}

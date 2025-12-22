@@ -23,7 +23,7 @@ interface StockSummary {
 
 export const OriginalStockReport: React.FC = () => {
     const { state } = useData();
-    const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
+    const [selectedSupplier, setSelectedSupplier] = useState<string>('');
     const [selectedInvoices, setSelectedInvoices] = useState<SalesInvoice[] | null>(null);
 
     // Calculate stock summary
@@ -31,7 +31,7 @@ export const OriginalStockReport: React.FC = () => {
         const summary = new Map<string, StockSummary>();
 
         // Filter purchases by supplier FIRST
-        const filteredPurchases = selectedSupplier === 'all' 
+        const filteredPurchases = selectedSupplier === '' 
             ? state.purchases 
             : state.purchases.filter(p => p.supplierId === selectedSupplier);
 
@@ -77,7 +77,7 @@ export const OriginalStockReport: React.FC = () => {
                 // Direct ID match (opening.originalType is actually the ID despite the name)
                 const idMatch = item.originalTypeId === opening.originalType;
                 const supplierMatch = item.supplierId === opening.supplierId;
-                return idMatch && (selectedSupplier === 'all' || supplierMatch);
+                return idMatch && (selectedSupplier === '' || supplierMatch);
             });
             
             matchingKeys.forEach(key => {
@@ -98,7 +98,7 @@ export const OriginalStockReport: React.FC = () => {
                     const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
                     if (purchase) {
                         // Skip if supplier filter is active and doesn't match
-                        if (selectedSupplier !== 'all' && purchase.supplierId !== selectedSupplier) {
+                        if (selectedSupplier !== '' && purchase.supplierId !== selectedSupplier) {
                             return;
                         }
                         
@@ -209,12 +209,9 @@ export const OriginalStockReport: React.FC = () => {
                     <label className="text-sm font-medium text-slate-700">Filter by Supplier:</label>
                     <div className="min-w-[200px]">
                         <EntitySelector
-                            entities={[
-                                { id: 'all', name: 'All Suppliers' },
-                                ...state.partners.filter(p => p.type === PartnerType.SUPPLIER)
-                            ]}
+                            entities={state.partners.filter(p => p.type === PartnerType.SUPPLIER)}
                             selectedId={selectedSupplier}
-                            onSelect={(id) => setSelectedSupplier(id || 'all')}
+                            onSelect={(id) => setSelectedSupplier(id || '')}
                             placeholder="All Suppliers"
                             className="w-full"
                         />

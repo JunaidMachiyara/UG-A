@@ -234,6 +234,7 @@ export const DataEntry: React.FC = () => {
     const [siCosts, setSiCosts] = useState<InvoiceAdditionalCost[]>([]);
     const [siCostType, setSiCostType] = useState<any>('Freight');
     const [siCostProvider, setSiCostProvider] = useState('');
+    const [siCostCustomName, setSiCostCustomName] = useState(''); // Text input for Custom/Other
     const [siCostAmount, setSiCostAmount] = useState('');
     const [siCostCurrency, setSiCostCurrency] = useState<Currency>('USD');
     const [siCostRate, setSiCostRate] = useState(1);
@@ -517,39 +518,97 @@ export const DataEntry: React.FC = () => {
 
     // --- Original Opening Logic ---
     const typesForSupplier = useMemo(() => {
-        // Find unique OriginalTypeIDs bought from this supplier
-        const typeIds = Array.from(new Set(state.purchases.filter(p => p.supplierId === ooSupplier).map(p => p.originalTypeId)));
-        return state.originalTypes.filter(ot => typeIds.includes(ot.id));
+        if (!ooSupplier) return [];
+
+        // Collect all original types from purchases for this supplier
+        // This includes both legacy single-item purchases and new multi-item purchases
+        const typeKeys = new Set<string>();
+        
+        state.purchases
+            .filter(p => p.supplierId === ooSupplier)
+            .forEach(p => {
+                // For multi-item purchases, check items[] array
+                if (p.items && p.items.length > 0) {
+                    p.items.forEach(item => {
+                        const typeKey = item.originalTypeId || item.originalType;
+                        if (typeKey) typeKeys.add(typeKey);
+                    });
+                } else {
+                    // For legacy single-item purchases, check top-level fields
+                    const typeKey = p.originalTypeId || p.originalType;
+                    if (typeKey) typeKeys.add(typeKey);
+                }
+            });
+
+        return Array.from(typeKeys).map(key => {
+            const master = state.originalTypes.find(
+                ot => ot.id === key || ot.name === key
+            );
+            return {
+                id: key,
+                name: master?.name || key
+            };
+        });
     }, [ooSupplier, state.purchases, state.originalTypes]);
 
     const batchesForSelection = useMemo(() => {
         if (!ooSupplier || !ooType) return [];
         // Only show batches with remaining stock > 0.01 (strict by purchase ID)
         return state.purchases
-            .filter(p => p.supplierId === ooSupplier && p.originalTypeId === ooType)
+            .filter(p => {
+                if (p.supplierId !== ooSupplier) return false;
+                // For multi-item purchases, check if any item matches the selected type
+                if (p.items && p.items.length > 0) {
+                    return p.items.some(item => (item.originalTypeId || item.originalType) === ooType);
+                }
+                // For legacy single-item purchases, check top-level fields
+                return (p.originalTypeId || p.originalType) === ooType;
+            })
             .filter(p => {
                 // Calculate opened and sold for this purchase
-                const opened = state.originalOpenings.filter(o => o.batchNumber === p.batchNumber && o.supplierId === ooSupplier && o.originalType === ooType).reduce((sum, o) => sum + o.weightOpened, 0);
+                const opened = state.originalOpenings
+                    .filter(o => o.batchNumber === p.batchNumber && o.supplierId === ooSupplier && o.originalType === ooType)
+                    .reduce((sum, o) => sum + o.weightOpened, 0);
                 const sold = state.salesInvoices.filter(inv => inv.status === 'Posted').reduce((sum, inv) => {
                     return sum + inv.items.filter(i => i.originalPurchaseId === p.id).reduce((is, item) => is + item.totalKg, 0);
                 }, 0);
                 // Subtract direct sales for this batch
                 const directSold = state.directSales?.filter(ds => ds.batchId === p.id && ds.supplierId === ooSupplier).reduce((sum, ds) => sum + ds.quantity, 0) || 0;
-                const remaining = p.weightPurchased - opened - sold - directSold;
+                
+                // For multi-item purchases, calculate remaining based on the matching item's weight
+                let weightPurchased = p.weightPurchased;
+                if (p.items && p.items.length > 0) {
+                    const matchingItem = p.items.find(item => (item.originalTypeId || item.originalType) === ooType);
+                    if (matchingItem) {
+                        weightPurchased = matchingItem.weightPurchased || 0;
+                    }
+                }
+                
+                const remaining = weightPurchased - opened - sold - directSold;
                 return remaining > 0.01;
             })
             .map(p => ({ id: p.batchNumber, name: p.batchNumber }));
-    }, [ooSupplier, ooType, state.purchases]);
+    }, [ooSupplier, ooType, state.purchases, state.originalOpenings, state.salesInvoices, state.directSales]);
 
     const availableStockInfo = useMemo(() => {
         if (!ooSupplier || !ooType) return { qty: 0, weight: 0, avgCost: 0 };
 
-        // Filter purchases by Supplier AND OriginalTypeId AND (Optional) BatchNumber
-        const relevantPurchases = state.purchases.filter(p => 
-            p.supplierId === ooSupplier && 
-            p.originalTypeId === ooType && 
-            (!ooBatch || p.batchNumber === ooBatch)
-        );
+        // Helper to get consistent type key
+        const getTypeKey = (p: any) => p.originalTypeId || p.originalType;
+        const itemMatchesType = (item: any) => (item.originalTypeId || item.originalType) === ooType;
+
+        // Filter purchases by Supplier AND OriginalType (ID or name) AND (Optional) BatchNumber
+        // For multi-item purchases, check items[] array; for legacy, check top-level fields
+        const relevantPurchases = state.purchases.filter(p => {
+            if (p.supplierId !== ooSupplier) return false;
+            if (!ooBatch || p.batchNumber === ooBatch) {
+                if (p.items && p.items.length > 0) {
+                    return p.items.some(itemMatchesType);
+                }
+                return getTypeKey(p) === ooType;
+            }
+            return false;
+        });
 
         // Filter previous openings by Supplier AND OriginalTypeID AND (Optional) BatchNumber
         const relevantOpenings = state.originalOpenings.filter(o => 
@@ -563,7 +622,7 @@ export const DataEntry: React.FC = () => {
             inv.status === 'Posted' && inv.items.some(item => {
                 // Find purchase for item
                 const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
-                return purchase && purchase.supplierId === ooSupplier && purchase.originalTypeId === ooType && (!ooBatch || purchase.batchNumber === ooBatch);
+                return purchase && purchase.supplierId === ooSupplier && getTypeKey(purchase) === ooType && (!ooBatch || purchase.batchNumber === ooBatch);
             })
         );
 
@@ -571,7 +630,7 @@ export const DataEntry: React.FC = () => {
         const sold = relevantDirectSales.reduce((acc, inv) => {
             inv.items.forEach(item => {
                 const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
-                if (purchase && purchase.supplierId === ooSupplier && purchase.originalTypeId === ooType && (!ooBatch || purchase.batchNumber === ooBatch)) {
+                if (purchase && purchase.supplierId === ooSupplier && getTypeKey(purchase) === ooType && (!ooBatch || purchase.batchNumber === ooBatch)) {
                     acc.qty += item.qty;
                     acc.weight += item.totalKg;
                 }
@@ -579,11 +638,26 @@ export const DataEntry: React.FC = () => {
             return acc;
         }, { qty: 0, weight: 0 });
 
-        const purchased = relevantPurchases.reduce((acc, curr) => ({
+        const purchased = relevantPurchases.reduce((acc, curr) => {
+            // For multi-item purchases, only count the matching item's weight/cost
+            if (curr.items && curr.items.length > 0) {
+                const matchingItem = curr.items.find(itemMatchesType);
+                if (matchingItem) {
+                    return {
+                        qty: acc.qty + (matchingItem.qtyPurchased || 0),
+                        weight: acc.weight + (matchingItem.weightPurchased || 0),
+                        cost: acc.cost + (matchingItem.totalCostUSD || 0)
+                    };
+                }
+                return acc; // No matching item found, skip this purchase
+            }
+            // For legacy single-item purchases, use top-level fields
+            return {
                 qty: acc.qty + curr.qtyPurchased,
                 weight: acc.weight + curr.weightPurchased,
                 cost: acc.cost + curr.totalLandedCost
-            }), { qty: 0, weight: 0, cost: 0 });
+            };
+        }, { qty: 0, weight: 0, cost: 0 });
 
         const opened = relevantOpenings.reduce((acc, curr) => ({
                 qty: acc.qty + curr.qtyOpened,
@@ -870,18 +944,89 @@ export const DataEntry: React.FC = () => {
     const handleEditPurchaseConfirmed = (purchaseId: string) => {
         const purchase = state.purchases.find(p => p.id === purchaseId);
         if (!purchase) return;
+
+        // Switch to form view and mark as editing
         setPurEditingId(purchase.id);
+        setPurMode('create');
+        setShowPurSummary(false);
+
+        // Top-level fields
         setPurDate(purchase.date);
         setPurBatch(purchase.batchNumber);
-        setPurSupplier(purchase.supplierId);
+        setPurSupplier(purchase.supplierId || '');
         setPurCurrency(purchase.currency);
-        setPurExchangeRate(purchase.exchangeRate);
+        setPurExchangeRate(purchase.exchangeRate || 1);
         setPurContainer(purchase.containerNumber || '');
         setPurDivision(purchase.divisionId || '');
         setPurSubDivision(purchase.subDivisionId || '');
-        setPurCart(purchase.items || []);
+
+        // Build cart from existing items or legacy single-item fields
+        let items: PurchaseOriginalItem[] = [];
+
+        if (purchase.items && purchase.items.length > 0) {
+            // Already a multi-item purchase
+            items = purchase.items;
+        } else if (purchase.originalTypeId) {
+            // Legacy single-type purchase – map legacy fields into one cart item
+            const typeDef = state.originalTypes.find(t => t.id === purchase.originalTypeId);
+            const baseTypeName = typeDef?.name || purchase.originalType || 'Unknown';
+            const product = purchase.originalProductId
+                ? state.originalProducts.find(p => p.id === purchase.originalProductId)
+                : undefined;
+            const finalName = product ? `${baseTypeName}${product.name ? ` - ${product.name}` : ''}` : baseTypeName;
+
+            const weight = purchase.weightPurchased || 0;
+            const packingSize = typeDef?.packingSize || 1;
+            const qty = purchase.qtyPurchased || (weight && packingSize ? weight / Number(packingSize) : 0);
+
+            const costPerKgFCY = purchase.costPerKgFCY || 0;
+            const discountPerKg = purchase.discountPerKgFCY || 0;
+            const surchargePerKg = purchase.surchargePerKgFCY || 0;
+            const netPricePerKg = costPerKgFCY - discountPerKg + surchargePerKg;
+            const totalCostFCY = weight * netPricePerKg;
+            const fx = purchase.exchangeRate || 1;
+            const totalCostUSD = fx !== 0 ? totalCostFCY / fx : 0;
+
+            items = [{
+                id: Math.random().toString(36).substr(2, 9),
+                originalTypeId: purchase.originalTypeId,
+                originalType: finalName,
+                originalProductId: purchase.originalProductId,
+                subSupplierId: undefined,
+                weightPurchased: weight,
+                qtyPurchased: qty,
+                costPerKgFCY: costPerKgFCY,
+                discountPerKgFCY: discountPerKg,
+                surchargePerKgFCY: surchargePerKg,
+                totalCostFCY: totalCostFCY || purchase.totalCostFCY || 0,
+                totalCostUSD: totalCostUSD || (purchase.totalLandedCost ?? 0)
+            }];
+        }
+
+        setPurCart(items);
+
+        // Pre-fill item editor with first cart line for easier editing
+        if (items.length > 0) {
+            const first = items[0];
+            setPurOriginalTypeId(first.originalTypeId);
+            setPurOriginalProductId(first.originalProductId || '');
+            setPurSubSupplierId(first.subSupplierId || '');
+            setPurWeight(first.weightPurchased ? String(first.weightPurchased) : '');
+            setPurPrice(first.costPerKgFCY ? String(first.costPerKgFCY) : '');
+            setPurItemDiscount(first.discountPerKgFCY !== undefined ? String(first.discountPerKgFCY) : '');
+            setPurItemSurcharge(first.surchargePerKgFCY !== undefined ? String(first.surchargePerKgFCY) : '');
+        } else {
+            // Clear item-level fields if no items could be derived
+            setPurOriginalTypeId('');
+            setPurOriginalProductId('');
+            setPurSubSupplierId('');
+            setPurWeight('');
+            setPurPrice('');
+            setPurItemDiscount('');
+            setPurItemSurcharge('');
+        }
+
         setAdditionalCosts(purchase.additionalCosts || []);
-        setPurMode('create'); // Switch to form view
     };
 
     const handleUpdatePurchase = () => {
@@ -934,17 +1079,8 @@ export const DataEntry: React.FC = () => {
             landedCostPerKg: totalLandedCostUSD / totalWeight
         };
 
-        // Update in state
+        // Persist update (DataContext will also update Firestore and re-post ledger entries)
         updatePurchase(updatedPurchase);
-        
-        // Update in Firebase
-        const { id, ...purchaseDataToUpdate } = updatedPurchase;
-        import('firebase/firestore').then(({ doc, updateDoc, getFirestore }) => {
-            const db = getFirestore();
-            updateDoc(doc(db, 'purchases', purEditingId), purchaseDataToUpdate)
-                .then(() => console.log(`✅ Purchase ${purEditingId} updated in Firebase`))
-                .catch((error) => console.error('❌ Error updating purchase in Firebase:', error));
-        });
 
         // Reset form
         setPurEditingId(null);
@@ -1124,7 +1260,8 @@ export const DataEntry: React.FC = () => {
         const newCost: InvoiceAdditionalCost = {
             id: Math.random().toString(36).substr(2, 9),
             costType: siCostType,
-            providerId: siCostProvider,
+            providerId: (siCostType === 'Customs' || siCostType === 'Other') ? undefined : siCostProvider,
+            customName: (siCostType === 'Customs' || siCostType === 'Other') ? siCostCustomName : undefined,
             amount: amount,
             currency: siCostCurrency,
             exchangeRate: siCostRate
@@ -1132,6 +1269,7 @@ export const DataEntry: React.FC = () => {
         setSiCosts([...siCosts, newCost]);
         setSiCostAmount('');
         setSiCostProvider('');
+        setSiCostCustomName('');
     };
 
     const handleFinalizeInvoice = () => {
@@ -3091,22 +3229,42 @@ export const DataEntry: React.FC = () => {
                                             <h4 className="font-bold text-slate-700 mb-4">Additional Costs (Pass-through)</h4>
                                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                                 <div className="flex flex-wrap md:flex-nowrap gap-3">
-                                                    <div className="w-full md:w-32"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostType} onChange={e => setSiCostType(e.target.value)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Customs">Customs</option><option value="Other">Other</option></select></div>
+                                                    <div className="w-full md:w-32"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostType} onChange={e => {
+                                                        setSiCostType(e.target.value);
+                                                        // Clear custom name when switching away from Custom/Other
+                                                        if (e.target.value !== 'Customs' && e.target.value !== 'Other') {
+                                                            setSiCostCustomName('');
+                                                        }
+                                                        // Clear provider when switching to Custom/Other
+                                                        if (e.target.value === 'Customs' || e.target.value === 'Other') {
+                                                            setSiCostProvider('');
+                                                        }
+                                                    }}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Customs">Customs</option><option value="Other">Other</option></select></div>
                                                     <div className="w-full md:w-1/3">
-                                                        <EntitySelector 
-                                                            entities={state.partners.filter(p => [PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT, PartnerType.VENDOR].includes(p.type))} 
-                                                            selectedId={siCostProvider} 
-                                                            onSelect={setSiCostProvider} 
-                                                            placeholder="Provider (Optional)" 
-                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
-                                                        />
+                                                        {(siCostType === 'Customs' || siCostType === 'Other') ? (
+                                                            <input 
+                                                                type="text" 
+                                                                className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" 
+                                                                placeholder="Enter custom name..." 
+                                                                value={siCostCustomName} 
+                                                                onChange={e => setSiCostCustomName(e.target.value)} 
+                                                            />
+                                                        ) : (
+                                                            <EntitySelector 
+                                                                entities={state.partners.filter(p => [PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT, PartnerType.VENDOR].includes(p.type))} 
+                                                                selectedId={siCostProvider} 
+                                                                onSelect={setSiCostProvider} 
+                                                                placeholder="Provider (Optional)" 
+                                                                onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                            />
+                                                        )}
                                                     </div>
                                                     <div className="w-1/2 md:w-24"><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" value={siCostCurrency} onChange={e => setSiCostCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c=><option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                     <div className="w-1/2 md:w-32"><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white" placeholder="Amount" value={siCostAmount} onChange={e => setSiCostAmount(e.target.value)} /></div>
                                                     <button onClick={handleAddSiCost} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700">Add</button>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    {siCosts.map(c => ( <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200"><span>{c.costType} {c.providerId && `(${state.partners.find(p=>p.id===c.providerId)?.name})`}</span><div className="flex gap-4 font-mono"><span>{c.amount} {c.currency}</span><button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}
+                                                    {siCosts.map(c => ( <div key={c.id} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-200"><span>{c.costType} {c.customName ? `(${c.customName})` : (c.providerId && `(${state.partners.find(p=>p.id===c.providerId)?.name})`)}</span><div className="flex gap-4 font-mono"><span>{c.amount} {c.currency}</span><button onClick={() => setSiCosts(siCosts.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}
                                                 </div>
                                             </div>
                                         </div>
