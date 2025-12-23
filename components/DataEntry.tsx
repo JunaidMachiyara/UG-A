@@ -3943,6 +3943,19 @@ export const DataEntry: React.FC = () => {
                                                 <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
                                             </tr>
                                         ))}
+                                        {siCart.length > 0 && (
+                                            <tr className="bg-slate-50 font-semibold">
+                                                <td className="px-3 py-2 text-right">Totals:</td>
+                                                <td className="px-3 py-2 text-center">
+                                                    {siCart.reduce((sum, item) => sum + (item.qty || 0), 0)}
+                                                </td>
+                                                <td className="px-3 py-2 text-center">
+                                                    {siCart.reduce((sum, item) => sum + (item.totalKg || 0), 0)}
+                                                </td>
+                                                <td className="px-3 py-2" />
+                                                <td className="px-3 py-2" />
+                                            </tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
