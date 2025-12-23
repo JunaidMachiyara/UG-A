@@ -2365,9 +2365,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             factoryId: currentFactory?.id || ''
         };
         
-        // Save to Firebase
+        // Save to Firebase (clean undefined values to avoid Firestore errors)
         const { id, ...invoiceData } = invoiceWithFactory;
-        addDoc(collection(db, 'salesInvoices'), { ...invoiceData, createdAt: serverTimestamp() })
+        const cleanedInvoiceData = cleanForFirestore({
+            ...invoiceData,
+            createdAt: serverTimestamp()
+        });
+
+        addDoc(collection(db, 'salesInvoices'), cleanedInvoiceData)
             .then(() => console.log('✅ Sales invoice saved to Firebase'))
             .catch((error) => console.error('❌ Error saving sales invoice:', error));
     };
