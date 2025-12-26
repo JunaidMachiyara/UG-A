@@ -1109,6 +1109,613 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         return value;
     };
+
+    /**
+     * Automatic Balance Alignment Utility
+     * Adjusts partner/account balance to a target value by creating a retroactive adjustment JV
+     */
+    const alignBalance = async (
+        entityId: string,
+        entityType: 'partner' | 'account',
+        targetBalance: number
+    ): Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }> => {
+        try {
+            // Get entity
+            let entity: any;
+            let accountId: string;
+            
+            if (entityType === 'partner') {
+                entity = state.partners.find(p => p.id === entityId);
+                if (!entity) {
+                    return { success: false, message: 'Partner not found' };
+                }
+                accountId = entityId; // Partners use their own ID as accountId
+            } else {
+                entity = state.accounts.find(a => a.id === entityId);
+                if (!entity) {
+                    return { success: false, message: 'Account not found' };
+                }
+                accountId = entityId;
+            }
+
+            // Calculate current balance from ledger entries (excluding adjustment entries)
+            const relevantEntries = state.ledger.filter(e => 
+                e.accountId === accountId && 
+                !e.isAdjustment // Exclude previous adjustments
+            );
+
+            const totalDebits = relevantEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalCredits = relevantEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+
+            // Calculate current balance based on entity type
+            let currentBalance = 0;
+            if (entityType === 'partner') {
+                if (entity.type === PartnerType.CUSTOMER) {
+                    // Customers: debit increases balance (they owe us)
+                    currentBalance = totalDebits - totalCredits;
+                } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
+                    // Suppliers/agents: credit increases liability (we owe them)
+                    currentBalance = totalCredits - totalDebits;
+                } else {
+                    currentBalance = totalDebits - totalCredits;
+                }
+            } else {
+                // Accounts: determine balance based on account type
+                if ([AccountType.ASSET, AccountType.EXPENSE].includes(entity.type)) {
+                    currentBalance = totalDebits - totalCredits;
+                } else {
+                    currentBalance = totalCredits - totalDebits;
+                }
+            }
+
+            // Calculate adjustment amount
+            const adjustmentAmount = targetBalance - currentBalance;
+
+            // If no adjustment needed, return early
+            if (Math.abs(adjustmentAmount) < 0.01) {
+                return { success: true, message: 'Balance already matches target. No adjustment needed.', adjustmentAmount: 0 };
+            }
+
+            // Find earliest transaction date for this entity
+            const earliestEntry = relevantEntries.length > 0
+                ? relevantEntries.reduce((earliest, e) => 
+                    e.date < earliest.date ? e : earliest
+                  )
+                : null;
+
+            // Calculate adjustment date (one day before earliest transaction, or start of fiscal year)
+            let adjustmentDate: string;
+            if (earliestEntry) {
+                const earliestDate = new Date(earliestEntry.date);
+                earliestDate.setDate(earliestDate.getDate() - 1);
+                adjustmentDate = earliestDate.toISOString().split('T')[0];
+            } else {
+                // No transactions yet, use start of current fiscal year (Jan 1)
+                const currentYear = new Date().getFullYear();
+                adjustmentDate = `${currentYear}-01-01`;
+            }
+
+            // Get adjustment account (Retained Earnings or Capital)
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Retained Earnings') || 
+                a.name.includes('Capital') ||
+                a.code === '3000' // Default Capital account code
+            ) || state.accounts.find(a => a.type === AccountType.EQUITY);
+
+            if (!adjustmentAccount) {
+                return { success: false, message: 'Adjustment account (Capital/Retained Earnings) not found. Please create an Equity account first.' };
+            }
+
+            // Generate transaction ID
+            const jvNumber = state.ledger
+                .filter(l => l.transactionId.startsWith('JV-'))
+                .map(l => parseInt(l.transactionId.replace('JV-', '')))
+                .filter(n => !isNaN(n))
+                .reduce((max, curr) => curr > max ? curr : max, 1000);
+            const transactionId = `JV-${jvNumber + 1}`;
+
+            // Create adjustment entries
+            const entries: Omit<LedgerEntry, 'id'>[] = [];
+
+            if (adjustmentAmount > 0) {
+                // Need to increase balance: Debit entity, Credit adjustment account
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.JOURNAL_VOUCHER,
+                    accountId: accountId,
+                    accountName: entity.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentAmount,
+                    debit: adjustmentAmount,
+                    credit: 0,
+                    narration: `Balance Adjustment - Target: $${targetBalance.toFixed(2)}, Current: $${currentBalance.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.JOURNAL_VOUCHER,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentAmount,
+                    debit: 0,
+                    credit: adjustmentAmount,
+                    narration: `Balance Adjustment - ${entity.name}`,
+                    isAdjustment: true
+                });
+            } else {
+                // Need to decrease balance: Credit entity, Debit adjustment account
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.JOURNAL_VOUCHER,
+                    accountId: accountId,
+                    accountName: entity.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(adjustmentAmount),
+                    debit: 0,
+                    credit: Math.abs(adjustmentAmount),
+                    narration: `Balance Adjustment - Target: $${targetBalance.toFixed(2)}, Current: $${currentBalance.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.JOURNAL_VOUCHER,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(adjustmentAmount),
+                    debit: Math.abs(adjustmentAmount),
+                    credit: 0,
+                    narration: `Balance Adjustment - ${entity.name}`,
+                    isAdjustment: true
+                });
+            }
+
+            // Post the adjustment transaction
+            await postTransaction(entries);
+
+            return {
+                success: true,
+                message: `Balance adjustment posted successfully. Transaction: ${transactionId}`,
+                adjustmentAmount,
+                transactionId
+            };
+        } catch (error) {
+            console.error('❌ Error aligning balance:', error);
+            return { success: false, message: `Failed to align balance: ${(error as Error).message}` };
+        }
+    };
+
+    /**
+     * Stock Alignment Utility - Finished Goods
+     * Adjusts item stock quantity AND value to target values
+     * Calculates avgCost from targetValue / targetQty (worth divided by quantity)
+     */
+    const alignFinishedGoodsStock = async (
+        itemId: string,
+        targetQty?: number,
+        targetValue?: number
+    ): Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }> => {
+        try {
+            const item = state.items.find(i => i.id === itemId);
+            if (!item) {
+                return { success: false, message: 'Item not found' };
+            }
+
+            const currentQty = item.stockQty || 0;
+            const currentAvgCost = item.avgCost || 0;
+            const currentValue = currentQty * currentAvgCost;
+
+            // Both targetQty and targetValue are required for adjustment
+            if (targetQty === undefined || targetValue === undefined) {
+                return { success: false, message: 'Both target quantity and target value (worth) are required' };
+            }
+
+            // Calculate avgCost from targetValue / targetQty (worth divided by quantity)
+            const finalTargetQty = targetQty;
+            const finalTargetValue = targetValue; // This is the WORTH (input)
+            const finalTargetAvgCost = finalTargetQty > 0 ? finalTargetValue / finalTargetQty : 0;
+
+            // Calculate adjustments
+            const qtyAdjustment = finalTargetQty - currentQty;
+            const valueAdjustment = finalTargetValue - currentValue;
+
+            // If no adjustment needed
+            if (Math.abs(qtyAdjustment) < 0.01 && Math.abs(valueAdjustment) < 0.01) {
+                return { success: true, message: 'Stock already matches target. No adjustment needed.', adjustmentAmount: 0 };
+            }
+
+            // Get inventory account
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Finished Goods') || 
+                a.name.includes('Inventory - Finished Goods') ||
+                a.code === '105' ||
+                a.code === '1202'
+            );
+
+            if (!inventoryAccount) {
+                return { success: false, message: 'Inventory - Finished Goods account not found. Please create it in Setup > Chart of Accounts.' };
+            }
+
+            // Get adjustment account
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Retained Earnings') || 
+                a.name.includes('Capital') ||
+                a.code === '3000'
+            ) || state.accounts.find(a => a.type === AccountType.EQUITY);
+
+            if (!adjustmentAccount) {
+                return { success: false, message: 'Adjustment account (Capital/Retained Earnings) not found.' };
+            }
+
+            // Find earliest transaction for this item
+            const itemTransactions = state.ledger.filter(e => 
+                e.narration?.includes(item.name) || 
+                e.narration?.includes(item.code) ||
+                (e.transactionType === TransactionType.INVENTORY_ADJUSTMENT && e.accountId === inventoryAccount.id)
+            );
+
+            const earliestEntry = itemTransactions.length > 0
+                ? itemTransactions.reduce((earliest, e) => e.date < earliest.date ? e : earliest)
+                : null;
+
+            let adjustmentDate: string;
+            if (earliestEntry) {
+                const date = new Date(earliestEntry.date);
+                date.setDate(date.getDate() - 1);
+                adjustmentDate = date.toISOString().split('T')[0];
+            } else {
+                const currentYear = new Date().getFullYear();
+                adjustmentDate = `${currentYear}-01-01`;
+            }
+
+            // Generate transaction ID
+            const jvNumber = state.ledger
+                .filter(l => l.transactionId.startsWith('IA-'))
+                .map(l => parseInt(l.transactionId.replace('IA-', '')))
+                .filter(n => !isNaN(n))
+                .reduce((max, curr) => curr > max ? curr : max, 1000);
+            const transactionId = `IA-${jvNumber + 1}`;
+
+            // Create adjustment entries
+            const entries: Omit<LedgerEntry, 'id'>[] = [];
+
+            if (valueAdjustment > 0) {
+                // Increase inventory value: Debit Inventory, Credit Capital
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: valueAdjustment,
+                    debit: valueAdjustment,
+                    credit: 0,
+                    narration: `Stock Adjustment - ${item.name}: Qty ${currentQty}→${finalTargetQty}, Value $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: valueAdjustment,
+                    debit: 0,
+                    credit: valueAdjustment,
+                    narration: `Stock Adjustment - ${item.name}`,
+                    isAdjustment: true
+                });
+            } else if (valueAdjustment < 0) {
+                // Decrease inventory value: Credit Inventory, Debit Capital
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(valueAdjustment),
+                    debit: 0,
+                    credit: Math.abs(valueAdjustment),
+                    narration: `Stock Adjustment - ${item.name}: Qty ${currentQty}→${finalTargetQty}, Value $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(valueAdjustment),
+                    debit: Math.abs(valueAdjustment),
+                    credit: 0,
+                    narration: `Stock Adjustment - ${item.name}`,
+                    isAdjustment: true
+                });
+            }
+
+            // Post ledger entries
+            if (entries.length > 0) {
+                await postTransaction(entries);
+            }
+
+            // Update item in Firestore
+            if (isFirestoreLoaded) {
+                try {
+                    const itemRef = doc(db, 'items', itemId);
+                    await updateDoc(itemRef, {
+                        stockQty: finalTargetQty,
+                        avgCost: finalTargetAvgCost,
+                        updatedAt: serverTimestamp()
+                    });
+                    console.log('✅ Item stock updated in Firebase:', itemId);
+                } catch (error) {
+                    console.error('❌ Error updating item in Firebase:', error);
+                }
+            }
+
+            // Update local state
+            dispatch({ type: 'UPDATE_STOCK', payload: { itemId, qtyChange: qtyAdjustment } });
+            
+            // Update avgCost in local state (manual update needed)
+            const updatedItems = state.items.map(i => 
+                i.id === itemId 
+                    ? { ...i, stockQty: finalTargetQty, avgCost: finalTargetAvgCost }
+                    : i
+            );
+            dispatch({ type: 'LOAD_ITEMS', payload: updatedItems });
+
+            return {
+                success: true,
+                message: `Stock adjustment posted. Transaction: ${transactionId}. Qty: ${currentQty}→${finalTargetQty}, Worth: $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}, Avg Cost: $${currentAvgCost.toFixed(2)}→$${finalTargetAvgCost.toFixed(2)}`,
+                adjustmentAmount: valueAdjustment,
+                transactionId
+            };
+        } catch (error) {
+            console.error('❌ Error aligning finished goods stock:', error);
+            return { success: false, message: `Failed to align stock: ${(error as Error).message}` };
+        }
+    };
+
+    /**
+     * Stock Alignment Utility - Original Purchase Stock (Raw Materials)
+     * Adjusts raw material stock weight and/or value
+     */
+    const alignOriginalStock = async (
+        originalTypeId: string,
+        supplierId: string,
+        targetWeight?: number,
+        targetValue?: number,
+        subSupplierId?: string
+    ): Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }> => {
+        try {
+            const originalType = state.originalTypes.find(ot => ot.id === originalTypeId);
+            if (!originalType) {
+                return { success: false, message: 'Original Type not found' };
+            }
+
+            // Calculate current stock from purchases, openings, and direct sales
+            const relevantPurchases = state.purchases.filter(p => 
+                p.supplierId === supplierId &&
+                (p.items?.some(item => 
+                    item.originalTypeId === originalTypeId &&
+                    (subSupplierId ? item.subSupplierId === subSupplierId : true)
+                ) || (!p.items && p.originalTypeId === originalTypeId))
+            );
+
+            let totalPurchased = 0;
+            let totalCost = 0;
+
+            relevantPurchases.forEach(purchase => {
+                if (purchase.items && purchase.items.length > 0) {
+                    purchase.items.forEach(item => {
+                        if (item.originalTypeId === originalTypeId && 
+                            (subSupplierId ? item.subSupplierId === subSupplierId : true)) {
+                            totalPurchased += item.weightPurchased;
+                            totalCost += item.totalCostUSD;
+                        }
+                    });
+                } else if (purchase.originalTypeId === originalTypeId) {
+                    totalPurchased += purchase.weightPurchased;
+                    totalCost += purchase.totalLandedCost;
+                }
+            });
+
+            // Subtract openings
+            const relevantOpenings = state.originalOpenings.filter(o => 
+                o.originalType === originalTypeId && 
+                o.supplierId === supplierId
+            );
+            const totalOpened = relevantOpenings.reduce((sum, o) => sum + o.weightOpened, 0);
+
+            // Subtract direct sales
+            const directSales = state.salesInvoices
+                .filter(inv => inv.status === 'Posted' && (inv.invoiceNo.startsWith('DS-') || inv.invoiceNo.startsWith('DSINV-')))
+                .reduce((sum, inv) => {
+                    return sum + inv.items
+                        .filter(item => item.originalPurchaseId && 
+                            relevantPurchases.some(p => p.id === item.originalPurchaseId))
+                        .reduce((itemSum, item) => itemSum + item.totalKg, 0);
+                }, 0);
+
+            const currentWeight = totalPurchased - totalOpened - directSales;
+            const currentAvgCostPerKg = totalPurchased > 0 ? totalCost / totalPurchased : 0;
+            const currentValue = currentWeight * currentAvgCostPerKg;
+
+            // Determine target values
+            let finalTargetWeight = targetWeight !== undefined ? targetWeight : currentWeight;
+            let finalTargetValue = targetValue !== undefined ? targetValue : currentValue;
+            let finalTargetAvgCostPerKg = finalTargetWeight > 0 ? finalTargetValue / finalTargetWeight : currentAvgCostPerKg;
+
+            // Calculate adjustments
+            const weightAdjustment = finalTargetWeight - currentWeight;
+            const valueAdjustment = finalTargetValue - currentValue;
+
+            // If no adjustment needed
+            if (Math.abs(weightAdjustment) < 0.01 && Math.abs(valueAdjustment) < 0.01) {
+                return { success: true, message: 'Stock already matches target. No adjustment needed.', adjustmentAmount: 0 };
+            }
+
+            // Get inventory account (Raw Materials)
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Raw Material') || 
+                a.name.includes('Raw Materials') ||
+                a.code === '104'
+            );
+
+            if (!inventoryAccount) {
+                return { success: false, message: 'Inventory - Raw Materials account not found. Please create it in Setup > Chart of Accounts.' };
+            }
+
+            // Get adjustment account
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Retained Earnings') || 
+                a.name.includes('Capital') ||
+                a.code === '3000'
+            ) || state.accounts.find(a => a.type === AccountType.EQUITY);
+
+            if (!adjustmentAccount) {
+                return { success: false, message: 'Adjustment account (Capital/Retained Earnings) not found.' };
+            }
+
+            // Find earliest transaction
+            const earliestPurchase = relevantPurchases.length > 0
+                ? relevantPurchases.reduce((earliest, p) => p.date < earliest.date ? p : earliest)
+                : null;
+
+            let adjustmentDate: string;
+            if (earliestPurchase) {
+                const date = new Date(earliestPurchase.date);
+                date.setDate(date.getDate() - 1);
+                adjustmentDate = date.toISOString().split('T')[0];
+            } else {
+                const currentYear = new Date().getFullYear();
+                adjustmentDate = `${currentYear}-01-01`;
+            }
+
+            // Generate transaction ID
+            const jvNumber = state.ledger
+                .filter(l => l.transactionId.startsWith('IA-'))
+                .map(l => parseInt(l.transactionId.replace('IA-', '')))
+                .filter(n => !isNaN(n))
+                .reduce((max, curr) => curr > max ? curr : max, 1000);
+            const transactionId = `IA-${jvNumber + 1}`;
+
+            // Create adjustment entries
+            const entries: Omit<LedgerEntry, 'id'>[] = [];
+
+            if (valueAdjustment > 0) {
+                // Increase inventory value: Debit Inventory, Credit Capital
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: valueAdjustment,
+                    debit: valueAdjustment,
+                    credit: 0,
+                    narration: `Original Stock Adjustment - ${originalType.name}: Weight ${currentWeight.toFixed(2)}→${finalTargetWeight.toFixed(2)}Kg, Value $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: valueAdjustment,
+                    debit: 0,
+                    credit: valueAdjustment,
+                    narration: `Original Stock Adjustment - ${originalType.name}`,
+                    isAdjustment: true
+                });
+            } else if (valueAdjustment < 0) {
+                // Decrease inventory value: Credit Inventory, Debit Capital
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(valueAdjustment),
+                    debit: 0,
+                    credit: Math.abs(valueAdjustment),
+                    narration: `Original Stock Adjustment - ${originalType.name}: Weight ${currentWeight.toFixed(2)}→${finalTargetWeight.toFixed(2)}Kg, Value $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}`,
+                    isAdjustment: true
+                });
+
+                entries.push({
+                    date: adjustmentDate,
+                    transactionId,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    factoryId: currentFactory?.id || '',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: Math.abs(valueAdjustment),
+                    debit: Math.abs(valueAdjustment),
+                    credit: 0,
+                    narration: `Original Stock Adjustment - ${originalType.name}`,
+                    isAdjustment: true
+                });
+            }
+
+            // Post ledger entries
+            if (entries.length > 0) {
+                await postTransaction(entries);
+            }
+
+            return {
+                success: true,
+                message: `Original stock adjustment posted. Transaction: ${transactionId}. Weight: ${currentWeight.toFixed(2)}→${finalTargetWeight.toFixed(2)}Kg, Value: $${currentValue.toFixed(2)}→$${finalTargetValue.toFixed(2)}`,
+                adjustmentAmount: valueAdjustment,
+                transactionId
+            };
+        } catch (error) {
+            console.error('❌ Error aligning original stock:', error);
+            return { success: false, message: `Failed to align stock: ${(error as Error).message}` };
+        }
+    };
     
     const addPurchase = (purchase: Purchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
@@ -3011,7 +3618,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addGuaranteeCheque,
             updateGuaranteeCheque,
             addCustomsDocument,
-            cleanupOrphanedLedger
+            cleanupOrphanedLedger,
+            alignBalance,
+            alignFinishedGoodsStock,
+            alignOriginalStock
         }}>
             {children}
         </DataContext.Provider>

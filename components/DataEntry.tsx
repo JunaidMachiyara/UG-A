@@ -469,8 +469,8 @@ export const DataEntry: React.FC = () => {
             id: Math.random().toString(36).substr(2, 9),
             originalTypeId: purOriginalTypeId,
             originalType: finalName,
-            originalProductId: purOriginalProductId,
-            subSupplierId: purSubSupplierId,
+            originalProductId: purOriginalProductId || undefined,
+            subSupplierId: purSubSupplierId || undefined, // Convert empty string to undefined
             weightPurchased: weight,
             qtyPurchased: calculatedQty,
             costPerKgFCY: grossPricePerKgFCY,
@@ -857,6 +857,13 @@ export const DataEntry: React.FC = () => {
         // For backward compatibility, use first item for legacy single-item fields
         const firstItem = purCart[0];
 
+        // Normalize cart items: convert empty strings to undefined for optional fields
+        const normalizedCart = purCart.map(item => ({
+            ...item,
+            originalProductId: item.originalProductId || undefined,
+            subSupplierId: item.subSupplierId || undefined // Convert empty string to undefined
+        }));
+
         const newPurchase: Purchase = {
             id: Math.random().toString(36).substr(2, 9),
             batchNumber: purBatch,
@@ -865,7 +872,7 @@ export const DataEntry: React.FC = () => {
             supplierId: purSupplier,
             
             // NEW: Multi-Original Type Cart
-            items: purCart,
+            items: normalizedCart,
             
             // Legacy fields (backward compatibility) - populated from first item
             originalTypeId: firstItem.originalTypeId,
@@ -964,8 +971,12 @@ export const DataEntry: React.FC = () => {
         let items: PurchaseOriginalItem[] = [];
 
         if (purchase.items && purchase.items.length > 0) {
-            // Already a multi-item purchase
-            items = purchase.items;
+            // Already a multi-item purchase - normalize null/empty values
+            items = purchase.items.map(item => ({
+                ...item,
+                originalProductId: item.originalProductId || undefined,
+                subSupplierId: item.subSupplierId || undefined // Preserve null/undefined, convert empty string
+            }));
         } else if (purchase.originalTypeId) {
             // Legacy single-type purchase – map legacy fields into one cart item
             const typeDef = state.originalTypes.find(t => t.id === purchase.originalTypeId);
@@ -1052,6 +1063,13 @@ export const DataEntry: React.FC = () => {
         const totalLandedCostUSD = totalMaterialCostUSD + totalAdditionalCostUSD;
         const firstItem = purCart[0];
 
+        // Normalize cart items: convert empty strings to undefined for optional fields
+        const normalizedCart = purCart.map(item => ({
+            ...item,
+            originalProductId: item.originalProductId || undefined,
+            subSupplierId: item.subSupplierId || undefined // Convert empty string to undefined
+        }));
+
         const updatedPurchase: Purchase = {
             id: purEditingId,
             batchNumber: purBatch,
@@ -1059,7 +1077,7 @@ export const DataEntry: React.FC = () => {
             date: purDate,
             supplierId: purSupplier,
             factoryId: existingPurchase.factoryId, // Preserve factory
-            items: purCart,
+            items: normalizedCart,
             originalTypeId: firstItem.originalTypeId,
             originalType: firstItem.originalType,
             originalProductId: firstItem.originalProductId,
@@ -2557,7 +2575,14 @@ export const DataEntry: React.FC = () => {
                                         <div>
                                             <label className="block text-sm font-medium text-slate-600 mb-1">Sub Supplier</label>
                                             <EntitySelector
-                                                entities={state.partners.filter(p => p.type === PartnerType.SUB_SUPPLIER && p.parentSupplier === purSupplier)}
+                                                entities={state.partners.filter(p => {
+                                                    if (p.type !== PartnerType.SUB_SUPPLIER) return false;
+                                                    if (!purSupplier) return false;
+                                                    // Match by ID (new format) or by name (legacy format)
+                                                    const selectedSupplier = state.partners.find(s => s.id === purSupplier);
+                                                    return p.parentSupplier === purSupplier || 
+                                                           (selectedSupplier && p.parentSupplier === selectedSupplier.name);
+                                                })}
                                                 selectedId={purSubSupplierId}
                                                 onSelect={setPurSubSupplierId}
                                                 placeholder="Select Sub Supplier..."

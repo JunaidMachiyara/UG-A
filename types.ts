@@ -339,6 +339,9 @@ export interface LedgerEntry {
     credit: number;
     
     narration: string;
+    
+    // System flags
+    isAdjustment?: boolean; // True for system-generated balance adjustment entries
 }
 
 export interface PurchaseAdditionalCost {

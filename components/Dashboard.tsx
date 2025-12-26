@@ -259,7 +259,7 @@ export const Dashboard: React.FC = () => {
     const { currentUser, currentFactory, factories, switchFactory } = useAuth();
     const navigate = useNavigate();
     const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('7days');
-    const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.25);
+    const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.20); // Default to 20 cents
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
 
     // Production Yield Analysis Data
@@ -840,19 +840,20 @@ export const Dashboard: React.FC = () => {
                         <div className="bg-white/80 backdrop-blur-sm px-4 py-3 rounded-xl shadow-md border border-purple-200">
                             <label className="text-xs font-bold text-purple-700 uppercase mb-1 block">Working Cost</label>
                             <div className="flex items-center gap-3">
-                                <input 
-                                    type="range" 
-                                    min="0.1" 
-                                    max="0.5" 
-                                    step="0.05" 
+                                <select 
                                     value={workingCostPerKg} 
                                     onChange={(e) => setWorkingCostPerKg(parseFloat(e.target.value))}
-                                    className="w-32 h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer"
-                                    style={{
-                                        accentColor: '#9333ea'
-                                    }}
-                                />
-                                <span className="text-lg font-bold text-purple-900 min-w-[60px]">${workingCostPerKg.toFixed(2)}/kg</span>
+                                    className="bg-white border border-purple-300 rounded-lg px-3 py-2 text-sm font-mono text-purple-900 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                                >
+                                    {Array.from({ length: 11 }, (_, i) => {
+                                        const value = 0.15 + (i * 0.01); // 0.15 to 0.25 in 0.01 increments
+                                        return (
+                                            <option key={value} value={value}>
+                                                ${value.toFixed(2)}/kg
+                                            </option>
+                                        );
+                                    })}
+                                </select>
                             </div>
                         </div>
                         
@@ -1044,18 +1045,21 @@ export const Dashboard: React.FC = () => {
                             Original Recipe Mix (Input Materials)
                         </h5>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                            {productionYieldData.topOriginals.map((orig, idx) => (
-                                <div key={idx} className="bg-white/80 backdrop-blur-sm p-3 rounded-lg border border-blue-200 hover:shadow-md transition-shadow">
-                                    <div className="text-xs font-semibold text-slate-600 truncate" title={orig.originalType}>
-                                        {orig.originalType}
+                            {productionYieldData.topOriginals.map((orig, idx) => {
+                                const originalTypeName = state.originalTypes.find(ot => ot.id === orig.originalType)?.name || orig.originalType;
+                                return (
+                                    <div key={idx} className="bg-white/80 backdrop-blur-sm p-3 rounded-lg border border-blue-200 hover:shadow-md transition-shadow">
+                                        <div className="text-xs font-semibold text-slate-600 truncate" title={originalTypeName}>
+                                            {originalTypeName}
+                                        </div>
+                                        <div className="flex items-baseline gap-1 mt-1">
+                                            <span className="text-lg font-bold text-blue-900">{orig.weight.toLocaleString()}</span>
+                                            <span className="text-xs text-blue-600">Kg</span>
+                                        </div>
+                                        <div className="text-xs text-slate-500 mt-0.5">Used {orig.count}x</div>
                                     </div>
-                                    <div className="flex items-baseline gap-1 mt-1">
-                                        <span className="text-lg font-bold text-blue-900">{orig.weight.toLocaleString()}</span>
-                                        <span className="text-xs text-blue-600">Kg</span>
-                                    </div>
-                                    <div className="text-xs text-slate-500 mt-0.5">Used {orig.count}x</div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

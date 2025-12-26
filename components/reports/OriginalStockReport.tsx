@@ -17,6 +17,7 @@ interface StockSummary {
     totalDirectSaleRevenue: number;
     totalDirectSaleCost: number;
     profitLoss: number;
+    margin?: number;
     directSaleInvoices: SalesInvoice[];
     totalValue: number;
 }
@@ -24,6 +25,7 @@ interface StockSummary {
 export const OriginalStockReport: React.FC = () => {
     const { state } = useData();
     const [selectedSupplier, setSelectedSupplier] = useState<string>('');
+    const [selectedSubSupplier, setSelectedSubSupplier] = useState<string>('');
     const [selectedInvoices, setSelectedInvoices] = useState<SalesInvoice[] | null>(null);
 
     // Calculate stock summary
@@ -31,45 +33,66 @@ export const OriginalStockReport: React.FC = () => {
         const summary = new Map<string, StockSummary>();
 
         // Filter purchases by supplier FIRST
-        const filteredPurchases = selectedSupplier === '' 
+        let filteredPurchases = selectedSupplier === '' 
             ? state.purchases 
             : state.purchases.filter(p => p.supplierId === selectedSupplier);
 
-        // Aggregate filtered purchases
+        // Aggregate filtered purchases - handle multi-item purchases with Sub Supplier filtering
         filteredPurchases.forEach(purchase => {
-            // Create unique key combining Supplier, Type ID and Product ID
-            const key = purchase.originalProductId 
-                ? `${purchase.supplierId}-${purchase.originalTypeId}-${purchase.originalProductId}`
-                : `${purchase.supplierId}-${purchase.originalTypeId}`;
-                
-            if (!summary.has(key)) {
-                summary.set(key, {
+            // Handle multi-item purchases (items array) or legacy single-item purchases
+            const itemsToProcess = purchase.items && purchase.items.length > 0 
+                ? purchase.items 
+                : [{
                     originalTypeId: purchase.originalTypeId,
-                    originalTypeName: purchase.originalType,
-                    supplierId: purchase.supplierId,
-                    totalPurchased: 0,
-                    totalOpened: 0,
-                    totalDirectSold: 0,
-                    inHand: 0,
-                    avgCostPerKg: 0,
-                    avgSaleRatePerKg: 0,
-                    totalDirectSaleRevenue: 0,
-                    totalDirectSaleCost: 0,
-                    profitLoss: 0,
-                    directSaleInvoices: [],
-                    totalValue: 0
-                });
-            }
-            const item = summary.get(key)!;
-            item.totalPurchased += purchase.weightPurchased;
-            
-            // Calculate weighted average cost
-            const purchaseCost = purchase.totalLandedCost / purchase.weightPurchased;
-            item.avgCostPerKg = ((item.avgCostPerKg * (item.totalPurchased - purchase.weightPurchased)) + 
-                                (purchaseCost * purchase.weightPurchased)) / item.totalPurchased;
+                    originalType: purchase.originalType,
+                    originalProductId: purchase.originalProductId,
+                    subSupplierId: undefined, // Legacy purchases don't have subSupplierId
+                    weightPurchased: purchase.weightPurchased,
+                    totalCostFCY: purchase.totalCostFCY,
+                    totalCostUSD: purchase.totalCostFCY / (purchase.exchangeRate || 1)
+                }];
+
+            itemsToProcess.forEach(purchaseItem => {
+                // Filter by Sub Supplier if selected
+                if (selectedSubSupplier !== '' && purchaseItem.subSupplierId !== selectedSubSupplier) {
+                    return; // Skip this item if Sub Supplier filter doesn't match
+                }
+
+                // Create unique key combining Supplier, Sub Supplier, Type ID and Product ID
+                const key = purchaseItem.originalProductId 
+                    ? `${purchase.supplierId}-${purchaseItem.subSupplierId || 'none'}-${purchaseItem.originalTypeId}-${purchaseItem.originalProductId}`
+                    : `${purchase.supplierId}-${purchaseItem.subSupplierId || 'none'}-${purchaseItem.originalTypeId}`;
+                    
+                if (!summary.has(key)) {
+                    summary.set(key, {
+                        originalTypeId: purchaseItem.originalTypeId,
+                        originalTypeName: purchaseItem.originalType,
+                        supplierId: purchase.supplierId,
+                        totalPurchased: 0,
+                        totalOpened: 0,
+                        totalDirectSold: 0,
+                        inHand: 0,
+                        avgCostPerKg: 0,
+                        avgSaleRatePerKg: 0,
+                        totalDirectSaleRevenue: 0,
+                        totalDirectSaleCost: 0,
+                        profitLoss: 0,
+                        directSaleInvoices: [],
+                        totalValue: 0
+                    });
+                }
+                const item = summary.get(key)!;
+                item.totalPurchased += purchaseItem.weightPurchased;
+                
+                // Calculate weighted average cost
+                const purchaseCost = purchaseItem.totalCostUSD / purchaseItem.weightPurchased;
+                item.avgCostPerKg = ((item.avgCostPerKg * (item.totalPurchased - purchaseItem.weightPurchased)) + 
+                                    (purchaseCost * purchaseItem.weightPurchased)) / item.totalPurchased;
+            });
         });
 
         // Subtract openings (consumption)
+        // Note: Openings don't have subSupplierId, so we distribute opening weight across all matching items
         state.originalOpenings.forEach(opening => {
             // Match by supplierId and originalTypeId (opening.originalType stores the ID)
             const matchingKeys = Array.from(summary.keys()).filter(key => {
@@ -80,10 +103,24 @@ export const OriginalStockReport: React.FC = () => {
                 return idMatch && (selectedSupplier === '' || supplierMatch);
             });
             
-            matchingKeys.forEach(key => {
-                const item = summary.get(key)!;
-                item.totalOpened += opening.weightOpened;
-            });
+            // If Sub Supplier filter is active, only match items with that Sub Supplier (or no Sub Supplier)
+            const filteredKeys = selectedSubSupplier === ''
+                ? matchingKeys
+                : matchingKeys.filter(key => {
+                    // Extract subSupplierId from key (format: supplierId-subSupplierId-originalTypeId[-productId])
+                    const parts = key.split('-');
+                    const keySubSupplier = parts.length >= 3 && parts[1] !== 'none' ? parts[1] : undefined;
+                    return keySubSupplier === selectedSubSupplier || keySubSupplier === undefined;
+                });
+            
+            // Distribute opening weight proportionally across matching items
+            if (filteredKeys.length > 0) {
+                const weightPerItem = opening.weightOpened / filteredKeys.length;
+                filteredKeys.forEach(key => {
+                    const item = summary.get(key)!;
+                    item.totalOpened += weightPerItem;
+                });
+            }
         });
 
         // Calculate direct sales (Posted invoices with DS- or DSINV- prefix)
@@ -101,10 +138,31 @@ export const OriginalStockReport: React.FC = () => {
                         if (selectedSupplier !== '' && purchase.supplierId !== selectedSupplier) {
                             return;
                         }
+
+                        // Find the purchase item that matches this sale
+                        const purchaseItems = purchase.items && purchase.items.length > 0 
+                            ? purchase.items 
+                            : [{
+                                originalTypeId: purchase.originalTypeId,
+                                originalType: purchase.originalType,
+                                originalProductId: purchase.originalProductId,
+                                subSupplierId: undefined
+                            }];
+
+                        // Match by originalTypeId and originalProductId (if applicable)
+                        const matchingPurchaseItem = purchaseItems.find(pi => 
+                            pi.originalTypeId === item.originalTypeId &&
+                            (pi.originalProductId || '') === (item.originalProductId || '')
+                        );
+
+                        // Skip if Sub Supplier filter is active and doesn't match
+                        if (selectedSubSupplier !== '' && matchingPurchaseItem?.subSupplierId !== selectedSubSupplier) {
+                            return;
+                        }
                         
-                        const key = purchase.originalProductId 
-                            ? `${purchase.supplierId}-${purchase.originalTypeId}-${purchase.originalProductId}`
-                            : `${purchase.supplierId}-${purchase.originalTypeId}`;
+                        const key = matchingPurchaseItem?.originalProductId 
+                            ? `${purchase.supplierId}-${matchingPurchaseItem.subSupplierId || 'none'}-${matchingPurchaseItem.originalTypeId}-${matchingPurchaseItem.originalProductId}`
+                            : `${purchase.supplierId}-${matchingPurchaseItem?.subSupplierId || 'none'}-${matchingPurchaseItem?.originalTypeId || purchase.originalTypeId}`;
                         
                         const stockItem = summary.get(key);
                         if (stockItem) {
@@ -143,7 +201,7 @@ export const OriginalStockReport: React.FC = () => {
         return Array.from(summary.values())
             .filter(item => item.inHand > 0 || item.totalPurchased > 0) // Show items with any activity
             .sort((a, b) => b.inHand - a.inHand);
-    }, [state.purchases, state.originalOpenings, state.salesInvoices, selectedSupplier]);
+    }, [state.purchases, state.originalOpenings, state.salesInvoices, selectedSupplier, selectedSubSupplier]);
 
     const totals = useMemo(() => ({
         totalPurchased: stockData.reduce((sum, item) => sum + item.totalPurchased, 0),
@@ -205,16 +263,37 @@ export const OriginalStockReport: React.FC = () => {
 
             {/* Filters */}
             <div className="bg-white rounded-lg border border-slate-200 p-4">
-                <div className="flex gap-4 items-center">
-                    <label className="text-sm font-medium text-slate-700">Filter by Supplier:</label>
-                    <div className="min-w-[200px]">
-                        <EntitySelector
-                            entities={state.partners.filter(p => p.type === PartnerType.SUPPLIER)}
-                            selectedId={selectedSupplier}
-                            onSelect={(id) => setSelectedSupplier(id || '')}
-                            placeholder="All Suppliers"
-                            className="w-full"
-                        />
+                <div className="flex gap-4 items-center flex-wrap">
+                    <div className="flex gap-2 items-center">
+                        <label className="text-sm font-medium text-slate-700">Filter by Supplier:</label>
+                        <div className="min-w-[200px]">
+                            <EntitySelector
+                                entities={state.partners.filter(p => p.type === PartnerType.SUPPLIER)}
+                                selectedId={selectedSupplier}
+                                onSelect={(id) => {
+                                    setSelectedSupplier(id || '');
+                                    setSelectedSubSupplier(''); // Clear Sub Supplier when main supplier changes
+                                }}
+                                placeholder="All Suppliers"
+                                className="w-full"
+                            />
+                        </div>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        <label className="text-sm font-medium text-slate-700">Filter by Sub Supplier:</label>
+                        <div className="min-w-[200px]">
+                            <EntitySelector
+                                entities={state.partners.filter(p => 
+                                    p.type === PartnerType.SUB_SUPPLIER && 
+                                    (selectedSupplier === '' || p.parentSupplier === selectedSupplier)
+                                )}
+                                selectedId={selectedSubSupplier}
+                                onSelect={(id) => setSelectedSubSupplier(id || '')}
+                                placeholder="All Sub Suppliers"
+                                className="w-full"
+                                disabled={selectedSupplier === ''}
+                            />
+                        </div>
                     </div>
                 </div>
             </div>

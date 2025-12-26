@@ -23,8 +23,8 @@ interface JvRow {
 const SUPERVISOR_PIN = '7860';
 
 export const Accounting: React.FC = () => {
-    const { state, postTransaction, deleteTransaction } = useData();
-    const [activeTab, setActiveTab] = useState<'voucher' | 'ledger'>('voucher');
+    const { state, postTransaction, deleteTransaction, alignBalance, alignFinishedGoodsStock, alignOriginalStock } = useData();
+    const [activeTab, setActiveTab] = useState<'voucher' | 'ledger' | 'balance-alignment' | 'stock-alignment'>('voucher');
 
     // --- Voucher State ---
     const [vType, setVType] = useState<VoucherType>('RV');
@@ -675,6 +675,8 @@ export const Accounting: React.FC = () => {
             <div className="flex gap-4 border-b border-slate-200">
                 <button onClick={() => setActiveTab('voucher')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'voucher' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>New Voucher</button>
                 <button onClick={() => setActiveTab('ledger')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'ledger' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>General Ledger</button>
+                <button onClick={() => setActiveTab('balance-alignment')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'balance-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Balance Alignment</button>
+                <button onClick={() => setActiveTab('stock-alignment')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'stock-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Stock Alignment</button>
             </div>
 
             {activeTab === 'voucher' && (
@@ -1435,6 +1437,865 @@ export const Accounting: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {activeTab === 'balance-alignment' && (
+                <BalanceAlignmentComponent state={state} alignBalance={alignBalance} />
+            )}
+
+            {activeTab === 'stock-alignment' && (
+                <StockAlignmentComponent 
+                    state={state} 
+                    alignFinishedGoodsStock={alignFinishedGoodsStock}
+                    alignOriginalStock={alignOriginalStock}
+                />
+            )}
+        </div>
+    );
+};
+
+// Balance Alignment Component
+const BalanceAlignmentComponent: React.FC<{ 
+    state: any; 
+    alignBalance: (entityId: string, entityType: 'partner' | 'account', targetBalance: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }> 
+}> = ({ state, alignBalance }) => {
+    const [entityType, setEntityType] = useState<'partner' | 'account'>('partner');
+    const [selectedEntityId, setSelectedEntityId] = useState<string>('');
+    const [targetBalance, setTargetBalance] = useState<string>('');
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [result, setResult] = useState<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string } | null>(null);
+
+    // Calculate current balance
+    const currentBalanceInfo = useMemo(() => {
+        if (!selectedEntityId) return null;
+
+        let entity: any;
+        let accountId: string;
+
+        if (entityType === 'partner') {
+            entity = state.partners.find((p: any) => p.id === selectedEntityId);
+            if (!entity) return null;
+            accountId = selectedEntityId;
+        } else {
+            entity = state.accounts.find((a: any) => a.id === selectedEntityId);
+            if (!entity) return null;
+            accountId = selectedEntityId;
+        }
+
+        // Get all ledger entries for this account (excluding adjustments)
+        const relevantEntries = state.ledger.filter((e: any) => 
+            e.accountId === accountId && !e.isAdjustment
+        );
+
+        const totalDebits = relevantEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+        const totalCredits = relevantEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+
+        let currentBalance = 0;
+        if (entityType === 'partner') {
+            if (entity.type === PartnerType.CUSTOMER) {
+                currentBalance = totalDebits - totalCredits;
+            } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
+                currentBalance = totalCredits - totalDebits;
+            } else {
+                currentBalance = totalDebits - totalCredits;
+            }
+        } else {
+            if ([AccountType.ASSET, AccountType.EXPENSE].includes(entity.type)) {
+                currentBalance = totalDebits - totalCredits;
+            } else {
+                currentBalance = totalCredits - totalDebits;
+            }
+        }
+
+        // Find earliest transaction
+        const earliestEntry = relevantEntries.length > 0
+            ? relevantEntries.reduce((earliest: any, e: any) => 
+                e.date < earliest.date ? e : earliest
+              )
+            : null;
+
+        const adjustmentDate = earliestEntry
+            ? (() => {
+                const date = new Date(earliestEntry.date);
+                date.setDate(date.getDate() - 1);
+                return date.toISOString().split('T')[0];
+            })()
+            : `${new Date().getFullYear()}-01-01`;
+
+        return {
+            entity,
+            currentBalance,
+            totalDebits,
+            totalCredits,
+            transactionCount: relevantEntries.length,
+            adjustmentDate
+        };
+    }, [selectedEntityId, entityType, state.ledger, state.partners, state.accounts]);
+
+    const handleAlign = async () => {
+        if (!selectedEntityId || !targetBalance) {
+            alert('Please select an entity and enter target balance');
+            return;
+        }
+
+        const target = parseFloat(targetBalance);
+        if (isNaN(target)) {
+            alert('Please enter a valid target balance');
+            return;
+        }
+
+        setIsProcessing(true);
+        setResult(null);
+
+        try {
+            const result = await alignBalance(selectedEntityId, entityType, target);
+            setResult(result);
+            if (result.success) {
+                setTargetBalance(''); // Clear target after success
+            }
+        } catch (error) {
+            setResult({ success: false, message: `Error: ${(error as Error).message}` });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const availablePartners = state.partners.filter((p: any) => 
+        [PartnerType.CUSTOMER, PartnerType.SUPPLIER, PartnerType.VENDOR, 
+         PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type)
+    );
+
+    const adjustmentAmount = currentBalanceInfo && targetBalance
+        ? parseFloat(targetBalance) - currentBalanceInfo.currentBalance
+        : null;
+
+    return (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-purple-50 to-blue-50">
+                <div className="flex items-center gap-4">
+                    <div className="p-2 bg-purple-600 text-white rounded-lg">
+                        <Scale size={24} />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-800">Automatic Balance Alignment Utility</h2>
+                        <p className="text-sm text-slate-500">Adjust account balances to target values using retroactive adjustment entries</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+                {/* Entity Type Selection */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Entity Type</label>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => {
+                                setEntityType('partner');
+                                setSelectedEntityId('');
+                                setTargetBalance('');
+                                setResult(null);
+                            }}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                                entityType === 'partner'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }`}
+                        >
+                            Partner (Customer/Supplier/Vendor)
+                        </button>
+                        <button
+                            onClick={() => {
+                                setEntityType('account');
+                                setSelectedEntityId('');
+                                setTargetBalance('');
+                                setResult(null);
+                            }}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                                entityType === 'account'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }`}
+                        >
+                            Account
+                        </button>
+                    </div>
+                </div>
+
+                {/* Entity Selection */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                        Select {entityType === 'partner' ? 'Partner' : 'Account'}
+                    </label>
+                    {entityType === 'partner' ? (
+                        <EntitySelector
+                            entities={availablePartners}
+                            selectedId={selectedEntityId}
+                            onSelect={setSelectedEntityId}
+                            placeholder="Select Partner..."
+                            className="w-full"
+                        />
+                    ) : (
+                        <EntitySelector
+                            entities={state.accounts}
+                            selectedId={selectedEntityId}
+                            onSelect={setSelectedEntityId}
+                            placeholder="Select Account..."
+                            className="w-full"
+                        />
+                    )}
+                </div>
+
+                {/* Current Balance Display */}
+                {currentBalanceInfo && (
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                        <h3 className="text-sm font-bold text-slate-700 mb-3">Current Balance Analysis</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">Sum of Debits</div>
+                                <div className="font-mono font-bold text-slate-800">${currentBalanceInfo.totalDebits.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">Sum of Credits</div>
+                                <div className="font-mono font-bold text-slate-800">${currentBalanceInfo.totalCredits.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">Current Balance</div>
+                                <div className={`font-mono font-bold text-lg ${currentBalanceInfo.currentBalance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                                    ${currentBalanceInfo.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">Transactions</div>
+                                <div className="font-mono font-bold text-slate-800">{currentBalanceInfo.transactionCount}</div>
+                            </div>
+                        </div>
+                        <div className="mt-3 pt-3 border-t border-slate-200">
+                            <div className="text-xs text-slate-500">Adjustment will be dated: <span className="font-mono font-semibold text-slate-700">{currentBalanceInfo.adjustmentDate}</span></div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Target Balance Input */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Target Balance (USD)</label>
+                    <input
+                        type="number"
+                        step="0.01"
+                        value={targetBalance}
+                        onChange={(e) => setTargetBalance(e.target.value)}
+                        placeholder="Enter target balance..."
+                        className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 font-mono"
+                    />
+                </div>
+
+                {/* Adjustment Preview */}
+                {adjustmentAmount !== null && Math.abs(adjustmentAmount) >= 0.01 && (
+                    <div className={`p-4 rounded-lg border-2 ${adjustmentAmount > 0 ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'}`}>
+                        <h3 className="text-sm font-bold text-slate-700 mb-2">Adjustment Preview</h3>
+                        <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                                <span className="text-slate-600">Current Balance:</span>
+                                <span className="font-mono font-bold">${currentBalanceInfo?.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-slate-600">Target Balance:</span>
+                                <span className="font-mono font-bold">${parseFloat(targetBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between pt-2 border-t border-slate-300">
+                                <span className="font-semibold text-slate-700">Required Adjustment:</span>
+                                <span className={`font-mono font-bold text-lg ${adjustmentAmount > 0 ? 'text-blue-600' : 'text-orange-600'}`}>
+                                    {adjustmentAmount > 0 ? '+' : ''}${adjustmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Result Message */}
+                {result && (
+                    <div className={`p-4 rounded-lg border-2 ${result.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                        <div className={`font-semibold ${result.success ? 'text-green-800' : 'text-red-800'}`}>
+                            {result.success ? '✓ Success' : '✗ Error'}
+                        </div>
+                        <div className="text-sm mt-1 text-slate-700">{result.message}</div>
+                        {result.transactionId && (
+                            <div className="text-xs mt-2 font-mono text-slate-600">Transaction ID: {result.transactionId}</div>
+                        )}
+                    </div>
+                )}
+
+                {/* Action Button */}
+                <button
+                    onClick={handleAlign}
+                    disabled={!selectedEntityId || !targetBalance || isProcessing || (adjustmentAmount !== null && Math.abs(adjustmentAmount) < 0.01)}
+                    className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                    {isProcessing ? (
+                        <>
+                            <RefreshCw size={18} className="animate-spin" />
+                            Processing...
+                        </>
+                    ) : (
+                        <>
+                            <Scale size={18} />
+                            Post Balance Adjustment
+                        </>
+                    )}
+                </button>
+
+                {/* Info Box */}
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <div className="flex items-start gap-2">
+                        <AlertTriangle size={18} className="text-amber-600 mt-0.5" />
+                        <div className="text-xs text-amber-800">
+                            <div className="font-semibold mb-1">How it works:</div>
+                            <ul className="list-disc list-inside space-y-1 text-amber-700">
+                                <li>Calculates current balance from all ledger entries (excluding previous adjustments)</li>
+                                <li>Creates a retroactive Journal Voucher dated before the first transaction</li>
+                                <li>Adjustment entries are marked with system flag for audit transparency</li>
+                                <li>Does not modify existing transactions - only adds new adjustment entries</li>
+                                <li>Adjustment is posted to Capital/Retained Earnings account</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Stock Alignment Component
+const StockAlignmentComponent: React.FC<{ 
+    state: any; 
+    alignFinishedGoodsStock: (itemId: string, targetQty?: number, targetValue?: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }>;
+    alignOriginalStock: (originalTypeId: string, supplierId: string, targetWeight?: number, targetValue?: number, subSupplierId?: string) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }>;
+}> = ({ state, alignFinishedGoodsStock, alignOriginalStock }) => {
+    const [stockType, setStockType] = useState<'finished-goods' | 'original'>('finished-goods');
+    const [selectedItemId, setSelectedItemId] = useState<string>('');
+    const [selectedOriginalTypeId, setSelectedOriginalTypeId] = useState<string>('');
+    const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
+    const [selectedSubSupplierId, setSelectedSubSupplierId] = useState<string>('');
+    const [targetQty, setTargetQty] = useState<string>('');
+    const [targetWeight, setTargetWeight] = useState<string>('');
+    const [targetValue, setTargetValue] = useState<string>('');
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [result, setResult] = useState<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string } | null>(null);
+
+    // Calculate current stock for Finished Goods
+    const finishedGoodsInfo = useMemo(() => {
+        if (!selectedItemId || stockType !== 'finished-goods') return null;
+        const item = state.items.find((i: any) => i.id === selectedItemId);
+        if (!item) return null;
+
+        const currentQty = item.stockQty || 0;
+        const currentAvgCost = item.avgCost || 0;
+        const currentValue = currentQty * currentAvgCost;
+
+        return {
+            item,
+            currentQty,
+            currentAvgCost,
+            currentValue
+        };
+    }, [selectedItemId, stockType, state.items]);
+
+    // Calculate current stock for Original Purchase
+    const originalStockInfo = useMemo(() => {
+        if (!selectedOriginalTypeId || !selectedSupplierId || stockType !== 'original') return null;
+
+        const originalType = state.originalTypes.find((ot: any) => ot.id === selectedOriginalTypeId);
+        if (!originalType) return null;
+
+        const relevantPurchases = state.purchases.filter((p: any) => 
+            p.supplierId === selectedSupplierId &&
+            (p.items?.some((item: any) => 
+                item.originalTypeId === selectedOriginalTypeId &&
+                (selectedSubSupplierId ? item.subSupplierId === selectedSubSupplierId : true)
+            ) || (!p.items && p.originalTypeId === selectedOriginalTypeId))
+        );
+
+        let totalPurchased = 0;
+        let totalCost = 0;
+
+        relevantPurchases.forEach((purchase: any) => {
+            if (purchase.items && purchase.items.length > 0) {
+                purchase.items.forEach((item: any) => {
+                    if (item.originalTypeId === selectedOriginalTypeId && 
+                        (selectedSubSupplierId ? item.subSupplierId === selectedSubSupplierId : true)) {
+                        totalPurchased += item.weightPurchased;
+                        totalCost += item.totalCostUSD;
+                    }
+                });
+            } else if (purchase.originalTypeId === selectedOriginalTypeId) {
+                totalPurchased += purchase.weightPurchased;
+                totalCost += purchase.totalLandedCost;
+            }
+        });
+
+        const relevantOpenings = state.originalOpenings.filter((o: any) => 
+            o.originalType === selectedOriginalTypeId && 
+            o.supplierId === selectedSupplierId
+        );
+        const totalOpened = relevantOpenings.reduce((sum: number, o: any) => sum + o.weightOpened, 0);
+
+        const directSales = state.salesInvoices
+            .filter((inv: any) => inv.status === 'Posted' && (inv.invoiceNo.startsWith('DS-') || inv.invoiceNo.startsWith('DSINV-')))
+            .reduce((sum: number, inv: any) => {
+                return sum + inv.items
+                    .filter((item: any) => item.originalPurchaseId && 
+                        relevantPurchases.some((p: any) => p.id === item.originalPurchaseId))
+                    .reduce((itemSum: number, item: any) => itemSum + item.totalKg, 0);
+            }, 0);
+
+        const currentWeight = totalPurchased - totalOpened - directSales;
+        const currentAvgCostPerKg = totalPurchased > 0 ? totalCost / totalPurchased : 0;
+        const currentValue = currentWeight * currentAvgCostPerKg;
+
+        return {
+            originalType,
+            currentWeight,
+            currentAvgCostPerKg,
+            currentValue,
+            totalPurchased,
+            totalOpened,
+            directSales
+        };
+    }, [selectedOriginalTypeId, selectedSupplierId, selectedSubSupplierId, stockType, state.purchases, state.originalOpenings, state.salesInvoices, state.originalTypes]);
+
+    const handleAlignFinishedGoods = async () => {
+        if (!selectedItemId) {
+            alert('Please select an item');
+            return;
+        }
+
+        const qty = targetQty ? parseFloat(targetQty) : undefined;
+        const value = targetValue ? parseFloat(targetValue) : undefined;
+
+        // Both quantity and value (worth) are required
+        if (qty === undefined || value === undefined) {
+            alert('Please enter both target quantity and target value (worth). Avg Cost will be calculated as: Worth ÷ Quantity');
+            return;
+        }
+
+        if (qty <= 0) {
+            alert('Target quantity must be greater than 0');
+            return;
+        }
+
+        setIsProcessing(true);
+        setResult(null);
+
+        try {
+            const result = await alignFinishedGoodsStock(selectedItemId, qty, value);
+            setResult(result);
+            if (result.success) {
+                setTargetQty('');
+                setTargetValue('');
+            }
+        } catch (error) {
+            setResult({ success: false, message: `Error: ${(error as Error).message}` });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleAlignOriginal = async () => {
+        if (!selectedOriginalTypeId || !selectedSupplierId) {
+            alert('Please select Original Type and Supplier');
+            return;
+        }
+
+        const weight = targetWeight ? parseFloat(targetWeight) : undefined;
+        const value = targetValue ? parseFloat(targetValue) : undefined;
+
+        if (weight === undefined && value === undefined) {
+            alert('Please enter target weight or value (or both)');
+            return;
+        }
+
+        setIsProcessing(true);
+        setResult(null);
+
+        try {
+            const result = await alignOriginalStock(
+                selectedOriginalTypeId, 
+                selectedSupplierId, 
+                weight, 
+                value,
+                selectedSubSupplierId || undefined
+            );
+            setResult(result);
+            if (result.success) {
+                setTargetWeight('');
+                setTargetValue('');
+            }
+        } catch (error) {
+            setResult({ success: false, message: `Error: ${(error as Error).message}` });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const availableSubSuppliers = useMemo(() => {
+        if (!selectedSupplierId) return [];
+        return state.partners.filter((p: any) => 
+            p.type === PartnerType.SUB_SUPPLIER && 
+            p.parentSupplier === selectedSupplierId
+        );
+    }, [selectedSupplierId, state.partners]);
+
+    return (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-green-50 to-emerald-50">
+                <div className="flex items-center gap-4">
+                    <div className="p-2 bg-green-600 text-white rounded-lg">
+                        <Package size={24} />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-800">Stock Alignment Utility</h2>
+                        <p className="text-sm text-slate-500">Adjust stock quantities and values for Finished Goods and Original Purchase stock</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+                {/* Stock Type Selection */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Stock Type</label>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => {
+                                setStockType('finished-goods');
+                                setSelectedItemId('');
+                                setTargetQty('');
+                                setTargetValue('');
+                                setResult(null);
+                            }}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                                stockType === 'finished-goods'
+                                    ? 'bg-green-600 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }`}
+                        >
+                            Finished Goods
+                        </button>
+                        <button
+                            onClick={() => {
+                                setStockType('original');
+                                setSelectedOriginalTypeId('');
+                                setSelectedSupplierId('');
+                                setSelectedSubSupplierId('');
+                                setTargetWeight('');
+                                setTargetValue('');
+                                setResult(null);
+                            }}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                                stockType === 'original'
+                                    ? 'bg-green-600 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }`}
+                        >
+                            Original Purchase Stock
+                        </button>
+                    </div>
+                </div>
+
+                {stockType === 'finished-goods' ? (
+                    <>
+                        {/* Item Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">Select Item</label>
+                            <EntitySelector
+                                entities={state.items}
+                                selectedId={selectedItemId}
+                                onSelect={setSelectedItemId}
+                                placeholder="Select Item..."
+                                className="w-full"
+                            />
+                        </div>
+
+                        {/* Current Stock Display */}
+                        {finishedGoodsInfo && (
+                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                <h3 className="text-sm font-bold text-slate-700 mb-3">Current Stock</h3>
+                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Quantity (Packages)</div>
+                                        <div className="font-mono font-bold text-slate-800">{finishedGoodsInfo.currentQty.toLocaleString()}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Avg Cost/Unit</div>
+                                        <div className="font-mono font-bold text-slate-800">${finishedGoodsInfo.currentAvgCost.toFixed(2)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Total Value</div>
+                                        <div className={`font-mono font-bold text-lg ${finishedGoodsInfo.currentValue >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                            ${finishedGoodsInfo.currentValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Target Inputs */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Target Quantity (Packages) *</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={targetQty}
+                                    onChange={(e) => setTargetQty(e.target.value)}
+                                    placeholder="Enter target quantity"
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Target Worth/Value (USD) *</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={targetValue}
+                                    onChange={(e) => setTargetValue(e.target.value)}
+                                    placeholder="Enter target worth (value)"
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
+                                    required
+                                />
+                                <div className="text-xs text-slate-500 mt-1">Avg Cost = Worth ÷ Quantity</div>
+                            </div>
+                        </div>
+
+                        {/* Adjustment Preview */}
+                        {finishedGoodsInfo && targetQty && targetValue && (
+                            <div className="p-4 rounded-lg border-2 bg-green-50 border-green-200">
+                                <h3 className="text-sm font-bold text-slate-700 mb-2">Adjustment Preview</h3>
+                                <div className="space-y-2 text-sm">
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Current Qty:</span>
+                                        <span className="font-mono font-bold">{finishedGoodsInfo.currentQty.toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Target Qty:</span>
+                                        <span className="font-mono font-bold">{parseFloat(targetQty).toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Current Worth:</span>
+                                        <span className="font-mono font-bold">${finishedGoodsInfo.currentValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Target Worth:</span>
+                                        <span className="font-mono font-bold">${parseFloat(targetValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                    <div className="flex justify-between pt-2 border-t border-slate-300">
+                                        <span className="text-slate-600">Current Avg Cost:</span>
+                                        <span className="font-mono font-bold">${finishedGoodsInfo.currentAvgCost.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600 font-semibold">Calculated Avg Cost:</span>
+                                        <span className="font-mono font-bold text-green-700">
+                                            ${(parseFloat(targetValue) / parseFloat(targetQty)).toFixed(2)}
+                                            <span className="text-xs text-slate-500 ml-1">(Worth ÷ Qty)</span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action Button */}
+                        <button
+                            onClick={handleAlignFinishedGoods}
+                            disabled={!selectedItemId || isProcessing || !targetQty || !targetValue}
+                            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                            {isProcessing ? (
+                                <>
+                                    <RefreshCw size={18} className="animate-spin" />
+                                    Processing...
+                                </>
+                            ) : (
+                                <>
+                                    <Package size={18} />
+                                    Post Stock Adjustment
+                                </>
+                            )}
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        {/* Original Type Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">Select Original Type</label>
+                            <EntitySelector
+                                entities={state.originalTypes}
+                                selectedId={selectedOriginalTypeId}
+                                onSelect={setSelectedOriginalTypeId}
+                                placeholder="Select Original Type..."
+                                className="w-full"
+                            />
+                        </div>
+
+                        {/* Supplier Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">Select Supplier</label>
+                            <EntitySelector
+                                entities={state.partners.filter((p: any) => p.type === PartnerType.SUPPLIER)}
+                                selectedId={selectedSupplierId}
+                                onSelect={(id) => {
+                                    setSelectedSupplierId(id);
+                                    setSelectedSubSupplierId(''); // Clear sub supplier when main supplier changes
+                                }}
+                                placeholder="Select Supplier..."
+                                className="w-full"
+                            />
+                        </div>
+
+                        {/* Sub Supplier Selection (Optional) */}
+                        {availableSubSuppliers.length > 0 && (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Select Sub Supplier (Optional)</label>
+                                <EntitySelector
+                                    entities={availableSubSuppliers}
+                                    selectedId={selectedSubSupplierId}
+                                    onSelect={setSelectedSubSupplierId}
+                                    placeholder="All Sub Suppliers"
+                                    className="w-full"
+                                />
+                            </div>
+                        )}
+
+                        {/* Current Stock Display */}
+                        {originalStockInfo && (
+                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                <h3 className="text-sm font-bold text-slate-700 mb-3">Current Stock</h3>
+                                <div className="grid grid-cols-4 gap-4 text-sm">
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Weight (Kg)</div>
+                                        <div className="font-mono font-bold text-slate-800">{originalStockInfo.currentWeight.toFixed(2)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Avg Cost/Kg</div>
+                                        <div className="font-mono font-bold text-slate-800">${originalStockInfo.currentAvgCostPerKg.toFixed(2)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Total Value</div>
+                                        <div className={`font-mono font-bold text-lg ${originalStockInfo.currentValue >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                            ${originalStockInfo.currentValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-1">Purchased</div>
+                                        <div className="font-mono font-bold text-slate-800">{originalStockInfo.totalPurchased.toFixed(2)} Kg</div>
+                                    </div>
+                                </div>
+                                <div className="mt-3 pt-3 border-t border-slate-200 text-xs text-slate-500">
+                                    Opened: {originalStockInfo.totalOpened.toFixed(2)} Kg | Direct Sales: {originalStockInfo.directSales.toFixed(2)} Kg
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Target Inputs */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Target Weight (Kg) - Optional</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={targetWeight}
+                                    onChange={(e) => setTargetWeight(e.target.value)}
+                                    placeholder="Leave blank to keep current"
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Target Value (USD) - Optional</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={targetValue}
+                                    onChange={(e) => setTargetValue(e.target.value)}
+                                    placeholder="Leave blank to keep current"
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 font-mono"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Adjustment Preview */}
+                        {originalStockInfo && (targetWeight || targetValue) && (
+                            <div className="p-4 rounded-lg border-2 bg-green-50 border-green-200">
+                                <h3 className="text-sm font-bold text-slate-700 mb-2">Adjustment Preview</h3>
+                                <div className="space-y-2 text-sm">
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Current Weight:</span>
+                                        <span className="font-mono font-bold">{originalStockInfo.currentWeight.toFixed(2)} Kg</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Target Weight:</span>
+                                        <span className="font-mono font-bold">{targetWeight ? parseFloat(targetWeight).toFixed(2) : originalStockInfo.currentWeight.toFixed(2)} Kg</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Current Value:</span>
+                                        <span className="font-mono font-bold">${originalStockInfo.currentValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-slate-600">Target Value:</span>
+                                        <span className="font-mono font-bold">${targetValue ? parseFloat(targetValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : originalStockInfo.currentValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action Button */}
+                        <button
+                            onClick={handleAlignOriginal}
+                            disabled={!selectedOriginalTypeId || !selectedSupplierId || isProcessing || (!targetWeight && !targetValue)}
+                            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                            {isProcessing ? (
+                                <>
+                                    <RefreshCw size={18} className="animate-spin" />
+                                    Processing...
+                                </>
+                            ) : (
+                                <>
+                                    <Package size={18} />
+                                    Post Stock Adjustment
+                                </>
+                            )}
+                        </button>
+                    </>
+                )}
+
+                {/* Result Message */}
+                {result && (
+                    <div className={`p-4 rounded-lg border-2 ${result.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                        <div className={`font-semibold ${result.success ? 'text-green-800' : 'text-red-800'}`}>
+                            {result.success ? '✓ Success' : '✗ Error'}
+                        </div>
+                        <div className="text-sm mt-1 text-slate-700">{result.message}</div>
+                        {result.transactionId && (
+                            <div className="text-xs mt-2 font-mono text-slate-600">Transaction ID: {result.transactionId}</div>
+                        )}
+                    </div>
+                )}
+
+                {/* Info Box */}
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <div className="flex items-start gap-2">
+                        <AlertTriangle size={18} className="text-amber-600 mt-0.5" />
+                        <div className="text-xs text-amber-800">
+                            <div className="font-semibold mb-1">How it works:</div>
+                            <ul className="list-disc list-inside space-y-1 text-amber-700">
+                                <li>Calculates current stock from purchases, openings, and sales</li>
+                                <li>Creates a retroactive Inventory Adjustment entry dated before the first transaction</li>
+                                <li>Adjustment entries are marked with system flag for audit transparency</li>
+                                <li>Does not modify existing transactions - only adds new adjustment entries</li>
+                                <li>For Finished Goods: Updates item stockQty and avgCost in Firestore</li>
+                                <li>Adjustment is posted to Capital/Retained Earnings account</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     );
 };

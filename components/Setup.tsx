@@ -706,7 +706,7 @@ export const useSetupConfigs = () => {
                 name: 'parentSupplier', 
                 label: 'Parent Supplier', 
                 type: 'select', 
-                options: (allData: any[]) => allData.filter(p => p.type === PartnerType.SUPPLIER).map(p => p.name),
+                options: (allData: any[]) => allData.filter(p => p.type === PartnerType.SUPPLIER).map(p => ({ label: p.name, value: p.id })),
                 hidden: (data) => data.type !== PartnerType.SUB_SUPPLIER
             },
             { 
