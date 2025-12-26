@@ -463,8 +463,15 @@ export const Accounting: React.FC = () => {
             // Balancing Discrepancy
             if (!bdAccountId || !amount || parseFloat(amount) <= 0) return alert("Select account and enter valid amount");
             if (!bdReason) return alert("Reason is required for balancing discrepancy");
+            
+            // Check if it's an account or a partner
             const account = state.accounts.find(a => a.id === bdAccountId);
-            if (!account) return alert("Account not found");
+            const partner = state.partners.find(p => p.id === bdAccountId);
+            
+            if (!account && !partner) return alert("Account/Partner not found");
+            
+            // Use account name or partner name
+            const entityName = account ? account.name : (partner ? partner.name : 'Unknown');
             
             // Lookup discrepancy account dynamically (factory-specific, always correct)
             const discrepancyAccount = state.accounts.find(a => 
@@ -475,15 +482,18 @@ export const Accounting: React.FC = () => {
             );
             
             if (!discrepancyAccount) {
-                return alert('Missing required account: Balancing Discrepancy / Suspense (505). Please ensure this account exists in Setup > Chart of Accounts.');
+                return alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: LIABILITY\n- Opening Balance: 0\n\nThe system will automatically find it by code "505" or if the name contains "Discrepancy", "Suspense", or "Balancing Discrepancy".');
             }
             
+            // BD vouchers always use current date to show when the adjustment was actually made
+            const bdDate = new Date().toISOString().split('T')[0];
+            
             if (bdAdjustmentType === 'INCREASE') {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
             } else {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: account.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${account.name} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
             }
         }
 
@@ -723,7 +733,17 @@ export const Accounting: React.FC = () => {
 
                         {/* 2. Common Header */}
                         <div className="grid grid-cols-3 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                            <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={date} onChange={e => setDate(e.target.value)} /></div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label>
+                                {vType === 'BD' ? (
+                                    <div className="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-slate-600 text-sm">
+                                        <div className="font-semibold">{new Date().toISOString().split('T')[0]}</div>
+                                        <div className="text-xs text-slate-500 mt-1">(Uses current date automatically)</div>
+                                    </div>
+                                ) : (
+                                    <input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none" value={date} onChange={e => setDate(e.target.value)} />
+                                )}
+                            </div>
                             {vType !== 'JV' && vType !== 'TR' && (
                                 <>
                                     <div>
@@ -904,8 +924,8 @@ export const Accounting: React.FC = () => {
                                     />
                                 </div>
                             </div>
-                        ) : (
-                            // STANDARD FORM (RV, PV, EV, PB)
+                        ) : vType === 'BD' ? null : (
+                            // STANDARD FORM (RV, PV, EV, PB, IA, RTS, WO)
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 {/* LEFT SIDE: SOURCE & DESTINATION */}
                                 <div className="space-y-6">
@@ -1157,9 +1177,80 @@ export const Accounting: React.FC = () => {
                                 <h3 className="text-lg font-bold text-teal-900 flex items-center gap-2">
                                     <Scale size={20} /> Balancing Discrepancy
                                 </h3>
+                                
+                                {/* Account/Partner Balance Display */}
+                                {(() => {
+                                    if (!bdAccountId) return null;
+                                    
+                                    // Check if it's an account or a partner
+                                    const selectedAccount = state.accounts.find((a: any) => a.id === bdAccountId);
+                                    const selectedPartner = state.partners.find((p: any) => p.id === bdAccountId);
+                                    
+                                    if (!selectedAccount && !selectedPartner) return null;
+                                    
+                                    // Calculate balance from ledger entries
+                                    const accountEntries = state.ledger.filter((e: any) => e.accountId === bdAccountId);
+                                    const debitSum = accountEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                    const creditSum = accountEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                    
+                                    let accountBalance = 0;
+                                    let entityName = '';
+                                    
+                                    if (selectedAccount) {
+                                        // Account balance calculation
+                                        if ([AccountType.ASSET, AccountType.EXPENSE].includes(selectedAccount.type)) {
+                                            accountBalance = debitSum - creditSum;
+                                        } else {
+                                            accountBalance = creditSum - debitSum;
+                                        }
+                                        entityName = selectedAccount.name;
+                                    } else if (selectedPartner) {
+                                        // Partner balance calculation
+                                        if (selectedPartner.type === PartnerType.CUSTOMER) {
+                                            // Customers: debit increases balance (they owe us) - positive
+                                            accountBalance = debitSum - creditSum;
+                                        } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(selectedPartner.type)) {
+                                            // Suppliers/agents: credit increases liability (we owe them) - negative
+                                            accountBalance = creditSum - debitSum;
+                                        } else {
+                                            accountBalance = debitSum - creditSum;
+                                        }
+                                        entityName = selectedPartner.name;
+                                    }
+                                    
+                                    return (
+                                        <div className="bg-white p-4 rounded-lg border border-teal-200">
+                                            <div className="flex justify-between items-center">
+                                                <div>
+                                                    <div className="text-xs text-slate-500 mb-1">
+                                                        {selectedAccount ? 'Selected Account' : 'Selected Partner'}
+                                                    </div>
+                                                    <div className="font-bold text-slate-800">{entityName}</div>
+                                                    {selectedPartner && (
+                                                        <div className="text-xs text-slate-500 mt-1">({selectedPartner.type})</div>
+                                                    )}
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xs text-slate-500 mb-1">Current Balance</div>
+                                                    <div className={`text-2xl font-bold font-mono ${accountBalance >= 0 ? 'text-teal-600' : 'text-red-600'}`}>
+                                                        ${accountBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setAmount(Math.abs(accountBalance).toFixed(2))}
+                                                className="mt-2 text-xs text-teal-600 hover:text-teal-800 font-medium underline"
+                                            >
+                                                Use Current Balance as Adjustment Amount
+                                            </button>
+                                        </div>
+                                    );
+                                })()}
+                                
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Account</label>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Account *</label>
                                         <EntitySelector 
                                             entities={allAccounts} 
                                             selectedId={bdAccountId} 
@@ -1179,14 +1270,16 @@ export const Accounting: React.FC = () => {
                                         </select>
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Amount ({currency})</label>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Adjustment Amount ({currency}) *</label>
                                         <input 
                                             type="number" 
+                                            step="0.01"
                                             className="w-full bg-white border border-slate-300 rounded-lg p-3 text-2xl font-bold text-slate-800" 
                                             value={amount} 
                                             onChange={e => setAmount(e.target.value)} 
                                             placeholder="0.00"
                                         />
+                                        <div className="text-xs text-slate-500 mt-1">Enter the amount to adjust (not the target balance)</div>
                                     </div>
                                     <div>
                                         <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>

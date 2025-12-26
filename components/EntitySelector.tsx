@@ -62,9 +62,11 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
     const isTypingRef = useRef(false);
 
     useEffect(() => {
-        // Don't update searchTerm if user is actively typing
-        if (isTypingRef.current) {
-            isTypingRef.current = false; // Reset flag after one render
+        // Don't update searchTerm if user is actively typing or dropdown is open (user might be searching)
+        if (isTypingRef.current || isOpen) {
+            if (isTypingRef.current) {
+                isTypingRef.current = false; // Reset flag after one render
+            }
             return;
         }
         
@@ -77,7 +79,7 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                 setSearchTerm('');
             }
         }
-    }, [selectedId, entities, formatSelected]);
+    }, [selectedId, entities, formatSelected, isOpen]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -199,8 +201,13 @@ export const EntitySelector: React.FC<EntitySelectorProps> = ({
                     onFocus={() => {
                         if (!disabled) {
                             setIsOpen(true);
-                            // Whenever user opens the dropdown, clear the search box
-                            // so that all options are visible and user can start typing
+                            // Mark that user is interacting - prevent useEffect from overwriting
+                            isTypingRef.current = true;
+                            // If there's a selected value, clear it to allow searching
+                            if (selectedId) {
+                                onSelect('');
+                            }
+                            // Clear search term so user can start typing fresh
                             setSearchTerm('');
                         }
                     }}
