@@ -258,8 +258,8 @@ export const Dashboard: React.FC = () => {
     const { state } = useData();
     const { currentUser, currentFactory, factories, switchFactory } = useAuth();
     const navigate = useNavigate();
-    const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('7days');
-    const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.20); // Default to 20 cents
+    const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('yesterday');
+    const [workingCostPerKg, setWorkingCostPerKg] = useState<number>(0.17); // Default to 17 cents per kg
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
 
     // Production Yield Analysis Data

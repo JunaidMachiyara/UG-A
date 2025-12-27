@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useData } from '../context/DataContext';
-import { AccountType, TransactionType, PlannerPeriodType, PlannerEntityType, PlannerEntry, PartnerType } from '../types';
+import { AccountType, TransactionType, PlannerPeriodType, PlannerEntityType, PlannerEntry, PartnerType, LedgerEntry } from '../types';
 import { 
     AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell 
 } from 'recharts';
@@ -1658,16 +1658,93 @@ const LedgerReport: React.FC = () => {
         return allEntities.filter(e => e.type === accountType);
     }, [allEntities, accountType]);
 
+    // PERFORMANCE OPTIMIZATION #1: Pre-index ledger by accountId
+    const ledgerByAccount = useMemo(() => {
+        const index: Record<string, LedgerEntry[]> = {};
+        state.ledger.forEach(entry => {
+            if (!index[entry.accountId]) {
+                index[entry.accountId] = [];
+            }
+            index[entry.accountId].push(entry);
+        });
+        return index;
+    }, [state.ledger]);
+
+    // PERFORMANCE OPTIMIZATION #2: Pre-filter by date range and convert dates to timestamps
+    const startTimestamp = useMemo(() => new Date(startDate).getTime(), [startDate]);
+    const endTimestamp = useMemo(() => new Date(endDate).getTime(), [endDate]);
+    
+    const dateFilteredLedger = useMemo(() => {
+        return state.ledger.filter(e => {
+            const entryTimestamp = new Date(e.date).getTime();
+            return entryTimestamp >= startTimestamp && entryTimestamp <= endTimestamp;
+        });
+    }, [state.ledger, startTimestamp, endTimestamp]);
+
+    // PERFORMANCE OPTIMIZATION #3: Optimized getAccountStats using pre-indexed data
     const getAccountStats = useCallback((accountId: string) => {
-        const openingEntries = state.ledger.filter(e => e.accountId === accountId && e.date < startDate);
-        const openingDr = openingEntries.reduce((sum, e) => sum + e.debit, 0);
-        const openingCr = openingEntries.reduce((sum, e) => sum + e.credit, 0);
+        // Get entries for this account from pre-indexed map (O(1) lookup)
+        const accountEntries = ledgerByAccount[accountId] || [];
+        
+        // Use numeric timestamp comparisons instead of string comparisons
+        const openingEntries = accountEntries.filter(e => {
+            const entryTimestamp = new Date(e.date).getTime();
+            return entryTimestamp < startTimestamp;
+        });
+        
+        // Safely handle undefined/null debit/credit values - default to 0
+        const openingDr = openingEntries.reduce((sum, e) => {
+            const debit = (e.debit !== undefined && e.debit !== null && !isNaN(e.debit)) ? Number(e.debit) : 0;
+            return sum + debit;
+        }, 0);
+        const openingCr = openingEntries.reduce((sum, e) => {
+            const credit = (e.credit !== undefined && e.credit !== null && !isNaN(e.credit)) ? Number(e.credit) : 0;
+            return sum + credit;
+        }, 0);
         const openingBal = openingDr - openingCr;
-        const periodEntries = state.ledger.filter(e => e.accountId === accountId && e.date >= startDate && e.date <= endDate);
-        const periodDr = periodEntries.reduce((sum, e) => sum + e.debit, 0);
-        const periodCr = periodEntries.reduce((sum, e) => sum + e.credit, 0);
-        return { opening: openingBal, debit: periodDr, credit: periodCr, closing: openingBal + periodDr - periodCr, entries: periodEntries.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()) };
-    }, [state.ledger, startDate, endDate]);
+        
+        // Get period entries from pre-filtered array (much smaller than full ledger)
+        const periodEntries = dateFilteredLedger.filter(e => e.accountId === accountId);
+        const periodDr = periodEntries.reduce((sum, e) => {
+            const debit = (e.debit !== undefined && e.debit !== null && !isNaN(e.debit)) ? Number(e.debit) : 0;
+            return sum + debit;
+        }, 0);
+        const periodCr = periodEntries.reduce((sum, e) => {
+            const credit = (e.credit !== undefined && e.credit !== null && !isNaN(e.credit)) ? Number(e.credit) : 0;
+            return sum + credit;
+        }, 0);
+        
+        // Ensure all values are valid numbers (not NaN)
+        const opening = isNaN(openingBal) ? 0 : openingBal;
+        const debit = isNaN(periodDr) ? 0 : periodDr;
+        const credit = isNaN(periodCr) ? 0 : periodCr;
+        const closing = opening + debit - credit;
+        
+        // Only sort entries if we're viewing the detail (not summary) - lazy sorting
+        const sortedEntries = periodEntries.sort((a,b) => {
+            const aTime = new Date(a.date).getTime();
+            const bTime = new Date(b.date).getTime();
+            return aTime - bTime;
+        });
+        
+        return { 
+            opening, 
+            debit, 
+            credit, 
+            closing: isNaN(closing) ? 0 : closing, 
+            entries: sortedEntries
+        };
+    }, [ledgerByAccount, dateFilteredLedger, startTimestamp]);
+
+    // PERFORMANCE OPTIMIZATION #4: Memoize account stats for summary view (only calculate when needed)
+    const accountStatsCache = useMemo(() => {
+        const cache: Record<string, ReturnType<typeof getAccountStats>> = {};
+        // Only calculate stats for visible entities (filteredEntities)
+        filteredEntities.forEach(entity => {
+            cache[entity.id] = getAccountStats(entity.id);
+        });
+        return cache;
+    }, [filteredEntities, getAccountStats]);
 
     const activeEntity = useMemo(() => allEntities.find(e => e.id === selectedAccountId), [allEntities, selectedAccountId]);
 
@@ -1716,7 +1793,8 @@ const LedgerReport: React.FC = () => {
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {filteredEntities.map(e => { 
-                                    const stats = getAccountStats(e.id); 
+                                    // Use cached stats instead of recalculating for each render
+                                    const stats = accountStatsCache[e.id] || getAccountStats(e.id); 
                                     if (stats.opening === 0 && stats.debit === 0 && stats.credit === 0) return null; 
                                     return ( 
                                         <tr key={e.id} className="hover:bg-slate-50 group">

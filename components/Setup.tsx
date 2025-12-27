@@ -727,7 +727,7 @@ export const useSetupConfigs = () => {
                 type: 'text', 
                 hidden: (data) => data.type !== PartnerType.FREIGHT_FORWARDER
             },
-            { name: 'balance', label: 'Opening Balance (USD)', type: 'number', placeholder: 'Positive for Receivable, Negative for Payable' }
+            { name: 'balance', label: 'Opening Balance (USD)', type: 'number', placeholder: 'Positive for Receivable, Negative for Payable', defaultValue: 0 }
         ],
         onSave: (data) => addPartner(data),
         onUpdate: async (id, data) => {

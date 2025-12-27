@@ -1898,9 +1898,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         // Auto-add factoryId from current factory
+        // CRITICAL: Ensure balance is always a valid number (default to 0)
         const partnerWithFactory = {
             ...partner,
-            factoryId: currentFactory?.id || ''
+            factoryId: currentFactory?.id || '',
+            balance: (partner.balance !== undefined && partner.balance !== null && !isNaN(partner.balance)) 
+                ? Number(partner.balance) 
+                : 0
         };
 
         // Remove id and prepare data for Firebase

@@ -138,6 +138,7 @@ export const DataEntry: React.FC = () => {
     const [ooBatch, setOoBatch] = useState('');
     const [ooQty, setOoQty] = useState('');
     const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
+    const [isProcessingOpenings, setIsProcessingOpenings] = useState(false);
 
     // --- Bales Opening State ---
     const [boDate, setBoDate] = useState(new Date().toISOString().split('T')[0]);
@@ -795,18 +796,23 @@ export const DataEntry: React.FC = () => {
             return;
         }
         
+        // Set loading state
+        setIsProcessingOpenings(true);
+        
         const count = stagedOriginalOpenings.length;
         let successCount = 0;
         let errorCount = 0;
         
         try {
             // Process each opening sequentially to ensure proper saving
-            for (const opening of stagedOriginalOpenings) {
+            for (let i = 0; i < stagedOriginalOpenings.length; i++) {
+                const opening = stagedOriginalOpenings[i];
                 try {
                     await addOriginalOpening(opening);
                     successCount++;
+                    console.log(`✅ Opening ${i + 1}/${count} saved successfully`);
                 } catch (error) {
-                    console.error('Error adding opening:', error);
+                    console.error(`❌ Error adding opening ${i + 1}/${count}:`, error);
                     errorCount++;
                 }
             }
@@ -818,15 +824,18 @@ export const DataEntry: React.FC = () => {
             
             // Show appropriate message
             if (errorCount === 0) {
-                alert(`${successCount} opening(s) recorded successfully!`);
+                alert(`✅ ${successCount} opening(s) recorded successfully!`);
             } else if (successCount > 0) {
-                alert(`${successCount} opening(s) recorded successfully, ${errorCount} failed. Please check the console for details.`);
+                alert(`⚠️ ${successCount} opening(s) recorded successfully, ${errorCount} failed. Please check the console for details.`);
             } else {
-                alert(`Failed to record openings. Please check the console for details.`);
+                alert(`❌ Failed to record openings. Please check the console for details.`);
             }
         } catch (error) {
-            console.error('Error completing openings:', error);
-            alert(`An error occurred while saving openings: ${error}. Please check the console for details.`);
+            console.error('❌ Error completing openings:', error);
+            alert(`❌ An error occurred while saving openings: ${error}. Please check the console for details.`);
+        } finally {
+            // Always clear loading state
+            setIsProcessingOpenings(false);
         }
     };
     
@@ -2284,9 +2293,24 @@ export const DataEntry: React.FC = () => {
                                                     </div>
                                                     <button 
                                                         onClick={handleCompleteOriginalOpenings}
-                                                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors shadow-lg"
+                                                        disabled={isProcessingOpenings}
+                                                        className={`w-full font-bold py-3 rounded-lg transition-colors shadow-lg flex items-center justify-center gap-2 ${
+                                                            isProcessingOpenings 
+                                                                ? 'bg-blue-400 cursor-not-allowed' 
+                                                                : 'bg-blue-600 hover:bg-blue-700'
+                                                        } text-white`}
                                                     >
-                                                        ✓ Complete & Save All ({stagedOriginalOpenings.length})
+                                                        {isProcessingOpenings ? (
+                                                            <>
+                                                                <RefreshCw size={18} className="animate-spin" />
+                                                                <span>Processing... ({stagedOriginalOpenings.length} entries)</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <CheckCircle size={18} />
+                                                                <span>Complete & Save All ({stagedOriginalOpenings.length})</span>
+                                                            </>
+                                                        )}
                                                     </button>
                                                 </div>
                                             )}

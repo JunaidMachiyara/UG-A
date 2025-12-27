@@ -618,9 +618,22 @@ export const Accounting: React.FC = () => {
             
             // Get items with adjustments (either qty or worth has value)
             const itemsWithAdjustments = Object.entries(iaItemAdjustments).filter(([itemId, adj]) => {
-                const hasQty = adj.adjustmentQty !== '' && adj.adjustmentQty !== 0;
-                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== 0;
+                const hasQty = adj.adjustmentQty !== '' && adj.adjustmentQty !== null && adj.adjustmentQty !== undefined && adj.adjustmentQty !== 0;
+                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined && adj.adjustmentWorth !== 0;
                 return hasQty || hasWorth;
+            });
+            
+            console.log('🔍 Inventory Adjustment Debug:', {
+                totalItemsInState: Object.keys(iaItemAdjustments).length,
+                itemsWithAdjustments: itemsWithAdjustments.length,
+                adjustments: Object.entries(iaItemAdjustments).map(([itemId, adj]) => ({
+                    itemId,
+                    itemCode: state.items.find(i => i.id === itemId)?.code || 'NOT FOUND',
+                    adjustmentQty: adj.adjustmentQty,
+                    adjustmentWorth: adj.adjustmentWorth,
+                    hasQty: adj.adjustmentQty !== '' && adj.adjustmentQty !== null && adj.adjustmentQty !== undefined && adj.adjustmentQty !== 0,
+                    hasWorth: adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined && adj.adjustmentWorth !== 0
+                }))
             });
             
             if (itemsWithAdjustments.length === 0) {
@@ -653,10 +666,40 @@ export const Accounting: React.FC = () => {
             // Process each item with adjustment
             for (const [itemId, adj] of itemsWithAdjustments) {
                 const item = state.items.find(i => i.id === itemId);
-                if (!item) continue;
+                if (!item) {
+                    console.error(`❌ Item not found for ID: ${itemId}`);
+                    alert(`Error: Item with ID ${itemId} not found. Please refresh the page and try again.`);
+                    continue;
+                }
                 
-                const adjustmentQty = adj.adjustmentQty !== '' ? parseFloat(String(adj.adjustmentQty)) : 0;
-                const adjustmentWorth = adj.adjustmentWorth !== '' ? parseFloat(String(adj.adjustmentWorth)) : 0;
+                // Validate adjustment values
+                let adjustmentQty = 0;
+                let adjustmentWorth = 0;
+                
+                try {
+                    adjustmentQty = adj.adjustmentQty !== '' && adj.adjustmentQty !== null && adj.adjustmentQty !== undefined 
+                        ? parseFloat(String(adj.adjustmentQty)) 
+                        : 0;
+                    adjustmentWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined 
+                        ? parseFloat(String(adj.adjustmentWorth)) 
+                        : 0;
+                    
+                    // Check for NaN
+                    if (isNaN(adjustmentQty)) {
+                        console.error(`❌ Invalid adjustmentQty for item ${item.code} (${itemId}):`, adj.adjustmentQty);
+                        alert(`Error: Invalid adjustment quantity for item ${item.code}. Please clear the field and re-enter.`);
+                        continue;
+                    }
+                    if (isNaN(adjustmentWorth)) {
+                        console.error(`❌ Invalid adjustmentWorth for item ${item.code} (${itemId}):`, adj.adjustmentWorth);
+                        alert(`Error: Invalid adjustment worth for item ${item.code}. Please clear the field and re-enter.`);
+                        continue;
+                    }
+                } catch (error) {
+                    console.error(`❌ Error parsing adjustment values for item ${item.code} (${itemId}):`, error, adj);
+                    alert(`Error processing adjustment for item ${item.code}. Please clear the adjustment fields and re-enter.`);
+                    continue;
+                }
                 
                 // Determine adjustment value: use worth if provided, otherwise calculate from qty * avgCost
                 let adjustmentValue = 0;
@@ -668,28 +711,72 @@ export const Accounting: React.FC = () => {
                     continue; // Skip if both are 0
                 }
                 
+                // Ensure item.stockQty is a valid number (default to 0 if undefined/null/NaN)
+                const currentStockQty = (item.stockQty !== undefined && item.stockQty !== null && !isNaN(item.stockQty)) 
+                    ? Number(item.stockQty) 
+                    : 0;
+                
                 // Calculate new stock quantity
-                const newStockQty = item.stockQty + adjustmentQty;
+                const newStockQty = currentStockQty + adjustmentQty;
+                
+                // Validate newStockQty is not NaN
+                if (isNaN(newStockQty)) {
+                    console.error(`❌ Invalid newStockQty calculation for item ${item.code} (${itemId}):`, {
+                        currentStockQty,
+                        adjustmentQty,
+                        itemStockQty: item.stockQty,
+                        item
+                    });
+                    alert(`Error: Invalid stock quantity calculation for item ${item.code}. Please check the item's current stock and try again.`);
+                    continue;
+                }
+                
+                // Ensure item.avgCost is a valid number (default to 0 if undefined/null/NaN)
+                const currentAvgCost = (item.avgCost !== undefined && item.avgCost !== null && !isNaN(item.avgCost)) 
+                    ? Number(item.avgCost) 
+                    : 0;
                 
                 // Calculate new average cost: if worth is provided, recalculate avgCost
-                let newAvgCost = item.avgCost || 0;
+                let newAvgCost = currentAvgCost;
                 if (adjustmentWorth !== 0 && adjustmentQty !== 0) {
                     // If both worth and qty are provided, recalculate avgCost
-                    const currentValue = item.stockQty * (item.avgCost || 0);
+                    const currentValue = currentStockQty * currentAvgCost;
                     const newValue = currentValue + adjustmentWorth;
-                    newAvgCost = newStockQty > 0 ? newValue / newStockQty : item.avgCost || 0;
+                    newAvgCost = newStockQty > 0 ? newValue / newStockQty : currentAvgCost;
                 } else if (adjustmentQty !== 0 && adjustmentWorth === 0) {
                     // If only qty is provided, keep existing avgCost
-                    newAvgCost = item.avgCost || 0;
+                    newAvgCost = currentAvgCost;
                 } else if (adjustmentWorth !== 0 && adjustmentQty === 0) {
                     // If only worth is provided (value adjustment), recalculate avgCost
-                    const currentValue = item.stockQty * (item.avgCost || 0);
+                    const currentValue = currentStockQty * currentAvgCost;
                     const newValue = currentValue + adjustmentWorth;
-                    newAvgCost = item.stockQty > 0 ? newValue / item.stockQty : item.avgCost || 0;
+                    newAvgCost = currentStockQty > 0 ? newValue / currentStockQty : currentAvgCost;
+                }
+                
+                // Validate newAvgCost is not NaN
+                if (isNaN(newAvgCost)) {
+                    console.error(`❌ Invalid newAvgCost calculation for item ${item.code} (${itemId}):`, {
+                        currentStockQty,
+                        currentAvgCost,
+                        adjustmentQty,
+                        adjustmentWorth,
+                        newStockQty
+                    });
+                    alert(`Error: Invalid average cost calculation for item ${item.code}. Please check the item's current cost and try again.`);
+                    continue;
                 }
                 
                 // Store update for later
                 itemStockUpdates.push({ itemId, newStockQty, newAvgCost });
+                
+                console.log(`✅ Prepared stock update for ${item.code} (${itemId}):`, {
+                    currentStockQty,
+                    adjustmentQty,
+                    newStockQty,
+                    currentAvgCost,
+                    adjustmentWorth,
+                    newAvgCost
+                });
                 
                 // Determine if increase or decrease based on sign
                 const isIncrease = (adjustmentQty > 0) || (adjustmentWorth > 0);
@@ -708,16 +795,40 @@ export const Accounting: React.FC = () => {
             pendingItemUpdates = async () => {
                 for (const update of itemStockUpdates) {
                     try {
+                        // Validate update values - ensure they are valid numbers
+                        const validatedStockQty = (update.newStockQty !== undefined && update.newStockQty !== null && !isNaN(update.newStockQty)) 
+                            ? Number(update.newStockQty) 
+                            : null;
+                        const validatedAvgCost = (update.newAvgCost !== undefined && update.newAvgCost !== null && !isNaN(update.newAvgCost)) 
+                            ? Number(update.newAvgCost) 
+                            : null;
+                        
+                        if (validatedStockQty === null || validatedAvgCost === null) {
+                            const item = state.items.find(i => i.id === update.itemId);
+                            console.error(`❌ Invalid update values for item ${item?.code || update.itemId}:`, {
+                                itemId: update.itemId,
+                                newStockQty: update.newStockQty,
+                                newAvgCost: update.newAvgCost,
+                                validatedStockQty,
+                                validatedAvgCost
+                            });
+                            alert(`Error: Invalid values for item ${item?.code || update.itemId}.\n\nStock Qty: ${update.newStockQty}\nAvg Cost: ${update.newAvgCost}\n\nStock update skipped. Please check the item data and try again.`);
+                            continue;
+                        }
+                        
                         const itemRef = doc(db, 'items', update.itemId);
                         await updateDoc(itemRef, {
-                            stockQty: update.newStockQty,
-                            avgCost: update.newAvgCost,
+                            stockQty: validatedStockQty,
+                            avgCost: validatedAvgCost,
                             updatedAt: serverTimestamp()
                         });
-                        console.log(`✅ Item ${update.itemId} stock updated: Qty=${update.newStockQty}, AvgCost=${update.newAvgCost.toFixed(2)}`);
-                    } catch (error) {
-                        console.error(`❌ Error updating item ${update.itemId} in Firestore:`, error);
-                        alert(`Warning: Failed to update stock for item ${update.itemId}. Please check the ledger and update manually if needed.`);
+                        
+                        const item = state.items.find(i => i.id === update.itemId);
+                        console.log(`✅ Item ${item?.code || update.itemId} (${update.itemId}) stock updated: Qty=${validatedStockQty}, AvgCost=${validatedAvgCost.toFixed(2)}`);
+                    } catch (error: any) {
+                        const item = state.items.find(i => i.id === update.itemId);
+                        console.error(`❌ Error updating item ${item?.code || update.itemId} (${update.itemId}) in Firestore:`, error);
+                        alert(`Warning: Failed to update stock for item ${item?.code || update.itemId}.\n\nError: ${error?.message || error}\n\nPlease check the console for details and update manually if needed.`);
                     }
                 }
             };
@@ -1652,14 +1763,57 @@ export const Accounting: React.FC = () => {
                             }
 
                             const updateItemAdjustment = (itemId: string, field: 'adjustmentQty' | 'adjustmentWorth', value: string) => {
-                                setIaItemAdjustments(prev => ({
-                                    ...prev,
-                                    [itemId]: {
-                                        ...prev[itemId],
-                                        itemId,
-                                        [field]: value === '' ? '' : parseFloat(value) || ''
+                                try {
+                                    // Clean the value - remove any invalid characters
+                                    const cleanedValue = value.trim();
+                                    
+                                    // If empty, set to empty string
+                                    if (cleanedValue === '' || cleanedValue === '-' || cleanedValue === '.') {
+                                        setIaItemAdjustments(prev => ({
+                                            ...prev,
+                                            [itemId]: {
+                                                ...prev[itemId],
+                                                itemId,
+                                                [field]: ''
+                                            }
+                                        }));
+                                        return;
                                     }
-                                }));
+                                    
+                                    // Try to parse as float
+                                    const parsed = parseFloat(cleanedValue);
+                                    if (isNaN(parsed)) {
+                                        console.warn(`Invalid number for ${field} on item ${itemId}:`, value);
+                                        // Don't update if invalid
+                                        return;
+                                    }
+                                    
+                                    setIaItemAdjustments(prev => ({
+                                        ...prev,
+                                        [itemId]: {
+                                            ...prev[itemId],
+                                            itemId,
+                                            [field]: parsed
+                                        }
+                                    }));
+                                } catch (error) {
+                                    console.error(`Error updating adjustment for item ${itemId}:`, error);
+                                }
+                            };
+                            
+                            // Utility to clear adjustment for a specific item
+                            const clearItemAdjustment = (itemId: string) => {
+                                setIaItemAdjustments(prev => {
+                                    const updated = { ...prev };
+                                    if (updated[itemId]) {
+                                        updated[itemId] = {
+                                            ...updated[itemId],
+                                            adjustmentQty: '',
+                                            adjustmentWorth: ''
+                                        };
+                                    }
+                                    return updated;
+                                });
                             };
 
                             // Print/Export function for Inventory Adjustment table
@@ -1935,23 +2089,97 @@ export const Accounting: React.FC = () => {
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-700">{(item.stockQty || 0).toFixed(2)}</td>
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
                                                                 <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                    <input 
-                                                                        type="number" 
-                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                        value={adjustment.adjustmentQty} 
-                                                                        onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
-                                                                        placeholder="0"
-                                                                    />
+                                                                    <div className="flex items-center justify-end gap-1">
+                                                                        <input 
+                                                                            type="number" 
+                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                            value={adjustment.adjustmentQty === '' || adjustment.adjustmentQty === null || adjustment.adjustmentQty === undefined ? '' : adjustment.adjustmentQty} 
+                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
+                                                                            onBlur={e => {
+                                                                                // Validate on blur
+                                                                                const val = e.target.value.trim();
+                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                    alert(`Invalid quantity for ${item.code}. Clearing field.`);
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: '',
+                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
+                                                                                        }
+                                                                                    }));
+                                                                                }
+                                                                            }}
+                                                                            placeholder="0"
+                                                                        />
+                                                                        {(adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0) && (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: '',
+                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                                className="text-red-500 hover:text-red-700 p-1"
+                                                                                title="Clear adjustment quantity"
+                                                                            >
+                                                                                <X size={14} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
                                                                 </td>
                                                                 <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                    <input 
-                                                                        type="number" 
-                                                                        step="0.01"
-                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                        value={adjustment.adjustmentWorth} 
-                                                                        onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
-                                                                        placeholder="0.00"
-                                                                    />
+                                                                    <div className="flex items-center justify-end gap-1">
+                                                                        <input 
+                                                                            type="number" 
+                                                                            step="0.01"
+                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                            value={adjustment.adjustmentWorth === '' || adjustment.adjustmentWorth === null || adjustment.adjustmentWorth === undefined ? '' : adjustment.adjustmentWorth} 
+                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
+                                                                            onBlur={e => {
+                                                                                // Validate on blur
+                                                                                const val = e.target.value.trim();
+                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                    alert(`Invalid worth for ${item.code}. Clearing field.`);
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                            adjustmentWorth: ''
+                                                                                        }
+                                                                                    }));
+                                                                                }
+                                                                            }}
+                                                                            placeholder="0.00"
+                                                                        />
+                                                                        {(adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0) && (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                            adjustmentWorth: ''
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                                className="text-red-500 hover:text-red-700 p-1"
+                                                                                title="Clear adjustment worth"
+                                                                            >
+                                                                                <X size={14} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
                                                                 </td>
                                                             </tr>
                                                         );
@@ -2574,6 +2802,7 @@ const BalanceAlignmentComponent: React.FC<{
     state: any; 
     alignBalance: (entityId: string, entityType: 'partner' | 'account', targetBalance: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }> 
 }> = ({ state, alignBalance }) => {
+    const [fixNaNTab, setFixNaNTab] = useState<'fix' | 'align'>('align');
     const [entityType, setEntityType] = useState<'partner' | 'account'>('partner');
     const [selectedEntityId, setSelectedEntityId] = useState<string>('');
     const [targetBalance, setTargetBalance] = useState<string>('');
@@ -2684,6 +2913,112 @@ const BalanceAlignmentComponent: React.FC<{
         ? parseFloat(targetBalance) - currentBalanceInfo.currentBalance
         : null;
 
+    // Fix NaN balances utility
+    const [fixNaNEntities, setFixNaNEntities] = useState<Array<{ id: string; name: string; type: 'partner' | 'account'; currentBalance: number | null }>>([]);
+    const [isScanningNaN, setIsScanningNaN] = useState(false);
+    const [isFixingNaN, setIsFixingNaN] = useState(false);
+
+    const scanForNaNBalances = useCallback(() => {
+        setIsScanningNaN(true);
+        const entitiesWithNaN: Array<{ id: string; name: string; type: 'partner' | 'account'; currentBalance: number | null | undefined }> = [];
+
+        try {
+            // Check partners
+            state.partners.forEach((partner: any) => {
+                const balance = partner.balance;
+                // Check for undefined, null, NaN, or string "NaN"
+                const isInvalid = balance === undefined || 
+                                  balance === null || 
+                                  (typeof balance === 'number' && isNaN(balance)) ||
+                                  (typeof balance === 'string' && balance.toLowerCase() === 'nan');
+                
+                if (isInvalid) {
+                    entitiesWithNaN.push({
+                        id: partner.id,
+                        name: partner.name || 'Unnamed Partner',
+                        type: 'partner',
+                        currentBalance: balance
+                    });
+                }
+            });
+
+            // Check accounts
+            state.accounts.forEach((account: any) => {
+                const balance = account.balance;
+                // Check for undefined, null, NaN, or string "NaN"
+                const isInvalid = balance === undefined || 
+                                  balance === null || 
+                                  (typeof balance === 'number' && isNaN(balance)) ||
+                                  (typeof balance === 'string' && balance.toLowerCase() === 'nan');
+                
+                if (isInvalid) {
+                    entitiesWithNaN.push({
+                        id: account.id,
+                        name: account.name || 'Unnamed Account',
+                        type: 'account',
+                        currentBalance: balance
+                    });
+                }
+            });
+
+            console.log(`🔍 Scan complete: Found ${entitiesWithNaN.length} entities with invalid balances:`, entitiesWithNaN);
+            setFixNaNEntities(entitiesWithNaN);
+            
+            // Show user feedback
+            if (entitiesWithNaN.length === 0) {
+                alert('✅ Scan Complete!\n\nNo entities with invalid balances (NaN, undefined, or null) were found.\n\nAll partners and accounts have valid balance values.');
+            } else {
+                alert(`⚠️ Scan Complete!\n\nFound ${entitiesWithNaN.length} entity/entities with invalid balances:\n\n${entitiesWithNaN.map(e => `• ${e.name} (${e.type})`).join('\n')}\n\nReview the list below and click "Fix" to correct them.`);
+            }
+        } catch (error) {
+            console.error('❌ Error scanning for NaN balances:', error);
+            alert(`❌ Error scanning for NaN balances:\n\n${error}\n\nPlease check the console (F12) for more details.`);
+        } finally {
+            setIsScanningNaN(false);
+        }
+    }, [state.partners, state.accounts]);
+
+    const fixNaNBalances = async () => {
+        if (fixNaNEntities.length === 0) {
+            alert('No NaN balances found. Please scan first.');
+            return;
+        }
+
+        if (!confirm(`Fix ${fixNaNEntities.length} entity/entities with NaN balances? This will set their balance to 0 in Firestore.`)) {
+            return;
+        }
+
+        setIsFixingNaN(true);
+        let fixed = 0;
+        let errors = 0;
+
+        try {
+            for (const entity of fixNaNEntities) {
+                try {
+                    const collectionName = entity.type === 'partner' ? 'partners' : 'accounts';
+                    const entityRef = doc(db, collectionName, entity.id);
+                    await updateDoc(entityRef, {
+                        balance: 0,
+                        updatedAt: serverTimestamp()
+                    });
+                    console.log(`✅ Fixed ${entity.name} (${entity.type}): balance set to 0`);
+                    fixed++;
+                } catch (error: any) {
+                    console.error(`❌ Error fixing ${entity.name}:`, error);
+                    errors++;
+                }
+            }
+
+            alert(`Fixed ${fixed} entity/entities. ${errors > 0 ? `${errors} error(s) occurred. Please check console for details.` : ''}`);
+            setFixNaNEntities([]);
+        } catch (error: any) {
+            console.error('❌ Error fixing NaN balances:', error);
+            alert(`Error fixing NaN balances: ${error?.message || error}`);
+        } finally {
+            setIsFixingNaN(false);
+        }
+    };
+
     return (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
             <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-purple-50 to-blue-50">
@@ -2692,13 +3027,121 @@ const BalanceAlignmentComponent: React.FC<{
                         <Scale size={24} />
                     </div>
                     <div>
-                        <h2 className="text-xl font-bold text-slate-800">Automatic Balance Alignment Utility</h2>
-                        <p className="text-sm text-slate-500">Adjust account balances to target values using retroactive adjustment entries</p>
+                        <h2 className="text-xl font-bold text-slate-800">Balance Alignment & NaN Fix Utility</h2>
+                        <p className="text-sm text-slate-500">Fix NaN balances or adjust account balances to target values</p>
                     </div>
                 </div>
             </div>
 
+            {/* Tab Selection */}
+            <div className="border-b border-slate-200">
+                <div className="flex gap-2 px-6 pt-4">
+                    <button
+                        onClick={() => setFixNaNTab('align')}
+                        className={`px-4 py-2 font-medium transition-colors ${
+                            fixNaNTab === 'align'
+                                ? 'border-b-2 border-purple-600 text-purple-600'
+                                : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                        Align Balance
+                    </button>
+                    <button
+                        onClick={() => {
+                            setFixNaNTab('fix');
+                            scanForNaNBalances();
+                        }}
+                        className={`px-4 py-2 font-medium transition-colors ${
+                            fixNaNTab === 'fix'
+                                ? 'border-b-2 border-red-600 text-red-600'
+                                : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                        Fix NaN Balances
+                    </button>
+                </div>
+            </div>
+
             <div className="p-6 space-y-6">
+                {fixNaNTab === 'fix' ? (
+                    <div className="space-y-4">
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                            <h3 className="font-bold text-yellow-800 mb-2">Fix NaN Balances</h3>
+                            <p className="text-sm text-yellow-700">
+                                This utility scans for partners and accounts with NaN, undefined, or null balances and fixes them by setting the balance to 0 in Firestore.
+                            </p>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    console.log('🔍 Scan button clicked');
+                                    scanForNaNBalances();
+                                }}
+                                disabled={isScanningNaN}
+                                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isScanningNaN ? 'Scanning...' : 'Scan for NaN Balances'}
+                            </button>
+                            {fixNaNEntities.length > 0 && (
+                                <button
+                                    onClick={fixNaNBalances}
+                                    disabled={isFixingNaN}
+                                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                                >
+                                    {isFixingNaN ? 'Fixing...' : `Fix ${fixNaNEntities.length} Entity/Entities`}
+                                </button>
+                            )}
+                        </div>
+
+                        {fixNaNEntities.length > 0 && (
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left">Type</th>
+                                            <th className="px-4 py-2 text-left">Name</th>
+                                            <th className="px-4 py-2 text-left">Current Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {fixNaNEntities.map(entity => (
+                                            <tr key={`${entity.type}-${entity.id}`}>
+                                                <td className="px-4 py-2">
+                                                    <span className="text-xs bg-slate-100 px-2 py-1 rounded">{entity.type}</span>
+                                                </td>
+                                                <td className="px-4 py-2 font-medium">{entity.name}</td>
+                                                <td className="px-4 py-2 text-red-600 font-mono">
+                                                    {entity.currentBalance === null ? 'null' : entity.currentBalance === undefined ? 'undefined' : 'NaN'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+
+                        {fixNaNEntities.length === 0 && !isScanningNaN && (
+                            <div className="text-center py-8">
+                                <div className="inline-flex items-center gap-2 text-slate-500">
+                                    <RefreshCw size={20} className="text-slate-400" />
+                                    <span>Click "Scan for NaN Balances" to find entities with invalid balances</span>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {fixNaNEntities.length === 0 && isScanningNaN && (
+                            <div className="text-center py-8">
+                                <div className="inline-flex items-center gap-2 text-blue-600">
+                                    <RefreshCw size={20} className="animate-spin" />
+                                    <span className="font-medium">Scanning partners and accounts...</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <>
                 {/* Entity Type Selection */}
                 <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">Entity Type</label>
@@ -2874,6 +3317,8 @@ const BalanceAlignmentComponent: React.FC<{
                         </div>
                     </div>
                 </div>
+                    </>
+                )}
             </div>
         </div>
     );
