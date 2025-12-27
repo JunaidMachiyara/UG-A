@@ -2227,9 +2227,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const addOriginalOpening = (opening: OriginalOpening) => {
+    const addOriginalOpening = async (opening: OriginalOpening) => {
         if (!isFirestoreLoaded) {
             console.warn('⚠️ Firebase not loaded, original opening not saved to database');
+            alert('Firebase not loaded. Opening not saved. Please refresh the page.');
             return;
         }
         
@@ -2238,60 +2239,75 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             factoryId: currentFactory?.id || ''
         };
         
-        // Save to Firebase
+        // Save to Firebase - use cleanForFirestore to remove undefined values
         const { id, ...openingData } = openingWithFactory;
-        addDoc(collection(db, 'originalOpenings'), { ...openingData, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Original Opening saved to Firebase'))
-            .catch((error) => console.error('❌ Error saving original opening:', error));
+        const cleanedData = cleanForFirestore(openingData);
         
-        // Create accounting entries for raw material consumption
-        const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
-        const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
-        
-        if (rawMaterialInvId && wipId) {
-            const transactionId = `OO-${openingWithFactory.id}`;
-            const entries: Omit<LedgerEntry, 'id'>[] = [
-                // Credit Raw Materials (reduce inventory)
-                {
-                    date: openingWithFactory.date,
-                    transactionId,
-                    transactionType: TransactionType.ORIGINAL_OPENING,
-                    accountId: rawMaterialInvId,
-                    accountName: 'Inventory - Raw Materials',
-                    currency: 'USD',
-                    exchangeRate: 1,
-                    fcyAmount: openingWithFactory.totalValue,
-                    debit: 0,
-                    credit: openingWithFactory.totalValue,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                    factoryId: openingWithFactory.factoryId
-                },
-                // Debit WIP (transfer to work in progress)
-                {
-                    date: openingWithFactory.date,
-                    transactionId,
-                    transactionType: TransactionType.ORIGINAL_OPENING,
-                    accountId: wipId,
-                    accountName: 'Work in Progress (Inventory)',
-                    currency: 'USD',
-                    exchangeRate: 1,
-                    fcyAmount: openingWithFactory.totalValue,
-                    debit: openingWithFactory.totalValue,
-                    credit: 0,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                    factoryId: openingWithFactory.factoryId
-                }
-            ];
-            postTransaction(entries);
-        } else {
-            console.error('❌ Original Opening accounting failed: Missing accounts', {
-                rawMaterialInvId,
-                wipId,
-                availableAccounts: state.accounts.map(a => a.name)
-            });
+        try {
+            // Save to Firestore first and get the document ID
+            const docRef = await addDoc(collection(db, 'originalOpenings'), { ...cleanedData, createdAt: serverTimestamp() });
+            console.log('✅ Original Opening saved to Firebase with ID:', docRef.id);
+            
+            // Update the opening with Firestore document ID for consistency
+            const openingWithFirestoreId = {
+                ...openingWithFactory,
+                id: docRef.id
+            };
+            
+            // Create accounting entries for raw material consumption
+            const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
+            const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
+            
+            if (rawMaterialInvId && wipId) {
+                const transactionId = `OO-${docRef.id}`;
+                const entries: Omit<LedgerEntry, 'id'>[] = [
+                    // Credit Raw Materials (reduce inventory)
+                    {
+                        date: openingWithFactory.date,
+                        transactionId,
+                        transactionType: TransactionType.ORIGINAL_OPENING,
+                        accountId: rawMaterialInvId,
+                        accountName: 'Inventory - Raw Materials',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: openingWithFactory.totalValue,
+                        debit: 0,
+                        credit: openingWithFactory.totalValue,
+                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                        factoryId: openingWithFactory.factoryId
+                    },
+                    // Debit WIP (transfer to work in progress)
+                    {
+                        date: openingWithFactory.date,
+                        transactionId,
+                        transactionType: TransactionType.ORIGINAL_OPENING,
+                        accountId: wipId,
+                        accountName: 'Work in Progress (Inventory)',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: openingWithFactory.totalValue,
+                        debit: openingWithFactory.totalValue,
+                        credit: 0,
+                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                        factoryId: openingWithFactory.factoryId
+                    }
+                ];
+                await postTransaction(entries);
+            } else {
+                console.error('❌ Original Opening accounting failed: Missing accounts', {
+                    rawMaterialInvId,
+                    wipId,
+                    availableAccounts: state.accounts.map(a => a.name)
+                });
+            }
+            
+            // Note: onSnapshot listener will automatically update local state when Firestore document is created
+            // No need to dispatch here as it would cause duplicate entries or race conditions
+        } catch (error) {
+            console.error('❌ Error saving original opening to Firestore:', error);
+            alert(`Failed to save opening: ${error}. Please check the console for details.`);
+            throw error; // Re-throw so caller knows it failed
         }
-        
-        dispatch({ type: 'ADD_ORIGINAL_OPENING', payload: openingWithFactory });
     };
     const deleteOriginalOpening = async (id: string) => {
         // Delete ledger entries first

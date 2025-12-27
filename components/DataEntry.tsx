@@ -134,6 +134,7 @@ export const DataEntry: React.FC = () => {
     const [ooDate, setOoDate] = useState(new Date().toISOString().split('T')[0]);
     const [ooSupplier, setOoSupplier] = useState('');
     const [ooType, setOoType] = useState(''); // Stores originalTypeId
+    const [ooProduct, setOoProduct] = useState(''); // Stores originalProductId
     const [ooBatch, setOoBatch] = useState('');
     const [ooQty, setOoQty] = useState('');
     const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
@@ -551,18 +552,51 @@ export const DataEntry: React.FC = () => {
         });
     }, [ooSupplier, state.purchases, state.originalTypes]);
 
+    // Products available for the selected supplier and original type
+    const productsForSelection = useMemo(() => {
+        if (!ooSupplier || !ooType) return [];
+        
+        // Get all unique original products from purchases for this supplier and type
+        const productIds = new Set<string>();
+        
+        state.purchases
+            .filter(p => p.supplierId === ooSupplier)
+            .forEach(p => {
+                if (p.items && p.items.length > 0) {
+                    p.items.forEach(item => {
+                        if ((item.originalTypeId || item.originalType) === ooType && item.originalProductId) {
+                            productIds.add(item.originalProductId);
+                        }
+                    });
+                } else if ((p.originalTypeId || p.originalType) === ooType && p.originalProductId) {
+                    productIds.add(p.originalProductId);
+                }
+            });
+        
+        // Return products that match the IDs found in purchases
+        return state.originalProducts
+            .filter(p => productIds.has(p.id) && p.originalTypeId === ooType)
+            .map(p => ({ id: p.id, name: p.name }));
+    }, [ooSupplier, ooType, state.purchases, state.originalProducts]);
+
     const batchesForSelection = useMemo(() => {
         if (!ooSupplier || !ooType) return [];
         // Only show batches with remaining stock > 0.01 (strict by purchase ID)
         return state.purchases
             .filter(p => {
                 if (p.supplierId !== ooSupplier) return false;
-                // For multi-item purchases, check if any item matches the selected type
+                // For multi-item purchases, check if any item matches the selected type and product (if selected)
                 if (p.items && p.items.length > 0) {
-                    return p.items.some(item => (item.originalTypeId || item.originalType) === ooType);
+                    return p.items.some(item => {
+                        const typeMatches = (item.originalTypeId || item.originalType) === ooType;
+                        const productMatches = !ooProduct || item.originalProductId === ooProduct;
+                        return typeMatches && productMatches;
+                    });
                 }
                 // For legacy single-item purchases, check top-level fields
-                return (p.originalTypeId || p.originalType) === ooType;
+                const typeMatches = (p.originalTypeId || p.originalType) === ooType;
+                const productMatches = !ooProduct || p.originalProductId === ooProduct;
+                return typeMatches && productMatches;
             })
             .filter(p => {
                 // Calculate opened and sold for this purchase
@@ -588,14 +622,18 @@ export const DataEntry: React.FC = () => {
                 return remaining > 0.01;
             })
             .map(p => ({ id: p.batchNumber, name: p.batchNumber }));
-    }, [ooSupplier, ooType, state.purchases, state.originalOpenings, state.salesInvoices, state.directSales]);
+    }, [ooSupplier, ooType, ooProduct, state.purchases, state.originalOpenings, state.salesInvoices, state.directSales]);
 
     const availableStockInfo = useMemo(() => {
         if (!ooSupplier || !ooType) return { qty: 0, weight: 0, avgCost: 0 };
 
         // Helper to get consistent type key
         const getTypeKey = (p: any) => p.originalTypeId || p.originalType;
-        const itemMatchesType = (item: any) => (item.originalTypeId || item.originalType) === ooType;
+        const itemMatchesType = (item: any) => {
+            const typeMatches = (item.originalTypeId || item.originalType) === ooType;
+            const productMatches = !ooProduct || item.originalProductId === ooProduct;
+            return typeMatches && productMatches;
+        };
 
         // Filter purchases by Supplier AND OriginalType (ID or name) AND (Optional) BatchNumber
         // For multi-item purchases, check items[] array; for legacy, check top-level fields
@@ -610,10 +648,11 @@ export const DataEntry: React.FC = () => {
             return false;
         });
 
-        // Filter previous openings by Supplier AND OriginalTypeID AND (Optional) BatchNumber
+        // Filter previous openings by Supplier AND OriginalTypeID AND (Optional) OriginalProductID AND (Optional) BatchNumber
         const relevantOpenings = state.originalOpenings.filter(o => 
             o.supplierId === ooSupplier && 
             o.originalType === ooType &&
+            (!ooProduct || o.originalProductId === ooProduct) &&
             (!ooBatch || o.batchNumber === ooBatch)
         );
 
@@ -622,7 +661,18 @@ export const DataEntry: React.FC = () => {
             inv.status === 'Posted' && inv.items.some(item => {
                 // Find purchase for item
                 const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
-                return purchase && purchase.supplierId === ooSupplier && getTypeKey(purchase) === ooType && (!ooBatch || purchase.batchNumber === ooBatch);
+                if (!purchase || purchase.supplierId !== ooSupplier || getTypeKey(purchase) !== ooType) return false;
+                if (ooBatch && purchase.batchNumber !== ooBatch) return false;
+                // Check product match if product is selected
+                if (ooProduct) {
+                    if (purchase.items && purchase.items.length > 0) {
+                        const matchingItem = purchase.items.find(itemMatchesType);
+                        if (!matchingItem) return false;
+                    } else if (purchase.originalProductId !== ooProduct) {
+                        return false;
+                    }
+                }
+                return true;
             })
         );
 
@@ -631,6 +681,15 @@ export const DataEntry: React.FC = () => {
             inv.items.forEach(item => {
                 const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
                 if (purchase && purchase.supplierId === ooSupplier && getTypeKey(purchase) === ooType && (!ooBatch || purchase.batchNumber === ooBatch)) {
+                    // Check product match if product is selected
+                    if (ooProduct) {
+                        if (purchase.items && purchase.items.length > 0) {
+                            const matchingItem = purchase.items.find(itemMatchesType);
+                            if (!matchingItem) return;
+                        } else if (purchase.originalProductId !== ooProduct) {
+                            return;
+                        }
+                    }
                     acc.qty += item.qty;
                     acc.weight += item.totalKg;
                 }
@@ -674,7 +733,7 @@ export const DataEntry: React.FC = () => {
             weight: currentWeight, 
             avgCost: avgCostPerKg 
         };
-    }, [ooSupplier, ooType, ooBatch, state.purchases, state.originalOpenings, state.salesInvoices]);
+    }, [ooSupplier, ooType, ooProduct, ooBatch, state.purchases, state.originalOpenings, state.salesInvoices]);
 
     const handleOpeningSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -699,6 +758,7 @@ export const DataEntry: React.FC = () => {
             date: ooDate,
             supplierId: ooSupplier,
             originalType: ooType,
+            originalProductId: ooProduct || undefined,
             batchNumber: ooBatch,
             qtyOpened: qtyVal,
             weightOpened: finalWeight,
@@ -712,24 +772,62 @@ export const DataEntry: React.FC = () => {
         // Reset Form
         setOoQty('');
         setOoBatch('');
+        setOoProduct('');
         setOoType('');
         
         // No alert - user can add more
     };
     
     // Complete/Submit all staged openings
-    const handleCompleteOriginalOpenings = () => {
+    const handleCompleteOriginalOpenings = async () => {
         if (stagedOriginalOpenings.length === 0) {
             alert('No openings to submit');
             return;
         }
         
-        stagedOriginalOpenings.forEach(opening => {
-            addOriginalOpening(opening);
-        });
+        // Validate all openings before processing
+        const invalidOpenings = stagedOriginalOpenings.filter(o => 
+            !o.supplierId || !o.originalType || !o.date || o.qtyOpened <= 0
+        );
         
-        setStagedOriginalOpenings([]);
-        alert(`${stagedOriginalOpenings.length} opening(s) recorded successfully!`);
+        if (invalidOpenings.length > 0) {
+            alert(`Cannot save: ${invalidOpenings.length} opening(s) have missing or invalid data. Please check Supplier, Original Type, Date, and Quantity.`);
+            return;
+        }
+        
+        const count = stagedOriginalOpenings.length;
+        let successCount = 0;
+        let errorCount = 0;
+        
+        try {
+            // Process each opening sequentially to ensure proper saving
+            for (const opening of stagedOriginalOpenings) {
+                try {
+                    await addOriginalOpening(opening);
+                    successCount++;
+                } catch (error) {
+                    console.error('Error adding opening:', error);
+                    errorCount++;
+                }
+            }
+            
+            // Clear staged openings only if at least some were successful
+            if (successCount > 0) {
+                setStagedOriginalOpenings([]);
+            }
+            
+            // Show appropriate message
+            if (errorCount === 0) {
+                alert(`${successCount} opening(s) recorded successfully!`);
+            } else if (successCount > 0) {
+                alert(`${successCount} opening(s) recorded successfully, ${errorCount} failed. Please check the console for details.`);
+            } else {
+                alert(`Failed to record openings. Please check the console for details.`);
+            }
+        } catch (error) {
+            console.error('Error completing openings:', error);
+            alert(`An error occurred while saving openings: ${error}. Please check the console for details.`);
+        }
     };
     
     const handleRemoveStagedOpening = (id: string) => {
@@ -2085,7 +2183,7 @@ export const DataEntry: React.FC = () => {
                                                         <EntitySelector
                                                             entities={suppliersWithStock}
                                                             selectedId={ooSupplier}
-                                                            onSelect={(id) => { setOoSupplier(id); setOoType(''); setOoBatch(''); }}
+                                                            onSelect={(id) => { setOoSupplier(id); setOoType(''); setOoProduct(''); setOoBatch(''); }}
                                                             placeholder="Select Supplier..."
                                                             onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.SUPPLIER })}
                                                         />
@@ -2097,22 +2195,32 @@ export const DataEntry: React.FC = () => {
                                                         <EntitySelector
                                                             entities={typesForSupplier}
                                                             selectedId={ooType}
-                                                            onSelect={(id) => { setOoType(id); setOoBatch(''); }}
+                                                            onSelect={(id) => { setOoType(id); setOoProduct(''); setOoBatch(''); }}
                                                             placeholder="Select Type..."
                                                             disabled={!ooSupplier}
                                                             onQuickAdd={() => openQuickAdd(setupConfigs.originalTypeConfig)}
                                                         />
                                                     </div>
                                                     <div>
-                                                        <label className="block text-sm font-medium text-slate-600 mb-1">Batch Number (Optional)</label>
+                                                        <label className="block text-sm font-medium text-slate-600 mb-1">Original Product (Optional)</label>
                                                         <EntitySelector
-                                                            entities={batchesForSelection}
-                                                            selectedId={ooBatch}
-                                                            onSelect={setOoBatch}
-                                                            placeholder="All Batches..."
+                                                            entities={productsForSelection}
+                                                            selectedId={ooProduct}
+                                                            onSelect={(id) => { setOoProduct(id); setOoBatch(''); }}
+                                                            placeholder="All Products..."
                                                             disabled={!ooType}
                                                         />
                                                     </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-slate-600 mb-1">Batch Number (Optional)</label>
+                                                    <EntitySelector
+                                                        entities={batchesForSelection}
+                                                        selectedId={ooBatch}
+                                                        onSelect={setOoBatch}
+                                                        placeholder="All Batches..."
+                                                        disabled={!ooType}
+                                                    />
                                                 </div>
                                                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex justify-between items-center">
                                                     <div>

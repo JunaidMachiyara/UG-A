@@ -449,6 +449,7 @@ export interface OriginalOpening {
     date: string;
     supplierId: string; // or 'INTERNAL' for Bales Opening
     originalType: string; // Stores originalTypeId (e.g., "OT-001"), not the name!
+    originalProductId?: string; // Optional original product ID
     batchNumber?: string; // Optional batch tracking
     qtyOpened: number;
     weightOpened: number; // Kg

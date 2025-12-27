@@ -4,7 +4,7 @@ import { useData } from '../context/DataContext';
 import { TransactionType, AccountType, Currency, PartnerType, LedgerEntry } from '../types';
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
-import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale } from 'lucide-react';
+import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale, Printer, ChevronUp, ChevronDown } from 'lucide-react';
 import { db } from '../services/firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
@@ -73,6 +73,10 @@ export const Accounting: React.FC = () => {
     const [iaFilterCode, setIaFilterCode] = useState('');
     const [iaFilterCategory, setIaFilterCategory] = useState('');
     const [iaFilterItemName, setIaFilterItemName] = useState('');
+    
+    // Table sorting state for IA
+    const [iaSortColumn, setIaSortColumn] = useState<string>('');
+    const [iaSortDirection, setIaSortDirection] = useState<'asc' | 'desc'>('asc');
 
     // Computed filter options for IA
     const iaFilterOptions = useMemo(() => {
@@ -1579,13 +1583,73 @@ export const Accounting: React.FC = () => {
                         {/* New Transaction Type Forms */}
                         {vType === 'IA' && (() => {
                             // Filter finished goods items
-                            const filteredItems = state.items.filter(item => {
+                            let filteredItems = state.items.filter(item => {
                                 const matchesCode = !iaFilterCode || item.code === iaFilterCode;
                                 const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
                                 const matchesCategory = !iaFilterCategory || categoryName === iaFilterCategory;
                                 const matchesName = !iaFilterItemName || item.name === iaFilterItemName;
                                 return matchesCode && matchesCategory && matchesName;
                             });
+                            
+                            // Handle column sorting
+                            const handleSort = (column: string) => {
+                                if (iaSortColumn === column) {
+                                    // Toggle direction if same column
+                                    setIaSortDirection(iaSortDirection === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                    // New column, default to ascending
+                                    setIaSortColumn(column);
+                                    setIaSortDirection('asc');
+                                }
+                            };
+                            
+                            // Apply sorting
+                            if (iaSortColumn) {
+                                filteredItems = [...filteredItems].sort((a, b) => {
+                                    let aValue: any;
+                                    let bValue: any;
+                                    
+                                    switch (iaSortColumn) {
+                                        case 'code':
+                                            aValue = a.code || '';
+                                            bValue = b.code || '';
+                                            break;
+                                        case 'name':
+                                            aValue = a.name || '';
+                                            bValue = b.name || '';
+                                            break;
+                                        case 'category':
+                                            const aCat = state.categories.find(c => c.id === a.category || c.name === a.category)?.name || a.category || '';
+                                            const bCat = state.categories.find(c => c.id === b.category || c.name === b.category)?.name || b.category || '';
+                                            aValue = aCat;
+                                            bValue = bCat;
+                                            break;
+                                        case 'packageSize':
+                                            aValue = a.weightPerUnit || 0;
+                                            bValue = b.weightPerUnit || 0;
+                                            break;
+                                        case 'quantity':
+                                            aValue = a.stockQty || 0;
+                                            bValue = b.stockQty || 0;
+                                            break;
+                                        case 'worth':
+                                            aValue = (a.stockQty || 0) * (a.avgCost || 0);
+                                            bValue = (b.stockQty || 0) * (b.avgCost || 0);
+                                            break;
+                                        default:
+                                            return 0;
+                                    }
+                                    
+                                    // Handle string vs number comparison
+                                    if (typeof aValue === 'string' && typeof bValue === 'string') {
+                                        const comparison = aValue.localeCompare(bValue);
+                                        return iaSortDirection === 'asc' ? comparison : -comparison;
+                                    } else {
+                                        const comparison = (aValue as number) - (bValue as number);
+                                        return iaSortDirection === 'asc' ? comparison : -comparison;
+                                    }
+                                });
+                            }
 
                             const updateItemAdjustment = (itemId: string, field: 'adjustmentQty' | 'adjustmentWorth', value: string) => {
                                 setIaItemAdjustments(prev => ({
@@ -1598,11 +1662,144 @@ export const Accounting: React.FC = () => {
                                 }));
                             };
 
+                            // Print/Export function for Inventory Adjustment table
+                            const handlePrintInventoryAdjustment = () => {
+                                if (filteredItems.length === 0) {
+                                    alert('No items to print');
+                                    return;
+                                }
+
+                                // Prepare data for printing
+                                const printData = filteredItems.map(item => {
+                                    const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
+                                    const currentWorth = (item.stockQty || 0) * (item.avgCost || 0);
+                                    const adjustment = iaItemAdjustments[item.id] || { itemId: item.id, adjustmentQty: '', adjustmentWorth: '' };
+                                    
+                                    return {
+                                        'Code': item.code,
+                                        'Item Name': item.name,
+                                        'Category': categoryName,
+                                        'Package Size (Kg)': (item.weightPerUnit || 0).toFixed(2),
+                                        'Quantity in Hand': (item.stockQty || 0).toFixed(2),
+                                        'Worth (USD)': currentWorth.toFixed(2),
+                                        'Adjustment Quantity': adjustment.adjustmentQty !== '' ? String(adjustment.adjustmentQty) : '0',
+                                        'Adjustment Worth (USD)': adjustment.adjustmentWorth !== '' ? parseFloat(String(adjustment.adjustmentWorth)).toFixed(2) : '0.00'
+                                    };
+                                });
+
+                                // Create CSV content
+                                const headers = Object.keys(printData[0]);
+                                const csvRows = [
+                                    headers.join(','),
+                                    ...printData.map(row => 
+                                        headers.map(header => {
+                                            const value = row[header as keyof typeof row];
+                                            // Escape commas and quotes in CSV
+                                            if (typeof value === 'string' && (value.includes(',') || value.includes('"') || value.includes('\n'))) {
+                                                return `"${value.replace(/"/g, '""')}"`;
+                                            }
+                                            return value;
+                                        }).join(',')
+                                    )
+                                ];
+                                const csvContent = csvRows.join('\n');
+
+                                // Create a blob and download
+                                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                const link = document.createElement('a');
+                                const url = URL.createObjectURL(blob);
+                                link.setAttribute('href', url);
+                                link.setAttribute('download', `Inventory_Adjustment_${new Date().toISOString().split('T')[0]}.csv`);
+                                link.style.visibility = 'hidden';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+
+                                // Also create a printable HTML version
+                                const printWindow = window.open('', '_blank');
+                                if (printWindow) {
+                                    const htmlContent = `
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <title>Inventory Adjustment - Finished Goods</title>
+                                            <style>
+                                                body { font-family: Arial, sans-serif; margin: 20px; }
+                                                h1 { color: #1e40af; margin-bottom: 10px; }
+                                                .info { margin-bottom: 20px; color: #666; }
+                                                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                                                th { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-weight: bold; }
+                                                td { border: 1px solid #cbd5e1; padding: 8px; }
+                                                .text-right { text-align: right; }
+                                                .bg-yellow { background-color: #fef3c7; }
+                                                .footer { margin-top: 30px; font-size: 12px; color: #666; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <h1>Inventory Adjustment - Finished Goods</h1>
+                                            <div class="info">
+                                                <p><strong>Date:</strong> ${date || 'N/A'}</p>
+                                                <p><strong>Reason:</strong> ${iaReason || 'N/A'}</p>
+                                                <p><strong>Voucher ID:</strong> ${voucherNo}</p>
+                                            </div>
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Code</th>
+                                                        <th>Item Name</th>
+                                                        <th>Category</th>
+                                                        <th class="text-right">Package Size (Kg)</th>
+                                                        <th class="text-right">Quantity in Hand</th>
+                                                        <th class="text-right">Worth (USD)</th>
+                                                        <th class="text-right bg-yellow">Adjustment Quantity</th>
+                                                        <th class="text-right bg-yellow">Adjustment Worth (USD)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    ${printData.map(row => `
+                                                        <tr>
+                                                            <td>${row['Code']}</td>
+                                                            <td>${row['Item Name']}</td>
+                                                            <td>${row['Category']}</td>
+                                                            <td class="text-right">${row['Package Size (Kg)']}</td>
+                                                            <td class="text-right">${row['Quantity in Hand']}</td>
+                                                            <td class="text-right">$${row['Worth (USD)']}</td>
+                                                            <td class="text-right bg-yellow">${row['Adjustment Quantity']}</td>
+                                                            <td class="text-right bg-yellow">$${row['Adjustment Worth (USD)']}</td>
+                                                        </tr>
+                                                    `).join('')}
+                                                </tbody>
+                                            </table>
+                                            <div class="footer">
+                                                <p>Generated on: ${new Date().toLocaleString()}</p>
+                                            </div>
+                                        </body>
+                                        </html>
+                                    `;
+                                    printWindow.document.write(htmlContent);
+                                    printWindow.document.close();
+                                    printWindow.focus();
+                                    // Wait for content to load, then print
+                                    setTimeout(() => {
+                                        printWindow.print();
+                                    }, 250);
+                                }
+                            };
+
                             return (
                             <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
-                                <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                                <div className="flex justify-between items-center">
+                                    <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
                                         <Package size={20} /> Inventory Adjustment (Finished Goods)
-                                </h3>
+                                    </h3>
+                                    <button
+                                        onClick={handlePrintInventoryAdjustment}
+                                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
+                                        title="Print/Export Table"
+                                    >
+                                        <Printer size={18} /> Print/Export
+                                    </button>
+                                </div>
                                     
                                     {/* Filters */}
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">
@@ -1653,12 +1850,72 @@ export const Accounting: React.FC = () => {
                                             <table className="w-full text-sm">
                                                 <thead className="bg-slate-100 border-b-2 border-slate-300">
                                                     <tr>
-                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Code</th>
-                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Item Name</th>
-                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Category</th>
-                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Package Size (Kg)</th>
-                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Quantity in Hand</th>
-                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Worth (USD)</th>
+                                                        <th 
+                                                            className="px-4 py-3 text-left font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('code')}
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                Code
+                                                                {iaSortColumn === 'code' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
+                                                        <th 
+                                                            className="px-4 py-3 text-left font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('name')}
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                Item Name
+                                                                {iaSortColumn === 'name' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
+                                                        <th 
+                                                            className="px-4 py-3 text-left font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('category')}
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                Category
+                                                                {iaSortColumn === 'category' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
+                                                        <th 
+                                                            className="px-4 py-3 text-right font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('packageSize')}
+                                                        >
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                Package Size (Kg)
+                                                                {iaSortColumn === 'packageSize' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
+                                                        <th 
+                                                            className="px-4 py-3 text-right font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('quantity')}
+                                                        >
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                Quantity in Hand
+                                                                {iaSortColumn === 'quantity' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
+                                                        <th 
+                                                            className="px-4 py-3 text-right font-bold text-slate-700 cursor-pointer hover:bg-slate-200 select-none transition-colors"
+                                                            onClick={() => handleSort('worth')}
+                                                        >
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                Worth (USD)
+                                                                {iaSortColumn === 'worth' && (
+                                                                    iaSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                                )}
+                                                            </div>
+                                                        </th>
                                                         <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
                                                         <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
                                                     </tr>
