@@ -5,6 +5,8 @@ import { TransactionType, AccountType, Currency, PartnerType, LedgerEntry } from
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale } from 'lucide-react';
+import { db } from '../services/firebase';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD';
 
@@ -71,6 +73,24 @@ export const Accounting: React.FC = () => {
     const [iaFilterCode, setIaFilterCode] = useState('');
     const [iaFilterCategory, setIaFilterCategory] = useState('');
     const [iaFilterItemName, setIaFilterItemName] = useState('');
+
+    // Computed filter options for IA
+    const iaFilterOptions = useMemo(() => {
+        const codes = Array.from(new Set(state.items.map(i => i.code))).sort();
+        const categories = Array.from(new Set(
+            state.items.map(i => {
+                const cat = state.categories.find(c => c.id === i.category || c.name === i.category);
+                return cat?.name || i.category;
+            })
+        )).filter(Boolean).sort();
+        const itemNames = Array.from(new Set(state.items.map(i => i.name))).sort();
+        
+        return {
+            codes: codes.map(code => ({ id: code, name: code })),
+            categories: categories.map(cat => ({ id: cat, name: cat })),
+            itemNames: itemNames.map(name => ({ id: name, name: name }))
+        };
+    }, [state.items, state.categories]);
 
     // Original Stock Adjustment - Table-Based Design
     interface OriginalStockAdjustment {
@@ -376,6 +396,9 @@ export const Accounting: React.FC = () => {
     // --- Actions ---
     const handleSave = async () => {
         if (!date) return alert("Date is required");
+        
+        // Variable to store item stock update function for IA vouchers
+        let pendingItemUpdates: (() => Promise<void>) | null = null;
         if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
         if (vType !== 'JV' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
@@ -620,6 +643,9 @@ export const Accounting: React.FC = () => {
                 return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
             }
             
+            // Store item updates for Firestore (to update after posting ledger entries)
+            const itemStockUpdates: Array<{ itemId: string; newStockQty: number; newAvgCost: number }> = [];
+            
             // Process each item with adjustment
             for (const [itemId, adj] of itemsWithAdjustments) {
                 const item = state.items.find(i => i.id === itemId);
@@ -638,6 +664,29 @@ export const Accounting: React.FC = () => {
                     continue; // Skip if both are 0
                 }
                 
+                // Calculate new stock quantity
+                const newStockQty = item.stockQty + adjustmentQty;
+                
+                // Calculate new average cost: if worth is provided, recalculate avgCost
+                let newAvgCost = item.avgCost || 0;
+                if (adjustmentWorth !== 0 && adjustmentQty !== 0) {
+                    // If both worth and qty are provided, recalculate avgCost
+                    const currentValue = item.stockQty * (item.avgCost || 0);
+                    const newValue = currentValue + adjustmentWorth;
+                    newAvgCost = newStockQty > 0 ? newValue / newStockQty : item.avgCost || 0;
+                } else if (adjustmentQty !== 0 && adjustmentWorth === 0) {
+                    // If only qty is provided, keep existing avgCost
+                    newAvgCost = item.avgCost || 0;
+                } else if (adjustmentWorth !== 0 && adjustmentQty === 0) {
+                    // If only worth is provided (value adjustment), recalculate avgCost
+                    const currentValue = item.stockQty * (item.avgCost || 0);
+                    const newValue = currentValue + adjustmentWorth;
+                    newAvgCost = item.stockQty > 0 ? newValue / item.stockQty : item.avgCost || 0;
+                }
+                
+                // Store update for later
+                itemStockUpdates.push({ itemId, newStockQty, newAvgCost });
+                
                 // Determine if increase or decrease based on sign
                 const isIncrease = (adjustmentQty > 0) || (adjustmentWorth > 0);
                 
@@ -649,6 +698,25 @@ export const Accounting: React.FC = () => {
                     entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
                 }
             }
+            
+            // Store item updates to execute after posting ledger entries
+            // We'll call this after postTransaction succeeds
+            pendingItemUpdates = async () => {
+                for (const update of itemStockUpdates) {
+                    try {
+                        const itemRef = doc(db, 'items', update.itemId);
+                        await updateDoc(itemRef, {
+                            stockQty: update.newStockQty,
+                            avgCost: update.newAvgCost,
+                            updatedAt: serverTimestamp()
+                        });
+                        console.log(`✅ Item ${update.itemId} stock updated: Qty=${update.newStockQty}, AvgCost=${update.newAvgCost.toFixed(2)}`);
+                    } catch (error) {
+                        console.error(`❌ Error updating item ${update.itemId} in Firestore:`, error);
+                        alert(`Warning: Failed to update stock for item ${update.itemId}. Please check the ledger and update manually if needed.`);
+                    }
+                }
+            };
         } else if (vType === 'IAO') {
             // Original Stock Adjustment - Table-Based Design
             if (!iaoReason) return alert("Reason is required for original stock adjustment");
@@ -848,6 +916,12 @@ export const Accounting: React.FC = () => {
         }
 
         await postTransaction(entries);
+        
+        // Update item stocks in Firestore if this was an IA voucher
+        if (pendingItemUpdates) {
+            await pendingItemUpdates();
+        }
+        
         const wasEditing = !!transactionIdToDelete;
         alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
         
@@ -1506,10 +1580,10 @@ export const Accounting: React.FC = () => {
                         {vType === 'IA' && (() => {
                             // Filter finished goods items
                             const filteredItems = state.items.filter(item => {
-                                const matchesCode = !iaFilterCode || item.code.toLowerCase().includes(iaFilterCode.toLowerCase());
+                                const matchesCode = !iaFilterCode || item.code === iaFilterCode;
                                 const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
-                                const matchesCategory = !iaFilterCategory || categoryName.toLowerCase().includes(iaFilterCategory.toLowerCase());
-                                const matchesName = !iaFilterItemName || item.name.toLowerCase().includes(iaFilterItemName.toLowerCase());
+                                const matchesCategory = !iaFilterCategory || categoryName === iaFilterCategory;
+                                const matchesName = !iaFilterItemName || item.name === iaFilterItemName;
                                 return matchesCode && matchesCategory && matchesName;
                             });
 
@@ -1525,43 +1599,40 @@ export const Accounting: React.FC = () => {
                             };
 
                             return (
-                                <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
-                                    <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                            <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
+                                <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
                                         <Package size={20} /> Inventory Adjustment (Finished Goods)
-                                    </h3>
+                                </h3>
                                     
                                     {/* Filters */}
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">
-                                        <div>
+                                    <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Code</label>
-                                            <input 
-                                                type="text" 
-                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
-                                                value={iaFilterCode} 
-                                                onChange={e => setIaFilterCode(e.target.value)} 
-                                                placeholder="Search code..."
-                                            />
-                                        </div>
-                                        <div>
+                                        <EntitySelector 
+                                                entities={[{ id: '', name: 'All Codes' }, ...iaFilterOptions.codes]} 
+                                                selectedId={iaFilterCode} 
+                                                onSelect={(id) => setIaFilterCode(id || '')} 
+                                                placeholder="Select or search code..."
+                                        />
+                                    </div>
+                                    <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Category</label>
-                                            <input 
-                                                type="text" 
-                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
-                                                value={iaFilterCategory} 
-                                                onChange={e => setIaFilterCategory(e.target.value)} 
-                                                placeholder="Search category..."
+                                            <EntitySelector 
+                                                entities={[{ id: '', name: 'All Categories' }, ...iaFilterOptions.categories]} 
+                                                selectedId={iaFilterCategory} 
+                                                onSelect={(id) => setIaFilterCategory(id || '')} 
+                                                placeholder="Select or search category..."
                                             />
-                                        </div>
-                                        <div>
+                                    </div>
+                                    <div>
                                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Item Name</label>
-                                            <input 
-                                                type="text" 
-                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
-                                                value={iaFilterItemName} 
-                                                onChange={e => setIaFilterItemName(e.target.value)} 
-                                                placeholder="Search item name..."
-                                            />
-                                        </div>
+                                            <EntitySelector 
+                                                entities={[{ id: '', name: 'All Items' }, ...iaFilterOptions.itemNames]} 
+                                                selectedId={iaFilterItemName} 
+                                                onSelect={(id) => setIaFilterItemName(id || '')} 
+                                                placeholder="Select or search item name..."
+                                        />
+                                    </div>
                                     </div>
 
                                     {/* Reason Field */}
@@ -1630,12 +1701,12 @@ export const Accounting: React.FC = () => {
                                                     })}
                                                 </tbody>
                                             </table>
-                                        </div>
+                                </div>
                                         {filteredItems.length === 0 && (
                                             <div className="p-8 text-center text-slate-500">
                                                 No items found matching the filters.
-                                            </div>
-                                        )}
+                            </div>
+                        )}
                                     </div>
                                 </div>
                             );
@@ -2128,8 +2199,8 @@ export const Accounting: React.FC = () => {
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                         <div className="overflow-x-auto">
                             <table className="w-full text-left text-sm min-w-full">
-                                <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
-                                    <tr>
+                            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
+                                <tr>
                                         <th className="px-4 py-4 whitespace-nowrap">Date</th>
                                         <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
                                         <th className="px-4 py-4 whitespace-nowrap min-w-[200px]">Account</th>
@@ -2140,21 +2211,21 @@ export const Accounting: React.FC = () => {
                                         <th className="px-4 py-4 text-right whitespace-nowrap">Credit ($)</th>
                                         <th className="px-4 py-4 min-w-[300px]">Narration</th>
                                         <th className="px-4 py-4 text-center whitespace-nowrap">Manage</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-200 text-slate-700">
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 text-slate-700">
                                     {filteredLedger.map((entry) => {
                                         // Check if this accountId is a partner
                                         const isPartner = state.partners.some(p => p.id === entry.accountId);
                                         const partner = state.partners.find(p => p.id === entry.accountId);
                                         
                                         return (
-                                        <tr key={entry.id} className="hover:bg-slate-50 group">
+                                    <tr key={entry.id} className="hover:bg-slate-50 group">
                                             <td className="px-4 py-4 whitespace-nowrap">{new Date(entry.date).toLocaleDateString()}</td>
                                             <td className="px-4 py-4 font-mono text-xs text-slate-500 whitespace-nowrap">
-                                                <div className="font-bold text-slate-700">{entry.transactionId}</div>
-                                                <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
-                                            </td>
+                                            <div className="font-bold text-slate-700">{entry.transactionId}</div>
+                                            <div className="text-[10px] bg-slate-100 inline-block px-1 rounded">{entry.transactionType}</div>
+                                        </td>
                                             <td className="px-4 py-4 font-medium">{entry.accountName}</td>
                                             <td className="px-4 py-4 whitespace-nowrap">
                                                 {isPartner && partner ? (
@@ -2166,25 +2237,25 @@ export const Accounting: React.FC = () => {
                                                 )}
                                             </td>
                                             <td className="px-4 py-4 text-right font-mono bg-blue-50/30 whitespace-nowrap">
-                                                {entry.fcyAmount ? (
-                                                    <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
-                                                ) : '-'}
-                                            </td>
+                                            {entry.fcyAmount ? (
+                                                <span>{CURRENCY_SYMBOLS[entry.currency] || entry.currency} {entry.fcyAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                            ) : '-'}
+                                        </td>
                                             <td className="px-4 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{entry.exchangeRate !== 1 ? entry.exchangeRate.toFixed(4) : '-'}</td>
                                             <td className="px-4 py-4 text-right font-mono whitespace-nowrap">{entry.debit > 0 ? entry.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                                             <td className="px-4 py-4 text-right font-mono whitespace-nowrap">{entry.credit > 0 ? entry.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                                             <td className="px-4 py-4 text-slate-500">{entry.narration}</td>
                                             <td className="px-4 py-4 text-center whitespace-nowrap">
-                                                <div className="flex justify-center gap-2">
-                                                    <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
-                                                    <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
-                                                </div>
-                                            </td>
-                                        </tr>
+                                            <div className="flex justify-center gap-2">
+                                                <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
+                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
+                                            </div>
+                                        </td>
+                                    </tr>
                                         );
                                     })}
-                                </tbody>
-                            </table>
+                            </tbody>
+                        </table>
                         </div>
                     </div>
                 </div>
