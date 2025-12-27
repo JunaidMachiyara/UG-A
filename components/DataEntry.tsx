@@ -975,7 +975,14 @@ export const DataEntry: React.FC = () => {
             items = purchase.items.map(item => ({
                 ...item,
                 originalProductId: item.originalProductId || undefined,
-                subSupplierId: item.subSupplierId || undefined // Preserve null/undefined, convert empty string
+                subSupplierId: item.subSupplierId || undefined, // Preserve null/undefined, convert empty string
+                weightPurchased: item.weightPurchased || 0,
+                qtyPurchased: item.qtyPurchased || 0,
+                costPerKgFCY: item.costPerKgFCY || 0,
+                discountPerKgFCY: item.discountPerKgFCY || 0,
+                surchargePerKgFCY: item.surchargePerKgFCY || 0,
+                totalCostFCY: item.totalCostFCY || 0,
+                totalCostUSD: item.totalCostUSD || 0
             }));
         } else if (purchase.originalTypeId) {
             // Legacy single-type purchase – map legacy fields into one cart item
@@ -2637,23 +2644,23 @@ export const DataEntry: React.FC = () => {
                                                             <tr key={item.id} className="border-t border-slate-200 hover:bg-slate-50">
                                                                 <td className="p-2 font-medium text-slate-700">{item.originalType}</td>
                                                                 <td className="p-2 font-medium text-slate-700">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td>
-                                                                <td className="p-2 text-right font-mono">{item.weightPurchased.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono">{item.costPerKgFCY.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${item.discountPerKgFCY.toFixed(2)}` : '-'}</td>
-                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${item.surchargePerKgFCY.toFixed(2)}` : '-'}</td>
-                                                                <td className="p-2 text-right font-mono font-bold">{item.totalCostFCY.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${item.totalCostUSD.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{(item.weightPurchased || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{(item.costPerKgFCY || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${(item.discountPerKgFCY || 0).toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${(item.surchargePerKgFCY || 0).toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono font-bold">{(item.totalCostFCY || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${(item.totalCostUSD || 0).toFixed(2)}</td>
                                                                 <td className="p-2 text-right"><button type="button" onClick={() => handleRemoveFromPurCart(item.id)} className="text-red-500 hover:text-red-700"><X size={16}/></button></td>
                                                             </tr>
                                                         ))}
                                                         <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
                                                             <td className="p-2">TOTALS</td>
-                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+i.weightPurchased,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+(i.weightPurchased || 0),0).toFixed(2)}</td>
                                                             <td className="p-2"></td>
                                                             <td className="p-2"></td>
                                                             <td className="p-2"></td>
-                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td>
-                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+(i.totalCostFCY || 0),0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+(i.totalCostUSD || 0),0).toFixed(2)}</td>
                                                             <td className="p-2"></td>
                                                         </tr>
                                                     </tbody>
@@ -2681,7 +2688,7 @@ export const DataEntry: React.FC = () => {
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
                                                 <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${cost.amountUSD.toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
@@ -2917,23 +2924,23 @@ export const DataEntry: React.FC = () => {
                                                         {purCart.map(item => (
                                                             <tr key={item.id} className="border-t border-slate-200 hover:bg-slate-50">
                                                                 <td className="p-2 font-medium text-slate-700">{item.originalType}</td>
-                                                                <td className="p-2 text-right font-mono">{item.weightPurchased.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono">{item.costPerKgFCY.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${item.discountPerKgFCY.toFixed(2)}` : '-'}</td>
-                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${item.surchargePerKgFCY.toFixed(2)}` : '-'}</td>
-                                                                <td className="p-2 text-right font-mono font-bold">{item.totalCostFCY.toFixed(2)}</td>
-                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${item.totalCostUSD.toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{(item.weightPurchased || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono">{(item.costPerKgFCY || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono text-green-600">{item.discountPerKgFCY ? `-${(item.discountPerKgFCY || 0).toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono text-orange-600">{item.surchargePerKgFCY ? `+${(item.surchargePerKgFCY || 0).toFixed(2)}` : '-'}</td>
+                                                                <td className="p-2 text-right font-mono font-bold">{(item.totalCostFCY || 0).toFixed(2)}</td>
+                                                                <td className="p-2 text-right font-mono font-bold text-blue-600">${(item.totalCostUSD || 0).toFixed(2)}</td>
                                                                 <td className="p-2 text-right"><button type="button" onClick={() => handleRemoveFromPurCart(item.id)} className="text-red-500 hover:text-red-700"><X size={16}/></button></td>
                                                             </tr>
                                                         ))}
                                                         <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
                                                             <td className="p-2">TOTALS</td>
-                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+i.weightPurchased,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono">{purCart.reduce((s,i)=>s+(i.weightPurchased || 0),0).toFixed(2)}</td>
                                                             <td className="p-2"></td>
                                                             <td className="p-2"></td>
                                                             <td className="p-2"></td>
-                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td>
-                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">{purCart.reduce((s,i)=>s+(i.totalCostFCY || 0),0).toFixed(2)}</td>
+                                                            <td className="p-2 text-right font-mono text-blue-700">${purCart.reduce((s,i)=>s+(i.totalCostUSD || 0),0).toFixed(2)}</td>
                                                             <td className="p-2"></td>
                                                         </tr>
                                                     </tbody>
@@ -2961,7 +2968,7 @@ export const DataEntry: React.FC = () => {
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
                                                 <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${cost.amountUSD.toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
@@ -3094,7 +3101,7 @@ export const DataEntry: React.FC = () => {
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
                                                 <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${cost.amountUSD.toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
                                     </div>
                                 </div>
 
@@ -3243,7 +3250,7 @@ export const DataEntry: React.FC = () => {
                                              <table className="w-full text-sm text-left border border-slate-200 rounded-lg overflow-hidden">
                                                  <thead className="bg-slate-50 font-bold text-slate-600 border-b border-slate-200"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2 text-right">Qty</th><th className="px-4 py-2 text-right">Total Kg</th><th className="px-4 py-2 text-right">Rate ({siCurrency})</th><th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-center">Action</th></tr></thead>
                                                  <tbody className="divide-y divide-slate-100">
-                                                     {siCart.map(item => ( <tr key={item.id} className="hover:bg-slate-50"><td className="px-4 py-2">{item.itemName}</td><td className="px-4 py-2 text-right">{item.qty}</td><td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td><td className="px-4 py-2 text-right">{item.rate.toFixed(2)}</td><td className="px-4 py-2 text-right font-bold">{item.total.toFixed(2)}</td><td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr> ))}
+                                                     {siCart.map(item => ( <tr key={item.id} className="hover:bg-slate-50"><td className="px-4 py-2">{item.itemName}</td><td className="px-4 py-2 text-right">{item.qty}</td><td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td><td className="px-4 py-2 text-right">{(item.rate || 0).toFixed(2)}</td><td className="px-4 py-2 text-right font-bold">{(item.total || 0).toFixed(2)}</td><td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr> ))}
                                                      {siCart.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 italic">No items added</td></tr>}
                                                  </tbody>
                                              </table>
@@ -3850,11 +3857,11 @@ export const DataEntry: React.FC = () => {
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Supplier</h4><div className="text-lg font-bold text-slate-800">{state.partners.find(p=>p.id===purSupplier)?.name}</div><div className="text-sm text-slate-500">{state.partners.find(p=>p.id===purSupplier)?.country}</div></div>
                                 <div><h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Logistics</h4><div className="text-sm text-slate-800 font-medium">Container: {purContainer || 'N/A'}</div><div className="text-sm text-slate-500">Div: {state.divisions.find(d=>d.id===purDivision)?.name || '-'} / {state.subDivisions.find(s=>s.id===purSubDivision)?.name || '-'}</div></div>
                             </div>
-                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3 text-right">Sub Supplier</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 text-right">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{item.weightPurchased.toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{item.totalCostFCY.toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={4}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+i.totalCostFCY,0).toFixed(2)}</td></tr></tbody></table>
+                            <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3 text-right">Sub Supplier</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 text-right">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{(item.weightPurchased || 0).toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{(item.totalCostFCY || 0).toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={4}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+(i.totalCostFCY || 0),0).toFixed(2)}</td></tr></tbody></table>
                             
                              <div className="border-t border-slate-200 pt-6"><h4 className="font-bold text-slate-700 mb-4">Landed Cost Calculation (Base USD)</h4><div className="space-y-2 text-sm max-w-sm ml-auto">
-                                <div className="flex justify-between border-b border-slate-100 pb-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toFixed(2)}</span></div>
-                                {additionalCosts.map(ac => ( <div key={ac.id} className="flex justify-between"><span className="text-slate-500">{ac.costType} ({state.partners.find(p=>p.id===ac.providerId)?.name}):</span><span className="font-mono text-slate-800">${ac.amountUSD.toFixed(2)}</span></div> ))} 
+                                <div className="flex justify-between border-b border-slate-100 pb-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purCart.reduce((s,i)=>s+(i.totalCostUSD || 0),0).toFixed(2)}</span></div>
+                                {additionalCosts.map(ac => ( <div key={ac.id} className="flex justify-between"><span className="text-slate-500">{ac.costType} ({state.partners.find(p=>p.id===ac.providerId)?.name}):</span><span className="font-mono text-slate-800">${(ac.amountUSD || 0).toFixed(2)}</span></div> ))} 
                                 <div className="flex justify-between border-t border-slate-300 pt-2 font-bold text-lg"><span className="text-blue-800">Total Landed Cost:</span><span className="font-mono text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                 <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / purCart.reduce((s,i)=>s+i.weightPurchased,0)).toFixed(3)}</span></div></div>
                              </div>

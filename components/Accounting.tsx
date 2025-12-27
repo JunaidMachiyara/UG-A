@@ -6,7 +6,7 @@ import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale } from 'lucide-react';
 
-type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'RTS' | 'WO' | 'BD';
+type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD';
 
 interface JvRow {
     id: string;
@@ -60,10 +60,29 @@ export const Accounting: React.FC = () => {
     ]);
 
     // New Transaction Types State
-    const [iaItemId, setIaItemId] = useState(''); // Inventory Adjustment - Item
-    const [iaAdjustmentType, setIaAdjustmentType] = useState<'INCREASE' | 'DECREASE'>('INCREASE');
-    const [iaQty, setIaQty] = useState('');
+    // Inventory Adjustment - New Table-Based Design
+    interface ItemAdjustment {
+        itemId: string;
+        adjustmentQty: number | '';
+        adjustmentWorth: number | '';
+    }
+    const [iaItemAdjustments, setIaItemAdjustments] = useState<Record<string, ItemAdjustment>>({});
     const [iaReason, setIaReason] = useState('');
+    const [iaFilterCode, setIaFilterCode] = useState('');
+    const [iaFilterCategory, setIaFilterCategory] = useState('');
+    const [iaFilterItemName, setIaFilterItemName] = useState('');
+
+    // Original Stock Adjustment - Table-Based Design
+    interface OriginalStockAdjustment {
+        key: string; // supplierId-subSupplierId-originalTypeId[-productId]
+        adjustmentWeight: number | '';
+        adjustmentWorth: number | '';
+    }
+    const [iaoAdjustments, setIaoAdjustments] = useState<Record<string, OriginalStockAdjustment>>({});
+    const [iaoReason, setIaoReason] = useState('');
+    const [iaoFilterCode, setIaoFilterCode] = useState('');
+    const [iaoFilterOriginalType, setIaoFilterOriginalType] = useState('');
+    const [iaoFilterSupplier, setIaoFilterSupplier] = useState('');
 
     const [rtsSupplierId, setRtsSupplierId] = useState(''); // Return to Supplier
     const [rtsItemId, setRtsItemId] = useState('');
@@ -91,6 +110,10 @@ export const Accounting: React.FC = () => {
     const [authModalOpen, setAuthModalOpen] = useState(false);
     const [authPin, setAuthPin] = useState('');
     const [pendingAction, setPendingAction] = useState<{ type: 'DELETE' | 'EDIT', transactionId: string } | null>(null);
+    
+    // --- Edit Mode State (to prevent data loss) ---
+    const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+    const [originalEntries, setOriginalEntries] = useState<LedgerEntry[]>([]);
 
     // --- Computed Options ---
     const cashBankAccounts = useMemo(() => 
@@ -120,6 +143,135 @@ export const Accounting: React.FC = () => {
             }))
             .sort((a, b) => a.name.localeCompare(b.name));
     }, [state.ledger]);
+
+    // Calculate original stock data for IAO
+    const originalStockData = useMemo(() => {
+        const summary = new Map<string, {
+            key: string;
+            originalTypeId: string;
+            originalTypeName: string;
+            supplierId: string;
+            supplierName: string;
+            subSupplierId?: string;
+            subSupplierName?: string;
+            originalProductId?: string;
+            originalProductName?: string;
+            weightInHand: number;
+            worth: number;
+            avgCostPerKg: number;
+        }>();
+
+        // Aggregate purchases
+        state.purchases.forEach(purchase => {
+            const items = purchase.items && purchase.items.length > 0 
+                ? purchase.items 
+                : [{
+                    originalTypeId: purchase.originalTypeId,
+                    originalType: purchase.originalType,
+                    originalProductId: purchase.originalProductId,
+                    subSupplierId: undefined,
+                    weightPurchased: purchase.weightPurchased,
+                    totalCostUSD: purchase.totalLandedCost || (purchase.totalCostFCY / (purchase.exchangeRate || 1))
+                }];
+
+            items.forEach(purchaseItem => {
+                const key = purchaseItem.originalProductId 
+                    ? `${purchase.supplierId}-${purchaseItem.subSupplierId || 'none'}-${purchaseItem.originalTypeId}-${purchaseItem.originalProductId}`
+                    : `${purchase.supplierId}-${purchaseItem.subSupplierId || 'none'}-${purchaseItem.originalTypeId}`;
+                
+                if (!summary.has(key)) {
+                    const supplier = state.partners.find(p => p.id === purchase.supplierId);
+                    const subSupplier = purchaseItem.subSupplierId ? state.partners.find(p => p.id === purchaseItem.subSupplierId) : undefined;
+                    const originalType = state.originalTypes.find(ot => ot.id === purchaseItem.originalTypeId);
+                    const originalProduct = purchaseItem.originalProductId ? state.originalProducts.find(op => op.id === purchaseItem.originalProductId) : undefined;
+                    
+                    summary.set(key, {
+                        key,
+                        originalTypeId: purchaseItem.originalTypeId,
+                        originalTypeName: purchaseItem.originalType || originalType?.name || 'Unknown',
+                        supplierId: purchase.supplierId,
+                        supplierName: supplier?.name || 'Unknown',
+                        subSupplierId: purchaseItem.subSupplierId,
+                        subSupplierName: subSupplier?.name,
+                        originalProductId: purchaseItem.originalProductId,
+                        originalProductName: originalProduct?.name,
+                        weightInHand: 0,
+                        worth: 0,
+                        avgCostPerKg: 0
+                    });
+                }
+                
+                const item = summary.get(key)!;
+                item.weightInHand += purchaseItem.weightPurchased || 0;
+                const purchaseCost = (purchaseItem.totalCostUSD || 0) / (purchaseItem.weightPurchased || 1);
+                item.avgCostPerKg = ((item.avgCostPerKg * (item.weightInHand - (purchaseItem.weightPurchased || 0))) + 
+                                    (purchaseCost * (purchaseItem.weightPurchased || 0))) / item.weightInHand;
+            });
+        });
+
+        // Subtract openings
+        state.originalOpenings.forEach(opening => {
+            const matchingKeys = Array.from(summary.keys()).filter(key => {
+                const item = summary.get(key)!;
+                return item.originalTypeId === opening.originalType && item.supplierId === opening.supplierId;
+            });
+            
+            if (matchingKeys.length > 0) {
+                const weightPerItem = opening.weightOpened / matchingKeys.length;
+                matchingKeys.forEach(key => {
+                    const item = summary.get(key)!;
+                    item.weightInHand -= weightPerItem;
+                });
+            }
+        });
+
+        // Subtract direct sales
+        const directSalesInvoices = state.salesInvoices.filter(inv => 
+            inv.status === 'Posted' && (inv.invoiceNo.startsWith('DS-') || inv.invoiceNo.startsWith('DSINV-'))
+        );
+
+        directSalesInvoices.forEach(invoice => {
+            invoice.items.forEach(invItem => {
+                if (invItem.originalPurchaseId) {
+                    const purchase = state.purchases.find(p => p.id === invItem.originalPurchaseId);
+                    if (purchase) {
+                        const purchaseItems = purchase.items && purchase.items.length > 0 
+                            ? purchase.items 
+                            : [{
+                                originalTypeId: purchase.originalTypeId,
+                                originalProductId: purchase.originalProductId,
+                                subSupplierId: undefined
+                            }];
+
+                        const matchingPurchaseItem = purchaseItems.find(pi => 
+                            pi.originalTypeId === invItem.originalTypeId &&
+                            (pi.originalProductId || '') === (invItem.originalProductId || '')
+                        );
+                        
+                        if (matchingPurchaseItem) {
+                            const key = matchingPurchaseItem.originalProductId 
+                                ? `${purchase.supplierId}-${matchingPurchaseItem.subSupplierId || 'none'}-${matchingPurchaseItem.originalTypeId}-${matchingPurchaseItem.originalProductId}`
+                                : `${purchase.supplierId}-${matchingPurchaseItem.subSupplierId || 'none'}-${matchingPurchaseItem.originalTypeId}`;
+                            
+                            const stockItem = summary.get(key);
+                            if (stockItem) {
+                                stockItem.weightInHand -= invItem.totalKg || 0;
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        // Calculate worth
+        summary.forEach(item => {
+            item.worth = item.weightInHand * item.avgCostPerKg;
+        });
+
+        return Array.from(summary.values())
+            .filter(item => item.weightInHand > 0 || item.avgCostPerKg > 0)
+            .sort((a, b) => b.weightInHand - a.weightInHand);
+    }, [state.purchases, state.originalOpenings, state.salesInvoices, state.partners, state.originalTypes, state.originalProducts]);
 
     const payees = useMemo(() => {
         // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
@@ -158,10 +310,16 @@ export const Accounting: React.FC = () => {
         setVType(type);
         setVoucherNo(generateVoucherId(type));
         // Reset new transaction type states
-        setIaItemId('');
-        setIaAdjustmentType('INCREASE');
-        setIaQty('');
+        setIaItemAdjustments({});
         setIaReason('');
+        setIaFilterCode('');
+        setIaFilterCategory('');
+        setIaFilterItemName('');
+        setIaoAdjustments({});
+        setIaoReason('');
+        setIaoFilterCode('');
+        setIaoFilterOriginalType('');
+        setIaoFilterSupplier('');
         setRtsSupplierId('');
         setRtsItemId('');
         setRtsQty('');
@@ -181,11 +339,6 @@ export const Accounting: React.FC = () => {
         
         setPbPaymentMode('CREDIT');
         setPbVendorId('');
-        // Reset new transaction type states
-        setIaItemId('');
-        setIaAdjustmentType('INCREASE');
-        setIaQty('');
-        setIaReason('');
         setRtsSupplierId('');
         setRtsItemId('');
         setRtsQty('');
@@ -223,9 +376,24 @@ export const Accounting: React.FC = () => {
     // --- Actions ---
     const handleSave = async () => {
         if (!date) return alert("Date is required");
-        if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
+        if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
-        if (vType !== 'JV' && vType !== 'IA' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
+        if (vType !== 'JV' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
+        
+        // If we're editing, delete the old transaction FIRST (before creating new one)
+        // This ensures we don't lose data if save fails
+        const transactionIdToDelete = editingTransactionId;
+        if (transactionIdToDelete) {
+            try {
+                await deleteTransaction(transactionIdToDelete, 'Edit Reversal', authPin);
+                // Clear edit state after successful deletion
+                setEditingTransactionId(null);
+                setOriginalEntries([]);
+            } catch (error) {
+                alert('Failed to delete original transaction. Edit cancelled.');
+                return;
+            }
+        }
 
         let entries: Omit<LedgerEntry, 'id'>[] = [];
         const baseAmount = parseFloat(amount) / exchangeRate;
@@ -332,33 +500,71 @@ export const Accounting: React.FC = () => {
                 }
             }
         } else if (vType === 'JV') {
+            // Validate JV rows: filter out empty rows and validate required fields
+            const validRows = jvRows.filter(r => r.accountId && ((r.debit > 0) || (r.credit > 0)));
+            
+            if (validRows.length < 2) {
+                return alert('Journal Voucher requires at least 2 entries with accounts and amounts.');
+            }
+            
+            // Check if there's at least one debit and one credit
+            const hasDebit = validRows.some(r => r.debit > 0);
+            const hasCredit = validRows.some(r => r.credit > 0);
+            
+            if (!hasDebit || !hasCredit) {
+                return alert('Journal Voucher must have at least one Debit entry and one Credit entry.');
+            }
+            
             // Calculate totals using base amount if available, otherwise use exchange rate
-            const totalDr = jvRows.reduce((sum, r) => {
-                if (r.baseAmount !== undefined && r.baseAmount !== null && r.debit > 0) {
+            const totalDr = validRows.reduce((sum, r) => {
+                if (r.baseAmount !== undefined && r.baseAmount !== null && r.baseAmount > 0 && r.debit > 0) {
                     return sum + r.baseAmount;
                 }
-                return sum + (r.debit / r.exchangeRate);
+                if (r.debit > 0 && r.exchangeRate > 0) {
+                    return sum + (r.debit / r.exchangeRate);
+                }
+                return sum;
             }, 0);
-            const totalCr = jvRows.reduce((sum, r) => {
-                if (r.baseAmount !== undefined && r.baseAmount !== null && r.credit > 0) {
+            const totalCr = validRows.reduce((sum, r) => {
+                if (r.baseAmount !== undefined && r.baseAmount !== null && r.baseAmount > 0 && r.credit > 0) {
                     return sum + r.baseAmount;
                 }
-                return sum + (r.credit / r.exchangeRate);
+                if (r.credit > 0 && r.exchangeRate > 0) {
+                    return sum + (r.credit / r.exchangeRate);
+                }
+                return sum;
             }, 0);
-            if (Math.abs(totalDr - totalCr) > 0.01) return alert(`Journal is unbalanced! Diff: $${(totalDr - totalCr).toFixed(2)}`);
-            entries = jvRows.map(row => {
+            
+            // Validate exchange rates for all rows
+            for (const row of validRows) {
+                if (row.exchangeRate <= 0 || isNaN(row.exchangeRate)) {
+                    const account = state.accounts.find(a => a.id === row.accountId);
+                    const partner = state.partners.find(p => p.id === row.accountId);
+                    const accountName = account?.name || partner?.name || 'Unknown Account';
+                    return alert(`Invalid exchange rate for account "${accountName}". Please check the currency and exchange rate.`);
+                }
+            }
+            
+            // Check if totals balance (allow 0.01 tolerance for floating point precision)
+            const difference = Math.abs(totalDr - totalCr);
+            if (difference > 0.01) {
+                const diffAmount = totalDr - totalCr;
+                return alert(`Journal Voucher is unbalanced!\n\nTotal Debit (USD): $${totalDr.toFixed(2)}\nTotal Credit (USD): $${totalCr.toFixed(2)}\nDifference: $${Math.abs(diffAmount).toFixed(2)} ${diffAmount > 0 ? '(Debit > Credit)' : '(Credit > Debit)'}\n\nPlease ensure Debit and Credit totals are equal.`);
+            }
+            
+            entries = validRows.map(row => {
                 // Get actual account name
                 const account = state.accounts.find(a => a.id === row.accountId);
                 const partner = state.partners.find(p => p.id === row.accountId);
                 const accountName = account?.name || partner?.name || 'Unknown Account';
                 
                 // Use base amount if available, otherwise calculate from exchange rate
-                const baseDebit = row.baseAmount !== undefined && row.baseAmount !== null && row.debit > 0 
+                const baseDebit = row.baseAmount !== undefined && row.baseAmount !== null && row.baseAmount > 0 && row.debit > 0
                     ? row.baseAmount 
-                    : row.debit / row.exchangeRate;
-                const baseCredit = row.baseAmount !== undefined && row.baseAmount !== null && row.credit > 0 
+                    : (row.debit > 0 ? row.debit / row.exchangeRate : 0);
+                const baseCredit = row.baseAmount !== undefined && row.baseAmount !== null && row.baseAmount > 0 && row.credit > 0
                     ? row.baseAmount 
-                    : row.credit / row.exchangeRate;
+                    : (row.credit > 0 ? row.credit / row.exchangeRate : 0);
                 // Recalculate exchange rate if base amount was used (for accurate fcyAmount)
                 const effectiveRate = row.baseAmount !== undefined && row.baseAmount !== null && row.baseAmount > 0
                     ? (row.debit > 0 ? row.debit : row.credit) / row.baseAmount
@@ -380,13 +586,19 @@ export const Accounting: React.FC = () => {
                 };
             });
         } else if (vType === 'IA') {
-            // Inventory Adjustment
-            if (!iaItemId || !iaQty || parseFloat(iaQty) <= 0) return alert("Select item and enter valid quantity");
+            // Inventory Adjustment - New Table-Based Design
             if (!iaReason) return alert("Reason is required for inventory adjustment");
-            const item = state.items.find(i => i.id === iaItemId);
-            if (!item) return alert("Item not found");
-            const qty = parseFloat(iaQty);
-            const adjustmentValue = qty * (item.avgCost || 0);
+            
+            // Get items with adjustments (either qty or worth has value)
+            const itemsWithAdjustments = Object.entries(iaItemAdjustments).filter(([itemId, adj]) => {
+                const hasQty = adj.adjustmentQty !== '' && adj.adjustmentQty !== 0;
+                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== 0;
+                return hasQty || hasWorth;
+            });
+            
+            if (itemsWithAdjustments.length === 0) {
+                return alert("Please enter adjustment quantity or worth for at least one item.");
+            }
             
             // Lookup accounts dynamically (factory-specific, always correct)
             const inventoryAccount = state.accounts.find(a => 
@@ -408,12 +620,136 @@ export const Accounting: React.FC = () => {
                 return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
             }
             
-            if (iaAdjustmentType === 'INCREASE') {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Increase: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Increase: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
-            } else {
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Decrease: ${item.name} (${qty} units) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+            // Process each item with adjustment
+            for (const [itemId, adj] of itemsWithAdjustments) {
+                const item = state.items.find(i => i.id === itemId);
+                if (!item) continue;
+                
+                const adjustmentQty = adj.adjustmentQty !== '' ? parseFloat(String(adj.adjustmentQty)) : 0;
+                const adjustmentWorth = adj.adjustmentWorth !== '' ? parseFloat(String(adj.adjustmentWorth)) : 0;
+                
+                // Determine adjustment value: use worth if provided, otherwise calculate from qty * avgCost
+                let adjustmentValue = 0;
+                if (adjustmentWorth !== 0) {
+                    adjustmentValue = Math.abs(adjustmentWorth);
+                } else if (adjustmentQty !== 0) {
+                    adjustmentValue = Math.abs(adjustmentQty) * (item.avgCost || 0);
+                } else {
+                    continue; // Skip if both are 0
+                }
+                
+                // Determine if increase or decrease based on sign
+                const isIncrease = (adjustmentQty > 0) || (adjustmentWorth > 0);
+                
+                if (isIncrease) {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Increase: ${item.name} (Qty: ${adjustmentQty || 'N/A'}, Worth: $${adjustmentValue.toFixed(2)}) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Increase: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                } else {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Inventory Decrease: ${item.name} (Qty: ${adjustmentQty || 'N/A'}, Worth: $${adjustmentValue.toFixed(2)}) - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Inventory Decrease: ${item.name} - ${iaReason}`, factoryId: state.currentFactory?.id || '' });
+                }
+            }
+        } else if (vType === 'IAO') {
+            // Original Stock Adjustment - Table-Based Design
+            if (!iaoReason) return alert("Reason is required for original stock adjustment");
+            
+            // Get adjustments with values
+            const adjustmentsWithValues = Object.entries(iaoAdjustments).filter(([key, adj]) => {
+                const hasWeight = adj.adjustmentWeight !== '' && adj.adjustmentWeight !== 0;
+                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== 0;
+                return hasWeight || hasWorth;
+            });
+            
+            if (adjustmentsWithValues.length === 0) {
+                return alert("Please enter adjustment weight or worth for at least one original stock item.");
+            }
+            
+            // Lookup accounts dynamically
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Raw Materials') || 
+                a.name.includes('Inventory - Raw Materials') ||
+                a.code === '104' ||
+                a.code === '1201'
+            );
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Inventory Adjustment') || 
+                a.name.includes('Write-off') ||
+                a.code === '503'
+            );
+            
+            if (!inventoryAccount || !adjustmentAccount) {
+                const missingAccounts = [];
+                if (!inventoryAccount) missingAccounts.push('Inventory - Raw Materials (104 or 1201)');
+                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503)');
+                return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+            }
+            
+            // Process each adjustment
+            for (const [key, adj] of adjustmentsWithValues) {
+                // Parse key: supplierId-subSupplierId-originalTypeId[-productId]
+                const parts = key.split('-');
+                const supplierId = parts[0];
+                const subSupplierId = parts[1] !== 'none' ? parts[1] : undefined;
+                const originalTypeId = parts[2];
+                const originalProductId = parts.length > 3 ? parts[3] : undefined;
+                
+                const originalType = state.originalTypes.find(ot => ot.id === originalTypeId);
+                const supplier = state.partners.find(p => p.id === supplierId);
+                const subSupplier = subSupplierId ? state.partners.find(p => p.id === subSupplierId) : undefined;
+                
+                if (!originalType || !supplier) continue;
+                
+                const adjustmentWeight = adj.adjustmentWeight !== '' ? parseFloat(String(adj.adjustmentWeight)) : 0;
+                const adjustmentWorth = adj.adjustmentWorth !== '' ? parseFloat(String(adj.adjustmentWorth)) : 0;
+                
+                // Determine adjustment value: use worth if provided, otherwise calculate from weight * avgCost
+                let adjustmentValue = 0;
+                if (adjustmentWorth !== 0) {
+                    adjustmentValue = Math.abs(adjustmentWorth);
+                } else if (adjustmentWeight !== 0) {
+                    // Calculate average cost from purchases for this original type
+                    const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
+                    let totalWeight = 0;
+                    let totalCost = 0;
+                    
+                    relevantPurchases.forEach(purchase => {
+                        const items = purchase.items && purchase.items.length > 0 ? purchase.items : [{
+                            originalTypeId: purchase.originalTypeId,
+                            weightPurchased: purchase.weightPurchased,
+                            totalCostUSD: purchase.totalLandedCost || (purchase.totalCostFCY / (purchase.exchangeRate || 1))
+                        }];
+                        
+                        items.forEach(item => {
+                            if (item.originalTypeId === originalTypeId && 
+                                (item.subSupplierId || 'none') === (subSupplierId || 'none') &&
+                                (item.originalProductId || '') === (originalProductId || '')) {
+                                totalWeight += item.weightPurchased || 0;
+                                totalCost += item.totalCostUSD || 0;
+                            }
+                        });
+                    });
+                    
+                    const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
+                    adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
+                } else {
+                    continue; // Skip if both are 0
+                }
+                
+                // Determine if increase or decrease based on sign
+                const isIncrease = (adjustmentWeight > 0) || (adjustmentWorth > 0);
+                
+                const displayName = originalProductId 
+                    ? `${originalType.name} - ${state.originalProducts.find(op => op.id === originalProductId)?.name || ''}`
+                    : originalType.name;
+                const supplierName = subSupplier ? `${supplier.name} / ${subSupplier.name}` : supplier.name;
+                
+                if (isIncrease) {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                } else {
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                }
             }
         } else if (vType === 'RTS') {
             // Return to Supplier
@@ -497,8 +833,29 @@ export const Accounting: React.FC = () => {
             }
         }
 
+        // If we're editing, delete the old transaction FIRST (before creating new one)
+        // This ensures we don't lose data if save fails
+        if (editingTransactionId) {
+            try {
+                await deleteTransaction(editingTransactionId, 'Edit Reversal', authPin);
+                // Clear edit state after successful deletion
+                setEditingTransactionId(null);
+                setOriginalEntries([]);
+            } catch (error) {
+                alert('Failed to delete original transaction. Edit cancelled.');
+                return;
+            }
+        }
+
         await postTransaction(entries);
-        alert(`${voucherNo} Posted Successfully!`);
+        const wasEditing = !!transactionIdToDelete;
+        alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
+        
+        // Clear edit state if it was set (should already be cleared, but just in case)
+        if (editingTransactionId) {
+            setEditingTransactionId(null);
+            setOriginalEntries([]);
+        }
         
         // Reset for next entry
         resetForm(vType);
@@ -670,8 +1027,11 @@ export const Accounting: React.FC = () => {
                     }
                 }
 
-                // Delete old one using Context Action with Metadata
-                deleteTransaction(pendingAction.transactionId, 'Edit Reversal', authPin);
+                // Store original entries and transaction ID for edit mode
+                // DO NOT delete yet - only delete when new entry is successfully saved
+                // This prevents data loss if user abandons the edit
+                setOriginalEntries([...entries]); // Create a copy
+                setEditingTransactionId(pendingAction.transactionId);
                 setActiveTab('voucher'); // Switch to edit mode
             }
         }
@@ -683,10 +1043,96 @@ export const Accounting: React.FC = () => {
         <div className="space-y-6 w-full">
             {/* Navigation Tabs */}
             <div className="flex gap-4 border-b border-slate-200">
-                <button onClick={() => setActiveTab('voucher')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'voucher' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>New Voucher</button>
-                <button onClick={() => setActiveTab('ledger')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'ledger' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>General Ledger</button>
-                <button onClick={() => setActiveTab('balance-alignment')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'balance-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Balance Alignment</button>
-                <button onClick={() => setActiveTab('stock-alignment')} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'stock-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Stock Alignment</button>
+                <button onClick={() => {
+                    // If switching away from voucher tab while editing, warn user
+                    if (activeTab === 'voucher' && editingTransactionId) {
+                        if (confirm('You are editing a transaction. Switching tabs will cancel the edit and restore the original entry. Continue?')) {
+                            // Restore original entry
+                            const restoreOriginal = async () => {
+                                try {
+                                    const entriesToRestore = originalEntries.map(({ id, ...entry }) => entry);
+                                    await postTransaction(entriesToRestore);
+                                    setEditingTransactionId(null);
+                                    setOriginalEntries([]);
+                                    setActiveTab('voucher');
+                                } catch (error) {
+                                    console.error('❌ Failed to restore original transaction:', error);
+                                    alert('Warning: Could not restore original transaction. Please check the ledger.');
+                                }
+                            };
+                            restoreOriginal();
+                        }
+                    } else {
+                        setActiveTab('voucher');
+                    }
+                }} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'voucher' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>
+                    New Voucher
+                    {editingTransactionId && <span className="ml-2 text-xs bg-orange-500 text-white px-2 py-0.5 rounded">Editing</span>}
+                </button>
+                <button onClick={() => {
+                    // If switching away from voucher tab while editing, warn user
+                    if (activeTab === 'voucher' && editingTransactionId) {
+                        if (confirm('You are editing a transaction. Switching tabs will cancel the edit and restore the original entry. Continue?')) {
+                            const restoreOriginal = async () => {
+                                try {
+                                    const entriesToRestore = originalEntries.map(({ id, ...entry }) => entry);
+                                    await postTransaction(entriesToRestore);
+                                    setEditingTransactionId(null);
+                                    setOriginalEntries([]);
+                                    setActiveTab('ledger');
+                                } catch (error) {
+                                    console.error('❌ Failed to restore original transaction:', error);
+                                    alert('Warning: Could not restore original transaction. Please check the ledger.');
+                                }
+                            };
+                            restoreOriginal();
+                        }
+                    } else {
+                        setActiveTab('ledger');
+                    }
+                }} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'ledger' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>General Ledger</button>
+                <button onClick={() => {
+                    if (activeTab === 'voucher' && editingTransactionId) {
+                        if (confirm('You are editing a transaction. Switching tabs will cancel the edit and restore the original entry. Continue?')) {
+                            const restoreOriginal = async () => {
+                                try {
+                                    const entriesToRestore = originalEntries.map(({ id, ...entry }) => entry);
+                                    await postTransaction(entriesToRestore);
+                                    setEditingTransactionId(null);
+                                    setOriginalEntries([]);
+                                    setActiveTab('balance-alignment');
+                                } catch (error) {
+                                    console.error('❌ Failed to restore original transaction:', error);
+                                    alert('Warning: Could not restore original transaction. Please check the ledger.');
+                                }
+                            };
+                            restoreOriginal();
+                        }
+                    } else {
+                        setActiveTab('balance-alignment');
+                    }
+                }} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'balance-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Balance Alignment</button>
+                <button onClick={() => {
+                    if (activeTab === 'voucher' && editingTransactionId) {
+                        if (confirm('You are editing a transaction. Switching tabs will cancel the edit and restore the original entry. Continue?')) {
+                            const restoreOriginal = async () => {
+                                try {
+                                    const entriesToRestore = originalEntries.map(({ id, ...entry }) => entry);
+                                    await postTransaction(entriesToRestore);
+                                    setEditingTransactionId(null);
+                                    setOriginalEntries([]);
+                                    setActiveTab('stock-alignment');
+                                } catch (error) {
+                                    console.error('❌ Failed to restore original transaction:', error);
+                                    alert('Warning: Could not restore original transaction. Please check the ledger.');
+                                }
+                            };
+                            restoreOriginal();
+                        }
+                    } else {
+                        setActiveTab('stock-alignment');
+                    }
+                }} className={`pb-3 px-4 text-sm font-medium transition-all ${activeTab === 'stock-alignment' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-800'}`}>Stock Alignment</button>
             </div>
 
             {activeTab === 'voucher' && (
@@ -716,13 +1162,35 @@ export const Accounting: React.FC = () => {
                                 { id: 'JV', label: 'Journal Voucher', icon: FileText, color: 'text-blue-600' },
                                 { id: 'TR', label: 'Internal Transfer', icon: RefreshCw, color: 'text-purple-600' },
                                 { id: 'IA', label: 'Inventory Adjustment', icon: Package, color: 'text-indigo-600' },
+                                { id: 'IAO', label: 'Original Stock Adjustment', icon: ShoppingBag, color: 'text-purple-600' },
                                 { id: 'RTS', label: 'Return to Supplier', icon: RotateCcw, color: 'text-pink-600' },
                                 { id: 'WO', label: 'Write-off', icon: AlertTriangle, color: 'text-red-700' },
                                 { id: 'BD', label: 'Balancing Discrepancy', icon: Scale, color: 'text-teal-600' },
                             ].map(type => (
                                 <button
                                     key={type.id}
-                                    onClick={() => resetForm(type.id as VoucherType)}
+                                    onClick={() => {
+                                        // If we're editing and switching to a different voucher type, restore original entry
+                                        if (editingTransactionId && type.id !== vType) {
+                                            if (confirm('You are editing a transaction. Switching voucher types will cancel the edit and restore the original entry. Continue?')) {
+                                                const restoreOriginal = async () => {
+                                                    try {
+                                                        const entriesToRestore = originalEntries.map(({ id, ...entry }) => entry);
+                                                        await postTransaction(entriesToRestore);
+                                                        setEditingTransactionId(null);
+                                                        setOriginalEntries([]);
+                                                        resetForm(type.id as VoucherType);
+                                                    } catch (error) {
+                                                        console.error('❌ Failed to restore original transaction:', error);
+                                                        alert('Warning: Could not restore original transaction. Please check the ledger.');
+                                                    }
+                                                };
+                                                restoreOriginal();
+                                            }
+                                        } else {
+                                            resetForm(type.id as VoucherType);
+                                        }
+                                    }}
                                     className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${vType === type.id ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-slate-100 bg-white hover:border-blue-200 hover:bg-slate-50'}`}
                                 >
                                     <type.icon className={`mb-1 ${type.color}`} size={20} />
@@ -924,8 +1392,8 @@ export const Accounting: React.FC = () => {
                                     />
                                 </div>
                             </div>
-                        ) : vType === 'BD' ? null : (
-                            // STANDARD FORM (RV, PV, EV, PB, IA, RTS, WO)
+                        ) : vType === 'BD' || vType === 'IA' || vType === 'IAO' ? null : (
+                            // STANDARD FORM (RV, PV, EV, PB, RTS, WO)
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 {/* LEFT SIDE: SOURCE & DESTINATION */}
                                 <div className="space-y-6">
@@ -1035,44 +1503,70 @@ export const Accounting: React.FC = () => {
                         )}
 
                         {/* New Transaction Type Forms */}
-                        {vType === 'IA' && (
-                            <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
-                                <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
-                                    <Package size={20} /> Inventory Adjustment
-                                </h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Item</label>
-                                        <EntitySelector 
-                                            entities={state.items.map(i => ({ id: i.id, name: `${i.code} - ${i.name}` }))} 
-                                            selectedId={iaItemId} 
-                                            onSelect={setIaItemId} 
-                                            placeholder="Select Item..." 
-                                        />
+                        {vType === 'IA' && (() => {
+                            // Filter finished goods items
+                            const filteredItems = state.items.filter(item => {
+                                const matchesCode = !iaFilterCode || item.code.toLowerCase().includes(iaFilterCode.toLowerCase());
+                                const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
+                                const matchesCategory = !iaFilterCategory || categoryName.toLowerCase().includes(iaFilterCategory.toLowerCase());
+                                const matchesName = !iaFilterItemName || item.name.toLowerCase().includes(iaFilterItemName.toLowerCase());
+                                return matchesCode && matchesCategory && matchesName;
+                            });
+
+                            const updateItemAdjustment = (itemId: string, field: 'adjustmentQty' | 'adjustmentWorth', value: string) => {
+                                setIaItemAdjustments(prev => ({
+                                    ...prev,
+                                    [itemId]: {
+                                        ...prev[itemId],
+                                        itemId,
+                                        [field]: value === '' ? '' : parseFloat(value) || ''
+                                    }
+                                }));
+                            };
+
+                            return (
+                                <div className="space-y-6 bg-indigo-50 p-6 rounded-xl border-2 border-indigo-200">
+                                    <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                                        <Package size={20} /> Inventory Adjustment (Finished Goods)
+                                    </h3>
+                                    
+                                    {/* Filters */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Code</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaFilterCode} 
+                                                onChange={e => setIaFilterCode(e.target.value)} 
+                                                placeholder="Search code..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Category</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaFilterCategory} 
+                                                onChange={e => setIaFilterCategory(e.target.value)} 
+                                                placeholder="Search category..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Item Name</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaFilterItemName} 
+                                                onChange={e => setIaFilterItemName(e.target.value)} 
+                                                placeholder="Search item name..."
+                                            />
+                                        </div>
                                     </div>
+
+                                    {/* Reason Field */}
                                     <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Adjustment Type</label>
-                                        <select 
-                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
-                                            value={iaAdjustmentType} 
-                                            onChange={e => setIaAdjustmentType(e.target.value as 'INCREASE' | 'DECREASE')}
-                                        >
-                                            <option value="INCREASE">Increase Inventory</option>
-                                            <option value="DECREASE">Decrease Inventory</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Quantity</label>
-                                        <input 
-                                            type="number" 
-                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
-                                            value={iaQty} 
-                                            onChange={e => setIaQty(e.target.value)} 
-                                            placeholder="Enter quantity"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason *</label>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason for Adjustment *</label>
                                         <input 
                                             type="text" 
                                             className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
@@ -1081,9 +1575,210 @@ export const Accounting: React.FC = () => {
                                             placeholder="Reason for adjustment (required)"
                                         />
                                     </div>
+
+                                    {/* Items Table */}
+                                    <div className="bg-white rounded-lg border border-slate-300 overflow-hidden">
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 border-b-2 border-slate-300">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Code</th>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Item Name</th>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Category</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Package Size (Kg)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Quantity in Hand</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Worth (USD)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-200">
+                                                    {filteredItems.map(item => {
+                                                        const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
+                                                        const currentWorth = (item.stockQty || 0) * (item.avgCost || 0);
+                                                        const adjustment = iaItemAdjustments[item.id] || { itemId: item.id, adjustmentQty: '', adjustmentWorth: '' };
+                                                        
+                                                        return (
+                                                            <tr key={item.id} className="hover:bg-slate-50">
+                                                                <td className="px-4 py-3 font-mono text-slate-700">{item.code}</td>
+                                                                <td className="px-4 py-3 text-slate-800">{item.name}</td>
+                                                                <td className="px-4 py-3 text-slate-600">{categoryName}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-600">{(item.weightPerUnit || 0).toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">{(item.stockQty || 0).toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <input 
+                                                                        type="number" 
+                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                        value={adjustment.adjustmentQty} 
+                                                                        onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
+                                                                        placeholder="0"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <input 
+                                                                        type="number" 
+                                                                        step="0.01"
+                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                        value={adjustment.adjustmentWorth} 
+                                                                        onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
+                                                                        placeholder="0.00"
+                                                                    />
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        {filteredItems.length === 0 && (
+                                            <div className="p-8 text-center text-slate-500">
+                                                No items found matching the filters.
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            );
+                        })()}
+
+                        {vType === 'IAO' && (() => {
+                            // Filter original stock data based on filters
+                            const filteredOriginalStockData = originalStockData.filter(item => {
+                                const matchesCode = !iaoFilterCode || item.originalTypeName.toLowerCase().includes(iaoFilterCode.toLowerCase());
+                                const matchesType = !iaoFilterOriginalType || item.originalTypeName.toLowerCase().includes(iaoFilterOriginalType.toLowerCase());
+                                const matchesSupplier = !iaoFilterSupplier || item.supplierName.toLowerCase().includes(iaoFilterSupplier.toLowerCase()) || (item.subSupplierName && item.subSupplierName.toLowerCase().includes(iaoFilterSupplier.toLowerCase()));
+                                return matchesCode && matchesType && matchesSupplier;
+                            });
+
+                            const updateOriginalAdjustment = (key: string, field: 'adjustmentWeight' | 'adjustmentWorth', value: string) => {
+                                setIaoAdjustments(prev => ({
+                                    ...prev,
+                                    [key]: {
+                                        ...prev[key],
+                                        key,
+                                        [field]: value === '' ? '' : parseFloat(value) || ''
+                                    }
+                                }));
+                            };
+
+                            return (
+                                <div className="space-y-6 bg-purple-50 p-6 rounded-xl border-2 border-purple-200">
+                                    <h3 className="text-lg font-bold text-purple-900 flex items-center gap-2">
+                                        <ShoppingBag size={20} /> Original Stock Adjustment
+                                    </h3>
+                                    
+                                    {/* Filters */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Code</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaoFilterCode} 
+                                                onChange={e => setIaoFilterCode(e.target.value)} 
+                                                placeholder="Search code..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Original Type</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaoFilterOriginalType} 
+                                                onChange={e => setIaoFilterOriginalType(e.target.value)} 
+                                                placeholder="Search original type..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Filter by Supplier</label>
+                                            <input 
+                                                type="text" 
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 text-sm" 
+                                                value={iaoFilterSupplier} 
+                                                onChange={e => setIaoFilterSupplier(e.target.value)} 
+                                                placeholder="Search supplier..."
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Reason Field */}
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Reason for Adjustment *</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800" 
+                                            value={iaoReason} 
+                                            onChange={e => setIaoReason(e.target.value)} 
+                                            placeholder="Reason for adjustment (required)"
+                                        />
+                                    </div>
+
+                                    {/* Original Stock Table */}
+                                    <div className="bg-white rounded-lg border border-slate-300 overflow-hidden">
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 border-b-2 border-slate-300">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Code</th>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Original Type Name</th>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Supplier</th>
+                                                        <th className="px-4 py-3 text-left font-bold text-slate-700">Sub Supplier</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Weight in Hand (Kg)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700">Worth (USD)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Weight (Kg)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-200">
+                                                    {filteredOriginalStockData.map(item => {
+                                                        const adjustment = iaoAdjustments[item.key] || { key: item.key, adjustmentWeight: '', adjustmentWorth: '' };
+                                                        
+                                                        return (
+                                                            <tr key={item.key} className="hover:bg-slate-50">
+                                                                <td className="px-4 py-3 font-mono text-slate-700">{item.originalTypeId}</td>
+                                                                <td className="px-4 py-3 text-slate-800">
+                                                                    {item.originalTypeName}
+                                                                    {item.originalProductName && <span className="text-slate-500 text-xs"> - {item.originalProductName}</span>}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-slate-600">{item.supplierName}</td>
+                                                                <td className="px-4 py-3 text-slate-500 text-xs">{item.subSupplierName || '-'}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">{(item.weightInHand || 0).toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">${(item.worth || 0).toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <input 
+                                                                        type="number" 
+                                                                        step="0.01"
+                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                        value={adjustment.adjustmentWeight} 
+                                                                        onChange={e => updateOriginalAdjustment(item.key, 'adjustmentWeight', e.target.value)}
+                                                                        placeholder="0.00"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <input 
+                                                                        type="number" 
+                                                                        step="0.01"
+                                                                        className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                        value={adjustment.adjustmentWorth} 
+                                                                        onChange={e => updateOriginalAdjustment(item.key, 'adjustmentWorth', e.target.value)}
+                                                                        placeholder="0.00"
+                                                                    />
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        {filteredOriginalStockData.length === 0 && (
+                                            <div className="p-8 text-center text-slate-500">
+                                                No original stock found matching the filters.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         {vType === 'RTS' && (
                             <div className="space-y-6 bg-pink-50 p-6 rounded-xl border-2 border-pink-200">
