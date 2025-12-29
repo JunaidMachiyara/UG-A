@@ -325,6 +325,10 @@ export const GenericForm: React.FC<{
                                 step={field.name === 'balance' ? 'any' : undefined}
                             />
                         )}
+                        {/* Show hint for Account Type = LIABILITY in Chart of Accounts */}
+                        {field.name === 'type' && formData[field.name] === 'LIABILITY' && config.entityKey === 'accounts' && (
+                            <p className="text-[10px] text-red-600 mt-1">2030-2099: AVAILABLE (70 codes) Reserved for Other Payables</p>
+                        )}
                     </div>
                 );
             })}

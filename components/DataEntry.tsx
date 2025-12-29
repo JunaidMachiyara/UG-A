@@ -139,6 +139,7 @@ export const DataEntry: React.FC = () => {
     const [ooQty, setOoQty] = useState('');
     const [stagedOriginalOpenings, setStagedOriginalOpenings] = useState<OriginalOpening[]>([]);
     const [isProcessingOpenings, setIsProcessingOpenings] = useState(false);
+    const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
 
     // --- Bales Opening State ---
     const [boDate, setBoDate] = useState(new Date().toISOString().split('T')[0]);
@@ -247,10 +248,12 @@ export const DataEntry: React.FC = () => {
         // --- Produced Production Report State ---
         const [prodReportStart, setProdReportStart] = useState(new Date().toISOString().split('T')[0]);
         const [prodReportEnd, setProdReportEnd] = useState(new Date().toISOString().split('T')[0]);
+        const [prodReportCategory, setProdReportCategory] = useState('');
         const [prodReportItem, setProdReportItem] = useState('');
         const [prodReportSort, setProdReportSort] = useState({ col: 'Timestamp', asc: false });
         const [deleteProdDate, setDeleteProdDate] = useState('');
         const [isDeletingProductions, setIsDeletingProductions] = useState(false);
+        const [showDeleteProdUtility, setShowDeleteProdUtility] = useState(false);
 
         // Helper function to normalize date to YYYY-MM-DD (local timezone)
         const normalizeDate = (dateStr: string): string => {
@@ -273,6 +276,9 @@ export const DataEntry: React.FC = () => {
         // Filter and sort produced entries
         const filteredProducedEntries = useMemo(() => {
             let entries = state.productions.filter(p => {
+                // Exclude re-baling entries and entries with qtyProduced <= 0
+                if (p.isRebaling || p.qtyProduced <= 0) return false;
+                
                 // Use production date (p.date) for filtering, not createdAt timestamp
                 let entryDateStr = '';
                 if (p.date) {
@@ -295,14 +301,45 @@ export const DataEntry: React.FC = () => {
                 const endDateStr = normalizeDate(prodReportEnd);
                 
                 // Compare as strings (YYYY-MM-DD format)
-                return entryDateStr >= startDateStr && entryDateStr <= endDateStr && (prodReportItem === '' || p.itemId === prodReportItem);
+                const matchesDate = entryDateStr >= startDateStr && entryDateStr <= endDateStr;
+                const matchesItem = prodReportItem === '' || p.itemId === prodReportItem;
+                const matchesCategory = prodReportCategory === '' || (() => {
+                    const item = state.items.find(i => i.id === p.itemId);
+                    // If item not found, exclude it when category filter is active (can't determine category)
+                    if (!item) return false;
+                    // If item has no category set, exclude it when category filter is active
+                    if (!item.category) return false;
+                    // Get the selected category
+                    const selectedCategory = state.categories.find(c => c.id === prodReportCategory);
+                    if (!selectedCategory) return false; // Selected category not found
+                    // Get the item's category object (might be stored as ID or name)
+                    const itemCategoryObj = state.categories.find(c => c.id === item.category || c.name === item.category);
+                    // Match by:
+                    // 1. Direct ID match: item.category === prodReportCategory
+                    // 2. Item has category name that matches selected category name
+                    // 3. Item has category ID that maps to same category as selected
+                    // 4. Item has category name that matches selected category ID (unlikely but possible)
+                    return item.category === prodReportCategory || 
+                           item.category === selectedCategory.name ||
+                           item.category === selectedCategory.id ||
+                           (itemCategoryObj && itemCategoryObj.id === prodReportCategory) ||
+                           (itemCategoryObj && itemCategoryObj.name === selectedCategory.name);
+                })();
+                return matchesDate && matchesItem && matchesCategory;
             });
             if (prodReportSort.col) {
                 entries = [...entries].sort((a, b) => {
                     let aVal, bVal;
                     switch (prodReportSort.col) {
+                        case 'Item Code': aVal = state.items.find(i => i.id === a.itemId)?.code || ''; bVal = state.items.find(i => i.id === b.itemId)?.code || ''; break;
                         case 'Item': aVal = state.items.find(i => i.id === a.itemId)?.name || a.itemId; bVal = state.items.find(i => i.id === b.itemId)?.name || b.itemId; break;
-                        case 'Category': aVal = state.items.find(i => i.id === a.itemId)?.category || ''; bVal = state.items.find(i => i.id === b.itemId)?.category || ''; break;
+                        case 'Category': {
+                            const aItem = state.items.find(i => i.id === a.itemId);
+                            const bItem = state.items.find(i => i.id === b.itemId);
+                            aVal = aItem?.category ? (state.categories.find(c => c.id === aItem.category)?.name || aItem.category) : '';
+                            bVal = bItem?.category ? (state.categories.find(c => c.id === bItem.category)?.name || bItem.category) : '';
+                            break;
+                        }
                         case 'Bale Size': aVal = state.items.find(i => i.id === a.itemId)?.packingType || ''; bVal = state.items.find(i => i.id === b.itemId)?.packingType || ''; break;
                         case 'Qty': aVal = a.qtyProduced; bVal = b.qtyProduced; break;
                         case 'Weight': aVal = a.weightProduced; bVal = b.weightProduced; break;
@@ -317,7 +354,7 @@ export const DataEntry: React.FC = () => {
                 });
             }
             return entries;
-        }, [state.productions, prodReportStart, prodReportEnd, prodReportItem, prodReportSort]);
+        }, [state.productions, prodReportStart, prodReportEnd, prodReportCategory, prodReportItem, prodReportSort, state.items, state.categories]);
 
         const handleProdReportSort = (col: string) => {
             setProdReportSort(prev => ({ col, asc: prev.col === col ? !prev.asc : true }));
@@ -798,6 +835,7 @@ export const DataEntry: React.FC = () => {
         
         // Set loading state
         setIsProcessingOpenings(true);
+        setProcessingProgress({ current: 0, total: stagedOriginalOpenings.length });
         
         const count = stagedOriginalOpenings.length;
         let successCount = 0;
@@ -807,6 +845,8 @@ export const DataEntry: React.FC = () => {
             // Process each opening sequentially to ensure proper saving
             for (let i = 0; i < stagedOriginalOpenings.length; i++) {
                 const opening = stagedOriginalOpenings[i];
+                // Update progress
+                setProcessingProgress({ current: i + 1, total: count });
                 try {
                     await addOriginalOpening(opening);
                     successCount++;
@@ -836,6 +876,7 @@ export const DataEntry: React.FC = () => {
         } finally {
             // Always clear loading state
             setIsProcessingOpenings(false);
+            setProcessingProgress({ current: 0, total: 0 });
         }
     };
     
@@ -2038,14 +2079,25 @@ export const DataEntry: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-12">
                     <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm min-h-[500px]">
-                        <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4 print:hidden">
-                            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-                                {currentSubModuleDef && <currentSubModuleDef.icon size={24} />}
+                        <div className="flex items-center justify-between mb-6 border-b border-slate-100 pb-4 print:hidden">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+                                    {currentSubModuleDef && <currentSubModuleDef.icon size={24} />}
+                                </div>
+                                <div>
+                                    <h2 className="text-xl font-bold text-slate-800">{currentSubModuleDef?.label}</h2>
+                                    <p className="text-sm text-slate-500">{currentSubModuleDef?.desc}</p>
+                                </div>
                             </div>
-                            <div>
-                                <h2 className="text-xl font-bold text-slate-800">{currentSubModuleDef?.label}</h2>
-                                <p className="text-sm text-slate-500">{currentSubModuleDef?.desc}</p>
-                            </div>
+                            {activeSubModule === 'produced-production' && (
+                                <button
+                                    onClick={() => setShowDeleteProdUtility(!showDeleteProdUtility)}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                                >
+                                    <Trash2 size={16} />
+                                    {showDeleteProdUtility ? 'Hide Delete Utility' : 'Delete Productions by Date'}
+                                </button>
+                            )}
                         </div>
 
                         {/* --- ONGOING ORDERS --- */}
@@ -2303,7 +2355,11 @@ export const DataEntry: React.FC = () => {
                                                         {isProcessingOpenings ? (
                                                             <>
                                                                 <RefreshCw size={18} className="animate-spin" />
-                                                                <span>Processing... ({stagedOriginalOpenings.length} entries)</span>
+                                                                <span>
+                                                                    Processing... {processingProgress.current > 0 
+                                                                        ? `${processingProgress.current}/${processingProgress.total}` 
+                                                                        : `${stagedOriginalOpenings.length} entries`}
+                                                                </span>
                                                             </>
                                                         ) : (
                                                             <>
@@ -3522,10 +3578,19 @@ export const DataEntry: React.FC = () => {
                                                                 </div>
                                                                 <div className="ml-6 flex items-end gap-2">
                                                                     <div>
+                                                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Category</label>
+                                                                        <select value={prodReportCategory} onChange={e => { setProdReportCategory(e.target.value); setProdReportItem(''); }} className="border border-slate-300 rounded-lg p-2 text-sm">
+                                                                            <option value="">All Categories</option>
+                                                                            {state.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                    <div>
                                                                         <label className="block text-xs font-semibold text-slate-500 mb-1">Item</label>
                                                                         <select value={prodReportItem} onChange={e => setProdReportItem(e.target.value)} className="border border-slate-300 rounded-lg p-2 text-sm">
                                                                             <option value="">All Items</option>
-                                                                            {state.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                                                            {state.items
+                                                                                .filter(i => prodReportCategory === '' || i.category === prodReportCategory)
+                                                                                .map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                                                                         </select>
                                                                     </div>
                                                                     <button
@@ -3537,17 +3602,22 @@ export const DataEntry: React.FC = () => {
                                                                             
                                                                             // Prepare CSV data
                                                                             const csvData = [
-                                                                                ['Item', 'Category', 'Bale Size', 'Qty', 'Weight (Kg)', 'Timestamp'],
+                                                                                ['Item Code', 'Item', 'Category', 'Bale Size', 'Qty', 'Weight (Kg)', 'Timestamp'],
                                                                                 ...filteredProducedEntries.map(entry => {
                                                                                     const item = state.items.find(i => i.id === entry.itemId);
                                                                                     const packageSize = item?.weightPerUnit !== undefined ? Number(item.weightPerUnit) : '';
                                                                                     const timestamp = entry.createdAt 
                                                                                         ? new Date(entry.createdAt.seconds * 1000).toLocaleString()
                                                                                         : (entry.date ? new Date(entry.date + 'T00:00:00').toLocaleString() : '');
+                                                                                    // Get category name instead of ID
+                                                                                    const categoryName = item?.category 
+                                                                                        ? (state.categories.find(c => c.id === item.category)?.name || item.category)
+                                                                                        : '-';
                                                                                     
                                                                                     return [
+                                                                                        item?.code || '',
                                                                                         item?.name || entry.itemId || '',
-                                                                                        item?.category || '-',
+                                                                                        categoryName,
                                                                                         packageSize !== null && packageSize !== undefined ? packageSize.toString() : '-',
                                                                                         entry.qtyProduced.toString(),
                                                                                         entry.weightProduced.toString(),
@@ -3589,20 +3659,59 @@ export const DataEntry: React.FC = () => {
                                                                         Export Excel
                                                                     </button>
                                                                 </div>
-                                                                {/* Cards for Total Packages and Total Weight */}
+                                                                {/* Cards for Total Packages, Total Worth, and Total Weight */}
                                                                 <div className="ml-auto flex gap-4">
                                                                     <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
                                                                         <span className="text-xs text-slate-500 font-semibold mb-1">Total Packages (Qty)</span>
                                                                         <span className="text-2xl font-bold text-blue-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.qtyProduced, 0)}</span>
                                                                     </div>
                                                                     <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
+                                                                        <span className="text-xs text-slate-500 font-semibold mb-1">Total Worth</span>
+                                                                        {(() => {
+                                                                            const totalWorth = filteredProducedEntries.reduce((sum, entry) => {
+                                                                                const item = state.items.find(i => i.id === entry.itemId);
+                                                                                // Use productionPrice from entry if explicitly set (even if 0 or negative), otherwise use item.avgCost
+                                                                                // productionPrice from CSV should always override item.avgCost
+                                                                                const price = entry.productionPrice !== undefined && entry.productionPrice !== null 
+                                                                                    ? entry.productionPrice 
+                                                                                    : (item?.avgCost || 0);
+                                                                                return sum + (entry.qtyProduced * price);
+                                                                            }, 0);
+                                                                            const isNegative = totalWorth < 0;
+                                                                            return (
+                                                                                <span className={`text-2xl font-bold ${isNegative ? 'text-red-600' : 'text-purple-700'}`}>
+                                                                                    {isNegative ? '-' : ''}${Math.abs(totalWorth).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                                                                </span>
+                                                                            );
+                                                                        })()}
+                                                                    </div>
+                                                                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-6 py-3 flex flex-col items-center min-w-[140px]">
                                                                         <span className="text-xs text-slate-500 font-semibold mb-1">Total Weight</span>
                                                                         <span className="text-2xl font-bold text-emerald-700">{filteredProducedEntries.reduce((sum, entry) => sum + entry.weightProduced, 0)}</span>
                                                                     </div>
                                                                 </div>
+                                                                {/* Debug Info - Show total entries vs filtered */}
+                                                                {(() => {
+                                                                    const totalInRange = state.productions.filter(p => {
+                                                                        if (p.isRebaling || p.qtyProduced <= 0) return false;
+                                                                        const entryDateStr = p.date ? normalizeDate(p.date) : '';
+                                                                        const startDateStr = normalizeDate(prodReportStart);
+                                                                        const endDateStr = normalizeDate(prodReportEnd);
+                                                                        return entryDateStr >= startDateStr && entryDateStr <= endDateStr;
+                                                                    }).length;
+                                                                    if (totalInRange !== filteredProducedEntries.length && (prodReportCategory !== '' || prodReportItem !== '')) {
+                                                                        return (
+                                                                            <div className="text-xs text-slate-500 mt-2">
+                                                                                Showing {filteredProducedEntries.length} of {totalInRange} entries (filtered by {prodReportCategory ? 'Category' : ''} {prodReportItem ? 'Item' : ''})
+                                                                            </div>
+                                                                        );
+                                                                    }
+                                                                    return null;
+                                                                })()}
                                                             </div>
                                                             
                                                             {/* Delete Productions by Date Section */}
+                                                            {showDeleteProdUtility && (
                                                             <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4">
                                                                 <div className="flex items-center gap-3 mb-3">
                                                                     <Trash2 className="text-red-600" size={20} />
@@ -3700,13 +3809,14 @@ export const DataEntry: React.FC = () => {
                                                                     ⚠️ This will delete ALL production entries for the selected date and their associated ledger entries. Requires Supervisor PIN.
                                                                 </p>
                                                             </div>
+                                                            )}
                                                         </div>
                                                         <div className="md:col-span-12">
                                                             <div className="overflow-x-auto">
                                                                 <table className="w-full text-sm text-left">
                                                                     <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
                                                                         <tr>
-                                                                            {['Item','Category','Bale Size','Qty','Weight','Timestamp'].map((col, idx) => {
+                                                                            {['Item Code','Item','Category','Bale Size','Qty','Weight','Timestamp'].map((col, idx) => {
                                                                                 return (
                                                                                     <th key={col} className="px-4 py-2 cursor-pointer" onClick={() => handleProdReportSort(col)}>
                                                                                         {col}
@@ -3718,15 +3828,20 @@ export const DataEntry: React.FC = () => {
                                                                     </thead>
                                                                     <tbody className="divide-y divide-slate-100">
                                                                         {filteredProducedEntries.length === 0 ? (
-                                                                            <tr><td colSpan={8} className="text-center py-8 text-slate-400">No production entries found.</td></tr>
+                                                                            <tr><td colSpan={7} className="text-center py-8 text-slate-400">No production entries found.</td></tr>
                                                                         ) : (
                                                                             filteredProducedEntries.map(entry => {
                                                                                 const item = state.items.find(i => i.id === entry.itemId);
                                                                                 const packageSize = item?.weightPerUnit !== undefined ? Number(item.weightPerUnit) : null;
+                                                                                // Get category name instead of ID
+                                                                                const categoryName = item?.category 
+                                                                                    ? (state.categories.find(c => c.id === item.category)?.name || item.category)
+                                                                                    : '-';
                                                                                 return (
                                                                                     <tr key={entry.id} className="hover:bg-slate-50">
+                                                                                        <td className="px-4 py-2 font-mono text-sm text-slate-600">{item?.code || '-'}</td>
                                                                                         <td className="px-4 py-2 font-medium text-slate-700">{item?.name || entry.itemId}</td>
-                                                                                        <td className="px-4 py-2">{item?.category || '-'}</td>
+                                                                                        <td className="px-4 py-2">{categoryName}</td>
                                                                                         <td className="px-4 py-2">{packageSize !== null ? packageSize : '-'}</td>
                                                                                         <td className="px-4 py-2">{entry.qtyProduced}</td>
                                                                                         <td className="px-4 py-2">{entry.weightProduced}</td>
@@ -3805,12 +3920,16 @@ export const DataEntry: React.FC = () => {
                                         <div className="flex justify-between items-center mb-4"><h4 className="font-semibold text-slate-700">Staged Entries</h4><span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold">{stagedProds.length}</span></div>
                                         <div className="flex-1 overflow-y-auto min-h-[200px] mb-4">{stagedProds.length === 0 ? ( <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm"><Layers size={32} className="mb-2 opacity-30" /><p>No items added yet</p></div> ) : ( <div className="space-y-2">{stagedProds.map((entry, idx) => {
                                             const item = state.items.find(i => i.id === entry.itemId);
+                                            // Get category name instead of ID
+                                            const categoryName = item?.category 
+                                                ? (state.categories.find(c => c.id === item.category)?.name || item.category)
+                                                : '';
                                             return (
                                                 <div key={entry.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-center group">
                                                     <div>
                                                         <div className="font-medium text-slate-800 text-sm">{item?.code || entry.itemId} - {entry.itemName}</div>
                                                         <div className="text-xs text-slate-500 flex gap-2">
-                                                            <span>{item?.category || ''}</span>
+                                                            <span>{categoryName}</span>
                                                             <span>•</span>
                                                             <span>{entry.qtyProduced} {entry.packingType}s ({item?.weightPerUnit || 0}Kg each)</span>
                                                             {entry.serialStart && ( <span className="text-emerald-600 font-mono bg-emerald-50 px-1 rounded">#{entry.serialStart} - #{entry.serialEnd}</span> )}

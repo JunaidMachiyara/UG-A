@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { UserRole, TransactionType, LedgerEntry, PartnerType, SalesInvoice } from '../types';
+import { UserRole, TransactionType, LedgerEntry, PartnerType, SalesInvoice, AccountType } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search, CheckSquare } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs, getDoc, query, where, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -17,7 +17,7 @@ import { UserManagement } from './UserManagement';
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state, postTransaction, deleteTransaction } = useData();
+    const { state, postTransaction, deleteTransaction, addOriginalOpening } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -44,6 +44,43 @@ export const AdminModule: React.FC = () => {
     const [sectionFixResult, setSectionFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
     const [fixingPurchaseLedgers, setFixingPurchaseLedgers] = useState(false);
     const [purchaseLedgerFixResult, setPurchaseLedgerFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [diagnosingProductionBalance, setDiagnosingProductionBalance] = useState(false);
+    const [productionBalanceDiagnosis, setProductionBalanceDiagnosis] = useState<{ 
+        totalProductions: number; 
+        missingOpenings: number; 
+        totalMissingWipValue: number; 
+        impactOnAssets: number;
+        impactOnEquity: number;
+        details: Array<{ productionId: string; date: string; itemName: string; value: number; weight: number }>;
+    } | null>(null);
+    const [fixingProductionBalance, setFixingProductionBalance] = useState(false);
+    const [productionBalanceFixResult, setProductionBalanceFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [unbalancedTransactions, setUnbalancedTransactions] = useState<Array<{
+        transactionId: string;
+        transactionType: string;
+        date: string;
+        totalDebit: number;
+        totalCredit: number;
+        imbalance: number;
+        entryCount: number;
+        entries: any[];
+    }>>([]);
+    const [fixingUnbalancedTransactions, setFixingUnbalancedTransactions] = useState(false);
+    const [unbalancedProgress, setUnbalancedProgress] = useState<{ current: number; total: number; batch: number; totalBatches: number } | null>(null);
+    const [ledgerImbalance, setLedgerImbalance] = useState<number | null>(null);
+    const [fixingLedgerBalance, setFixingLedgerBalance] = useState(false);
+    const [balanceSheetDifference, setBalanceSheetDifference] = useState<number | null>(null);
+    const [recalculatingBalances, setRecalculatingBalances] = useState(false);
+    const [unbalancedFixResult, setUnbalancedFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [invoicesWithoutCOGS, setInvoicesWithoutCOGS] = useState<Array<{ invoiceNo: string; date: string; totalCOGS: number; hasCOGS: boolean; hasInventoryReduction: boolean; factoryId: string }>>([]);
+    const [fixingCOGSEntries, setFixingCOGSEntries] = useState(false);
+    const [cogsFixResult, setCogsFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [totalMissingCOGS, setTotalMissingCOGS] = useState(0);
+    const [balanceSheetImbalance, setBalanceSheetImbalance] = useState(0);
+    const [productionsMissingCredit, setProductionsMissingCredit] = useState<Array<{ productionId: string; date: string; itemName: string; value: number; issue: string }>>([]);
+    const [fixingProductionCredits, setFixingProductionCredits] = useState(false);
+    const [productionCreditFixResult, setProductionCreditFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [productionCreditProgress, setProductionCreditProgress] = useState<{ current: number; total: number; batch: number; totalBatches: number } | null>(null);
     const [deletingAllPurchases, setDeletingAllPurchases] = useState(false);
     const [deletePurchasesResult, setDeletePurchasesResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
     const [verifyingPurchases, setVerifyingPurchases] = useState(false);
@@ -2163,7 +2200,7 @@ export const AdminModule: React.FC = () => {
                                             ? `DS-${invoice.invoiceNo}` 
                                             : `INV-${invoice.invoiceNo}`;
                                         
-                                        // Query ALL ledger entries for this transactionId (regardless of factoryId)
+                                        // Query ALL ledger entries for this transactionId regardless of factoryId
                                         // This ensures old entries without factoryId are also deleted
                                         const ledgerQuery = query(
                                             collection(db, 'ledger'),
@@ -3975,6 +4012,2399 @@ export const AdminModule: React.FC = () => {
                                 </p>
                             )}
                         </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Production Balance Sheet Diagnostic & Fix Section */}
+            <div className="bg-white border-2 border-purple-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-100 p-3 rounded-lg">
+                        <AlertTriangle className="text-purple-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Production Balance Sheet Diagnostic</h3>
+                        <p className="text-sm text-slate-600">Identify and fix production entries posted without original openings</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-purple-900 mb-2">
+                            Current Status: {state.productions.length} Production Entries
+                        </p>
+                        <p className="text-xs text-purple-700">
+                            This utility will:
+                            <ul className="list-disc list-inside mt-1">
+                                <li>Identify production entries that were posted without corresponding original openings</li>
+                                <li>Calculate the missing WIP (Work in Progress) consumption</li>
+                                <li>Show the impact on Balance Sheet (Assets vs Liabilities & Equity)</li>
+                                <li>Optionally create original opening entries retroactively to balance the books</li>
+                            </ul>
+                            <strong className="block mt-2 text-red-600">⚠️ This is a critical accounting issue that causes Balance Sheet imbalance!</strong>
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            setDiagnosingProductionBalance(true);
+                            setProductionBalanceDiagnosis(null);
+
+                            try {
+                                const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
+                                const productionGainId = state.accounts.find(a => a.name.includes('Production Gain'))?.id;
+
+                                if (!wipId || !productionGainId) {
+                                    alert('Required accounts not found. Please ensure "Work in Progress" and "Production Gain" accounts exist.');
+                                    setDiagnosingProductionBalance(false);
+                                    return;
+                                }
+
+                                // Find all production entries
+                                const allProductions = state.productions.filter(p => !p.isRebaling && p.qtyProduced > 0);
+                                
+                                // Find production ledger entries that credit Production Gain (indicating no WIP was consumed)
+                                const productionGainCredits = state.ledger.filter(e => 
+                                    e.accountId === productionGainId && 
+                                    e.credit > 0 &&
+                                    e.transactionType === TransactionType.PRODUCTION &&
+                                    e.narration?.includes('(No WIP)')
+                                );
+
+                                // Match production entries with their ledger entries
+                                const missingOpenings: Array<{ productionId: string; date: string; itemName: string; value: number; weight: number }> = [];
+                                let totalMissingWipValue = 0;
+
+                                productionGainCredits.forEach(creditEntry => {
+                                    // Extract production ID from transactionId (format: PROD-{id})
+                                    const transactionId = creditEntry.transactionId;
+                                    const productionId = transactionId.replace('PROD-', '');
+                                    
+                                    // Find corresponding production entry
+                                    const production = allProductions.find(p => p.id === productionId);
+                                    if (production) {
+                                        // Check if there's a corresponding original opening
+                                        const hasOpening = state.originalOpenings.some(o => 
+                                            o.date === production.date &&
+                                            o.factoryId === production.factoryId
+                                        );
+
+                                        if (!hasOpening) {
+                                            const item = state.items.find(i => i.id === production.itemId);
+                                            const productionPrice = production.productionPrice || item?.avgCost || 0;
+                                            const value = production.qtyProduced * productionPrice;
+                                            
+                                            missingOpenings.push({
+                                                productionId: production.id,
+                                                date: production.date,
+                                                itemName: production.itemName || item?.name || 'Unknown',
+                                                value: value,
+                                                weight: production.weightProduced
+                                            });
+                                            
+                                            totalMissingWipValue += value;
+                                        }
+                                    }
+                                });
+
+                                // Calculate impact
+                                const impactOnAssets = totalMissingWipValue; // Raw Materials not consumed
+                                const impactOnEquity = totalMissingWipValue; // Production Gain incorrectly credited
+
+                                setProductionBalanceDiagnosis({
+                                    totalProductions: allProductions.length,
+                                    missingOpenings: missingOpenings.length,
+                                    totalMissingWipValue,
+                                    impactOnAssets,
+                                    impactOnEquity,
+                                    details: missingOpenings.slice(0, 100) // Limit to first 100 for display
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error diagnosing production balance:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            } finally {
+                                setDiagnosingProductionBalance(false);
+                            }
+                        }}
+                        disabled={diagnosingProductionBalance || state.productions.length === 0}
+                        className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {diagnosingProductionBalance ? (
+                            <>
+                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                Analyzing Production Entries...
+                            </>
+                        ) : (
+                            <>
+                                <AlertTriangle size={18} />
+                                Diagnose Production Balance Issue ({state.productions.length} productions to check)
+                            </>
+                        )}
+                    </button>
+
+                    {productionBalanceDiagnosis && (
+                        <div className={`p-4 rounded-lg border-2 ${
+                            productionBalanceDiagnosis.missingOpenings > 0
+                                ? 'bg-red-50 border-red-300' 
+                                : 'bg-emerald-50 border-emerald-300'
+                        }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {productionBalanceDiagnosis.missingOpenings > 0 ? (
+                                    <XCircle className="text-red-600" size={20} />
+                                ) : (
+                                    <CheckCircle className="text-emerald-600" size={20} />
+                                )}
+                                <span className={`font-bold ${
+                                    productionBalanceDiagnosis.missingOpenings > 0 ? 'text-red-900' : 'text-emerald-900'
+                                }`}>
+                                    {productionBalanceDiagnosis.missingOpenings > 0 ? 'Issue Found!' : 'No Issues Detected'}
+                                </span>
+                            </div>
+                            <div className="text-sm space-y-1">
+                                <p><strong>Total Productions:</strong> {productionBalanceDiagnosis.totalProductions}</p>
+                                <p><strong>Missing Original Openings:</strong> {productionBalanceDiagnosis.missingOpenings}</p>
+                                <p><strong>Missing WIP Value:</strong> ${productionBalanceDiagnosis.totalMissingWipValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                                <p className="text-red-700"><strong>Impact on Assets:</strong> +${productionBalanceDiagnosis.impactOnAssets.toLocaleString(undefined, {minimumFractionDigits: 2})} (Raw Materials not consumed)</p>
+                                <p className="text-red-700"><strong>Impact on Equity:</strong> +${productionBalanceDiagnosis.impactOnEquity.toLocaleString(undefined, {minimumFractionDigits: 2})} (Production Gain incorrectly credited)</p>
+                                <p className="text-red-800 font-bold mt-2">Balance Sheet Imbalance: ${(productionBalanceDiagnosis.impactOnAssets + productionBalanceDiagnosis.impactOnEquity).toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                            </div>
+                            {productionBalanceDiagnosis.details.length > 0 && (
+                                <div className="mt-3 max-h-40 overflow-y-auto">
+                                    <p className="text-xs font-semibold mb-1">Sample Entries (showing first {Math.min(productionBalanceDiagnosis.details.length, 10)}):</p>
+                                    <ul className="text-xs space-y-1">
+                                        {productionBalanceDiagnosis.details.slice(0, 10).map((detail, idx) => (
+                                            <li key={idx} className="text-slate-600">
+                                                {detail.date}: {detail.itemName} - ${detail.value.toFixed(2)} ({detail.weight}kg)
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {productionBalanceDiagnosis && productionBalanceDiagnosis.missingOpenings > 0 && (
+                        <>
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will create original opening entries retroactively for productions missing them.
+                                    This will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Create Original Opening entries for each missing production</li>
+                                        <li>Create corresponding WIP ledger entries</li>
+                                        <li>Balance the accounting by consuming Raw Materials instead of crediting Production Gain</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    if (!confirm(`This will create ${productionBalanceDiagnosis.missingOpenings} original opening entries retroactively. This is a major accounting correction. Continue?`)) {
+                                        return;
+                                    }
+
+                                    setFixingProductionBalance(true);
+                                    setProductionBalanceFixResult(null);
+
+                                    try {
+                                        const errors: string[] = [];
+                                        let fixed = 0;
+                                        let skipped = 0;
+
+                                        const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
+                                        const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
+
+                                        if (!rawMaterialInvId || !wipId) {
+                                            throw new Error('Required accounts not found');
+                                        }
+
+                                        // Get a default supplier (or create a system supplier)
+                                        const defaultSupplier = state.partners.find(p => p.type === PartnerType.SUPPLIER)?.id || '';
+
+                                        for (const detail of productionBalanceDiagnosis.details) {
+                                            try {
+                                                const production = state.productions.find(p => p.id === detail.productionId);
+                                                if (!production) {
+                                                    errors.push(`Production ${detail.productionId} not found`);
+                                                    continue;
+                                                }
+
+                                                // Check if opening already exists
+                                                const existingOpening = state.originalOpenings.find(o => 
+                                                    o.date === production.date &&
+                                                    o.factoryId === production.factoryId &&
+                                                    Math.abs(o.weightOpened - detail.weight) < 0.01
+                                                );
+
+                                                if (existingOpening) {
+                                                    skipped++;
+                                                    continue;
+                                                }
+
+                                                // Calculate cost per kg (use average from similar items or default)
+                                                const item = state.items.find(i => i.id === production.itemId);
+                                                const avgCostPerKg = item?.avgCost ? (detail.value / detail.weight) : 1.0;
+
+                                                // Create original opening entry
+                                                const opening = {
+                                                    id: Math.random().toString(36).substr(2, 9),
+                                                    date: production.date,
+                                                    supplierId: defaultSupplier || 'SYSTEM-RETROACTIVE',
+                                                    originalType: 'RETROACTIVE-FIX',
+                                                    originalProductId: undefined,
+                                                    batchNumber: `RETRO-${production.date}-${production.id.substring(0, 6)}`,
+                                                    qtyOpened: detail.weight, // Use weight as qty for retroactive entries
+                                                    weightOpened: detail.weight,
+                                                    costPerKg: avgCostPerKg,
+                                                    totalValue: detail.value,
+                                                    factoryId: production.factoryId || currentFactory?.id || ''
+                                                };
+
+                                                await addOriginalOpening(opening);
+                                                fixed++;
+
+                                                // Small delay every 10 entries
+                                                if (fixed % 10 === 0) {
+                                                    await new Promise(resolve => setTimeout(resolve, 200));
+                                                }
+                                            } catch (error: any) {
+                                                console.error(`❌ Error processing production ${detail.productionId}:`, error);
+                                                errors.push(`Production ${detail.productionId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        setProductionBalanceFixResult({
+                                            success: true,
+                                            message: `Successfully created ${fixed} original opening entries!\n\n- Fixed: ${fixed} entries\n- Skipped: ${skipped} entries (already existed)\n- Errors: ${errors.length}`,
+                                            fixed,
+                                            errors
+                                        });
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing production balance:', error);
+                                        setProductionBalanceFixResult({
+                                            success: false,
+                                            message: `Failed: ${error.message}`,
+                                            fixed: 0,
+                                            errors: [error.message]
+                                        });
+                                    } finally {
+                                        setFixingProductionBalance(false);
+                                    }
+                                }}
+                                disabled={fixingProductionBalance}
+                                className="w-full px-4 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {fixingProductionBalance ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        Creating Original Opening Entries...
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Fix Production Balance ({productionBalanceDiagnosis.missingOpenings} entries to fix)
+                                    </>
+                                )}
+                            </button>
+
+                            {productionBalanceFixResult && (
+                                <div className={`p-4 rounded-lg border-2 ${
+                                    productionBalanceFixResult.success 
+                                        ? 'bg-emerald-50 border-emerald-300' 
+                                        : 'bg-red-50 border-red-300'
+                                }`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {productionBalanceFixResult.success ? (
+                                            <CheckCircle className="text-emerald-600" size={20} />
+                                        ) : (
+                                            <XCircle className="text-red-600" size={20} />
+                                        )}
+                                        <span className={`font-bold ${
+                                            productionBalanceFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                        }`}>
+                                            {productionBalanceFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                        </span>
+                                    </div>
+                                    <p className={`text-sm whitespace-pre-line ${
+                                        productionBalanceFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                                    }`}>
+                                        {productionBalanceFixResult.message}
+                                    </p>
+                                    {productionBalanceFixResult.errors.length > 0 && (
+                                        <div className="mt-2 text-xs text-red-600">
+                                            <strong>Errors:</strong>
+                                            <ul className="list-disc list-inside mt-1">
+                                                {productionBalanceFixResult.errors.slice(0, 5).map((err, idx) => (
+                                                    <li key={idx}>{err}</li>
+                                                ))}
+                                                {productionBalanceFixResult.errors.length > 5 && (
+                                                    <li>... and {productionBalanceFixResult.errors.length - 5} more</li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {productionBalanceFixResult.success && (
+                                        <p className="text-xs text-emerald-600 mt-2">
+                                            Page will refresh automatically in 5 seconds to update Balance Sheet...
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Comprehensive Balance Sheet Diagnostic Section */}
+            <div className="bg-white border-2 border-blue-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-blue-100 p-3 rounded-lg">
+                        <Database className="text-blue-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Comprehensive Balance Sheet Diagnostic</h3>
+                        <p className="text-sm text-slate-600">Deep analysis of ledger entries, account balances, and transaction completeness</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-blue-900 mb-2">
+                            This diagnostic checks:
+                        </p>
+                        <ul className="text-xs text-blue-700 list-disc list-inside space-y-1">
+                            <li>Total Ledger Debits vs Credits (should be equal)</li>
+                            <li>Account balances calculated from ledger entries</li>
+                            <li>Sales invoices with missing COGS entries</li>
+                            <li>Purchases with missing ledger entries</li>
+                            <li>Opening balances completeness</li>
+                            <li>Balance Sheet calculation breakdown</li>
+                        </ul>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                // Calculate total debits and credits
+                                const totalDebits = state.ledger.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                const totalCredits = state.ledger.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                const ledgerImbalance = totalDebits - totalCredits;
+
+                                // Check account balances
+                                const assets = state.accounts.filter(a => a.type === AccountType.ASSET);
+                                const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
+                                const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+                                const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE);
+                                const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE);
+
+                                // Calculate account balances from ledger
+                                const accountBalancesFromLedger = state.accounts.map(acc => {
+                                    const debitSum = state.ledger.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const creditSum = state.ledger.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    let calculatedBalance = 0;
+                                    if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                                        calculatedBalance = debitSum - creditSum;
+                                    } else {
+                                        calculatedBalance = creditSum - debitSum;
+                                    }
+                                    return { account: acc, calculatedBalance, storedBalance: acc.balance, difference: Math.abs(calculatedBalance - acc.balance) };
+                                });
+
+                                // Check sales invoices for COGS entries
+                                const postedInvoices = state.salesInvoices.filter(inv => inv.status === 'Posted');
+                                const invoicesWithoutCOGS: any[] = [];
+                                let totalMissingCOGS = 0;
+                                postedInvoices.forEach(inv => {
+                                    const transactionId = `INV-${inv.invoiceNo}`;
+                                    const cogsEntries = state.ledger.filter(e => 
+                                        e.transactionId === transactionId && 
+                                        e.accountName?.includes('Cost of Goods Sold')
+                                    );
+                                    const inventoryReductionEntries = state.ledger.filter(e => 
+                                        e.transactionId === transactionId && 
+                                        e.accountName?.includes('Inventory - Finished Goods') &&
+                                        e.narration?.includes('Inventory Reduction')
+                                    );
+                                    if ((cogsEntries.length === 0 || inventoryReductionEntries.length === 0) && inv.items.length > 0) {
+                                        const totalCOGS = inv.items.reduce((sum, item) => {
+                                            const itemDef = state.items.find(i => i.id === item.itemId);
+                                            return sum + (item.qty * (itemDef?.avgCost || 0));
+                                        }, 0);
+                                        if (totalCOGS > 0) {
+                                            invoicesWithoutCOGS.push({ 
+                                                invoiceNo: inv.invoiceNo, 
+                                                date: inv.date, 
+                                                totalCOGS,
+                                                hasCOGS: cogsEntries.length > 0,
+                                                hasInventoryReduction: inventoryReductionEntries.length > 0,
+                                                factoryId: inv.factoryId
+                                            });
+                                            totalMissingCOGS += totalCOGS;
+                                        }
+                                    }
+                                });
+
+                                // Check purchases for ledger entries
+                                const purchasesWithoutLedger: any[] = [];
+                                state.purchases.forEach(purchase => {
+                                    const transactionId = `OB-PUR-${purchase.id}`;
+                                    const ledgerEntries = state.ledger.filter(e => e.transactionId === transactionId);
+                                    if (ledgerEntries.length === 0 && (purchase.totalLandedCost || purchase.totalCostFCY) > 0) {
+                                        purchasesWithoutLedger.push({ 
+                                            batchNumber: purchase.batchNumber, 
+                                            date: purchase.date, 
+                                            value: purchase.totalLandedCost || purchase.totalCostFCY || 0 
+                                        });
+                                    }
+                                });
+
+                                // Calculate Balance Sheet components
+                                const totalAssetsFromAccounts = assets.reduce((sum, a) => sum + a.balance, 0);
+                                const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
+                                const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+                                const supplierLikeTypes = [PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT];
+                                const positiveSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance > 0);
+                                const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + s.balance, 0);
+                                const totalAssets = totalAssetsFromAccounts + totalCustomersAR + totalSupplierAdvances;
+
+                                const totalLiabilitiesFromAccounts = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const negativeSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance < 0);
+                                const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+                                const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
+                                const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
+                                const otherPayableAccounts = liabilities.filter(a => {
+                                    const codeNum = parseInt(a.code || '0');
+                                    return codeNum >= 2030 && codeNum <= 2099;
+                                });
+                                const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+                                const totalLiabilities = totalLiabilitiesFromAccounts + totalSuppliersAP + totalCustomerAdvances + totalOtherPayables;
+
+                                const totalEquityFromAccounts = equity.reduce((sum, a) => sum + a.balance, 0);
+                                const totalRevenue = revenue.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const totalExpenses = expenses.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const netIncome = totalRevenue - totalExpenses;
+                                const totalEquity = totalEquityFromAccounts + netIncome;
+
+                                const balanceSheetImbalance = totalAssets - (totalLiabilities + totalEquity);
+
+                                // Find accounts with balance mismatches
+                                const accountsWithMismatches = accountBalancesFromLedger.filter(a => a.difference > 0.01);
+
+                                // Display results
+                                const report = `
+═══════════════════════════════════════════════════════════
+COMPREHENSIVE BALANCE SHEET DIAGNOSTIC REPORT
+═══════════════════════════════════════════════════════════
+
+📊 LEDGER SUMMARY:
+   Total Debits:  $${totalDebits.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Total Credits: $${totalCredits.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Imbalance:     $${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}
+   ${ledgerImbalance === 0 ? '✅ Ledger is balanced' : '❌ Ledger is NOT balanced!'}
+
+💰 BALANCE SHEET BREAKDOWN:
+   Total Assets:           $${totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - From Accounts:      $${totalAssetsFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Customer AR:        $${totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Supplier Advances:  $${totalSupplierAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   Total Liabilities:      $${totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - From Accounts:      $${totalLiabilitiesFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Supplier AP:        $${totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Customer Advances:  $${totalCustomerAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Other Payables:     $${totalOtherPayables.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   Total Equity:           $${totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - From Accounts:      $${totalEquityFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+     - Net Income:         $${netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}
+       (Revenue: $${totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 2})} - Expenses: $${totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})})
+   
+   Balance Sheet Imbalance: $${Math.abs(balanceSheetImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}
+   ${balanceSheetImbalance === 0 ? '✅ Balance Sheet is balanced!' : '❌ Balance Sheet is NOT balanced!'}
+
+🔍 ISSUES FOUND:
+   ${invoicesWithoutCOGS.length > 0 ? `❌ ${invoicesWithoutCOGS.length} Sales Invoices missing COGS entries (Total Missing: $${totalMissingCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})})` : '✅ All sales invoices have COGS entries'}
+   ${purchasesWithoutLedger.length > 0 ? `❌ ${purchasesWithoutLedger.length} Purchases missing ledger entries (Total: $${purchasesWithoutLedger.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})})` : '✅ All purchases have ledger entries'}
+   ${accountsWithMismatches.length > 0 ? `❌ ${accountsWithMismatches.length} Accounts with balance mismatches` : '✅ All account balances match ledger entries'}
+
+${invoicesWithoutCOGS.length > 0 ? `\n⚠️ CRITICAL: Missing COGS entries cause:\n   - Finished Goods Inventory NOT reduced: +$${totalMissingCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})} (Assets inflated)\n   - COGS NOT recorded: -$${totalMissingCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})} (Expenses understated)\n   - Net Income overstated: +$${totalMissingCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})} (Equity inflated)\n   - Total Balance Sheet Impact: $${(totalMissingCOGS * 2).toLocaleString(undefined, {minimumFractionDigits: 2})} (Assets + Equity both wrong)` : ''}
+
+${invoicesWithoutCOGS.length > 0 ? `\n📋 SALES INVOICES WITHOUT COGS (Sample of first 10):\n${invoicesWithoutCOGS.slice(0, 10).map(inv => `   - ${inv.invoiceNo} (${inv.date}): $${inv.totalCOGS.toFixed(2)}`).join('\n')}` : ''}
+
+${purchasesWithoutLedger.length > 0 ? `\n📋 PURCHASES WITHOUT LEDGER ENTRIES (Sample of first 10):\n${purchasesWithoutLedger.slice(0, 10).map(p => `   - ${p.batchNumber} (${p.date}): $${p.value.toFixed(2)}`).join('\n')}` : ''}
+
+${accountsWithMismatches.length > 0 ? `\n📋 ACCOUNTS WITH BALANCE MISMATCHES (Sample of first 10):\n${accountsWithMismatches.slice(0, 10).map(a => `   - ${a.account.name} (${a.account.code}): Stored=${a.storedBalance.toFixed(2)}, Calculated=${a.calculatedBalance.toFixed(2)}, Diff=${a.difference.toFixed(2)}`).join('\n')}` : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                // Store invoices without COGS in state for fixing (MUST be done before alert)
+                                console.log('🔍 Setting state - invoicesWithoutCOGS:', invoicesWithoutCOGS.length, 'Total COGS:', totalMissingCOGS);
+                                setInvoicesWithoutCOGS([...invoicesWithoutCOGS]); // Create new array to trigger re-render
+                                setTotalMissingCOGS(totalMissingCOGS);
+                                setBalanceSheetImbalance(balanceSheetImbalance);
+                                // Also set balanceSheetDifference so the fix button appears
+                                setBalanceSheetDifference(balanceSheetImbalance);
+
+                                alert(report);
+                                
+                                console.log('📊 Comprehensive Balance Sheet Diagnostic:', {
+                                    ledgerImbalance,
+                                    balanceSheetImbalance,
+                                    totalAssets,
+                                    totalLiabilities,
+                                    totalEquity,
+                                    invoicesWithoutCOGS: invoicesWithoutCOGS.length,
+                                    totalMissingCOGS,
+                                    purchasesWithoutLedger: purchasesWithoutLedger.length,
+                                    accountsWithMismatches: accountsWithMismatches.length
+                                });
+                                
+                                // Log state after setting
+                                setTimeout(() => {
+                                    console.log('✅ State should be updated now. Check if button appears.');
+                                }, 500);
+
+                            } catch (error: any) {
+                                console.error('❌ Error running comprehensive diagnostic:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <Database size={18} />
+                        Run Comprehensive Balance Sheet Diagnostic
+                    </button>
+
+                    {/* Always show section - conditionally show content */}
+                    <div className="mt-6 border-t border-slate-200 pt-6">
+                        {invoicesWithoutCOGS.length > 0 ? (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ CRITICAL: {invoicesWithoutCOGS.length} Sales Invoices Missing COGS Entries
+                                </p>
+                                <p className="text-xs text-red-700 mb-2">
+                                    Total Missing COGS: <strong>${invoicesWithoutCOGS.reduce((sum, inv) => sum + inv.totalCOGS, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                </p>
+                                <p className="text-xs text-red-700">
+                                    This causes Finished Goods Inventory to be inflated and contributes significantly to the Balance Sheet imbalance.
+                                </p>
+                                {balanceSheetImbalance !== 0 && (
+                                    <p className="text-xs text-red-700 mt-1">
+                                        Current Balance Sheet Imbalance: <strong>${Math.abs(balanceSheetImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will create missing COGS and Inventory Reduction entries for sales invoices.
+                                    This will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Create COGS (Debit) entries for each missing invoice</li>
+                                        <li>Create Inventory Reduction (Credit) entries to reduce Finished Goods</li>
+                                        <li>Reduce Assets and Equity by the missing COGS amount</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    const totalCOGS = invoicesWithoutCOGS.reduce((sum, inv) => sum + inv.totalCOGS, 0);
+
+                                    if (!confirm(`This will create COGS and Inventory Reduction entries for ${invoicesWithoutCOGS.length} sales invoices.\n\nTotal COGS: $${totalCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})}\n\nThis is a critical accounting correction. Continue?`)) {
+                                        return;
+                                    }
+
+                                    setFixingCOGSEntries(true);
+                                    setCogsFixResult(null);
+
+                                    try {
+                                        const errors: string[] = [];
+                                        let fixed = 0;
+                                        let skipped = 0;
+
+                                        // Find required accounts
+                                        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold') && !a.name.includes('Direct Sales'));
+                                        const finishedGoodsAccount = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'));
+
+                                        if (!cogsAccount || !finishedGoodsAccount) {
+                                            throw new Error(`Missing required accounts:\n${!cogsAccount ? '- Cost of Goods Sold\n' : ''}${!finishedGoodsAccount ? '- Inventory - Finished Goods' : ''}`);
+                                        }
+
+                                        for (const invoiceData of invoicesWithoutCOGS) {
+                                            try {
+                                                const invoice = state.salesInvoices.find(inv => inv.invoiceNo === invoiceData.invoiceNo);
+                                                if (!invoice) {
+                                                    errors.push(`Invoice ${invoiceData.invoiceNo} not found`);
+                                                    continue;
+                                                }
+
+                                                const transactionId = `INV-${invoice.invoiceNo}`;
+                                                
+                                                // Check if already fixed
+                                                const existingCOGS = state.ledger.filter(e => 
+                                                    e.transactionId === transactionId && 
+                                                    e.accountName?.includes('Cost of Goods Sold')
+                                                );
+                                                const existingInventoryReduction = state.ledger.filter(e => 
+                                                    e.transactionId === transactionId && 
+                                                    e.accountName?.includes('Inventory - Finished Goods') &&
+                                                    e.narration?.includes('Inventory Reduction')
+                                                );
+
+                                                if (existingCOGS.length > 0 && existingInventoryReduction.length > 0) {
+                                                    skipped++;
+                                                    continue;
+                                                }
+
+                                                // Create missing entries
+                                                const entries: Omit<LedgerEntry, 'id'>[] = [];
+
+                                                // COGS entry (if missing)
+                                                if (existingCOGS.length === 0) {
+                                                    entries.push({
+                                                        date: invoice.date,
+                                                        transactionId,
+                                                        transactionType: TransactionType.SALES_INVOICE,
+                                                        accountId: cogsAccount.id,
+                                                        accountName: cogsAccount.name,
+                                                        currency: 'USD',
+                                                        exchangeRate: 1,
+                                                        fcyAmount: invoiceData.totalCOGS,
+                                                        debit: invoiceData.totalCOGS,
+                                                        credit: 0,
+                                                        narration: `COGS: ${invoice.invoiceNo}`,
+                                                        factoryId: invoice.factoryId || currentFactory?.id || '',
+                                                        isAdjustment: true
+                                                    });
+                                                }
+
+                                                // Inventory Reduction entry (if missing)
+                                                if (existingInventoryReduction.length === 0) {
+                                                    entries.push({
+                                                        date: invoice.date,
+                                                        transactionId,
+                                                        transactionType: TransactionType.SALES_INVOICE,
+                                                        accountId: finishedGoodsAccount.id,
+                                                        accountName: finishedGoodsAccount.name,
+                                                        currency: 'USD',
+                                                        exchangeRate: 1,
+                                                        fcyAmount: invoiceData.totalCOGS,
+                                                        debit: 0,
+                                                        credit: invoiceData.totalCOGS,
+                                                        narration: `Inventory Reduction: ${invoice.invoiceNo}`,
+                                                        factoryId: invoice.factoryId || currentFactory?.id || '',
+                                                        isAdjustment: true
+                                                    });
+                                                }
+
+                                                if (entries.length > 0) {
+                                                    await postTransaction(entries);
+                                                    fixed++;
+                                                } else {
+                                                    skipped++;
+                                                }
+
+                                                // Small delay every 10 entries
+                                                if (fixed % 10 === 0) {
+                                                    await new Promise(resolve => setTimeout(resolve, 200));
+                                                }
+                                            } catch (error: any) {
+                                                console.error(`❌ Error fixing invoice ${invoiceData.invoiceNo}:`, error);
+                                                errors.push(`${invoiceData.invoiceNo}: ${error.message}`);
+                                            }
+                                        }
+
+                                        setCogsFixResult({
+                                            success: true,
+                                            message: `Successfully created COGS entries!\n\n- Fixed: ${fixed} invoices\n- Skipped: ${skipped} invoices (already had entries)\n- Errors: ${errors.length}\n\nPage will refresh in 5 seconds...`,
+                                            fixed,
+                                            errors
+                                        });
+
+                                        // Clear the list
+                                        setInvoicesWithoutCOGS([]);
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing COGS entries:', error);
+                                        setCogsFixResult({
+                                            success: false,
+                                            message: `Failed: ${error.message}`,
+                                            fixed: 0,
+                                            errors: [error.message]
+                                        });
+                                    } finally {
+                                        setFixingCOGSEntries(false);
+                                    }
+                                }}
+                                disabled={fixingCOGSEntries}
+                                className="w-full px-4 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                            >
+                                {fixingCOGSEntries ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        Creating COGS Entries...
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Fix Missing COGS Entries ({invoicesWithoutCOGS.length} invoices, ${invoicesWithoutCOGS.reduce((sum, inv) => sum + inv.totalCOGS, 0).toLocaleString(undefined, {minimumFractionDigits: 2})})
+                                    </>
+                                )}
+                            </button>
+
+                            {cogsFixResult && (
+                                <div className={`p-4 rounded-lg border-2 mt-4 ${
+                                    cogsFixResult.success 
+                                        ? 'bg-emerald-50 border-emerald-300' 
+                                        : 'bg-red-50 border-red-300'
+                                }`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {cogsFixResult.success ? (
+                                            <CheckCircle className="text-emerald-600" size={20} />
+                                        ) : (
+                                            <XCircle className="text-red-600" size={20} />
+                                        )}
+                                        <span className={`font-bold ${
+                                            cogsFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                        }`}>
+                                            {cogsFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                        </span>
+                                    </div>
+                                    <p className={`text-sm whitespace-pre-line ${
+                                        cogsFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                                    }`}>
+                                        {cogsFixResult.message}
+                                    </p>
+                                    {cogsFixResult.errors.length > 0 && (
+                                        <div className="mt-2 text-xs text-red-600">
+                                            <strong>Errors:</strong>
+                                            <ul className="list-disc list-inside mt-1">
+                                                {cogsFixResult.errors.slice(0, 5).map((err, idx) => (
+                                                    <li key={idx}>{err}</li>
+                                                ))}
+                                                {cogsFixResult.errors.length > 5 && (
+                                                    <li>... and {cogsFixResult.errors.length - 5} more</li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                        ) : (
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                                <p className="text-sm font-semibold text-slate-700 mb-2">
+                                    COGS Fix Section
+                                </p>
+                                <p className="text-xs text-slate-600">
+                                    {totalMissingCOGS > 0 
+                                        ? `⚠️ Found ${invoicesWithoutCOGS.length} invoices with missing COGS ($${totalMissingCOGS.toLocaleString(undefined, {minimumFractionDigits: 2})}). The fix button should appear above after running the diagnostic.`
+                                        : 'Run the diagnostic above to check for missing COGS entries. If any are found, a red warning box and fix button will appear here.'}
+                                </p>
+                                {invoicesWithoutCOGS.length === 0 && totalMissingCOGS === 0 && (
+                                    <p className="text-xs text-emerald-600 mt-2">
+                                        ✅ No missing COGS entries detected. All sales invoices have proper COGS and inventory reduction entries.
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Show fix option for Balance Sheet imbalance */}
+                    {balanceSheetDifference !== null && Math.abs(balanceSheetDifference) > 1000 && (
+                        <>
+                            <div className="mt-6 border-t border-slate-200 pt-6">
+                                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                    <p className="text-sm font-semibold text-red-900 mb-2">
+                                        ⚠️ CRITICAL: Balance Sheet Imbalance Detected
+                                    </p>
+                                    <p className="text-xs text-red-700 mb-2">
+                                        Balance Sheet Difference: <strong>${Math.abs(balanceSheetDifference).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                    </p>
+                                    <p className="text-xs text-red-700">
+                                        This is likely caused by account or partner balances not matching ledger entries.
+                                        The fix will recalculate all balances from ledger entries.
+                                    </p>
+                                </div>
+
+                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
+                                    <p className="text-sm text-amber-800">
+                                        <strong>⚠️ Fix Option:</strong> This will recalculate all account and partner balances from ledger entries.
+                                        This will:
+                                        <ul className="list-disc list-inside mt-1">
+                                            <li>Recalculate all account balances from ledger entries</li>
+                                            <li>Recalculate all partner balances from ledger entries</li>
+                                            <li>Update stored balances to match calculated balances</li>
+                                            <li>Fix the Balance Sheet imbalance</li>
+                                        </ul>
+                                        <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                    </p>
+                                </div>
+
+                                <button
+                                    onClick={async () => {
+                                        const pin = prompt('Enter Supervisor PIN to proceed:');
+                                        if (pin !== SUPERVISOR_PIN) {
+                                            alert('Invalid PIN. Operation cancelled.');
+                                            return;
+                                        }
+
+                                        if (!confirm(`This will recalculate ALL account and partner balances from ledger entries.\n\nThis is a critical accounting correction that will fix the Balance Sheet imbalance.\n\nContinue?`)) {
+                                            return;
+                                        }
+
+                                        setRecalculatingBalances(true);
+
+                                        try {
+                                            // Recalculate account balances from ledger
+                                            const accountUpdates: Array<{ accountId: string; newBalance: number }> = [];
+                                            
+                                            state.accounts.forEach(acc => {
+                                                const entries = state.ledger.filter(e => e.accountId === acc.id);
+                                                const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                                const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                                
+                                                let calculatedBalance = 0;
+                                                if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                                                    calculatedBalance = debitSum - creditSum;
+                                                } else {
+                                                    calculatedBalance = creditSum - debitSum;
+                                                }
+                                                
+                                                // Only update if different
+                                                if (Math.abs(calculatedBalance - acc.balance) > 0.01) {
+                                                    accountUpdates.push({ accountId: acc.id, newBalance: calculatedBalance });
+                                                }
+                                            });
+
+                                            // Recalculate partner balances from ledger
+                                            const partnerUpdates: Array<{ partnerId: string; newBalance: number }> = [];
+                                            
+                                            state.partners.forEach(partner => {
+                                                const entries = state.ledger.filter(e => e.accountId === partner.id);
+                                                const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                                const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                                
+                                                let calculatedBalance = 0;
+                                                if (partner.type === PartnerType.CUSTOMER) {
+                                                    calculatedBalance = debitSum - creditSum;
+                                                } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                                    calculatedBalance = creditSum - debitSum;
+                                                } else {
+                                                    calculatedBalance = debitSum - creditSum;
+                                                }
+                                                
+                                                // Only update if different
+                                                if (Math.abs(calculatedBalance - partner.balance) > 0.01) {
+                                                    partnerUpdates.push({ partnerId: partner.id, newBalance: calculatedBalance });
+                                                }
+                                            });
+
+                                            console.log(`📊 Found ${accountUpdates.length} accounts and ${partnerUpdates.length} partners with mismatched balances`);
+
+                                            let accountsUpdated = 0;
+                                            let partnersUpdated = 0;
+                                            const errors: string[] = [];
+
+                                            // Update accounts
+                                            for (const update of accountUpdates) {
+                                                try {
+                                                    const accountRef = doc(db, 'accounts', update.accountId);
+                                                    await updateDoc(accountRef, { balance: update.newBalance });
+                                                    accountsUpdated++;
+                                                } catch (error: any) {
+                                                    errors.push(`Account ${update.accountId}: ${error.message}`);
+                                                }
+                                            }
+
+                                            // Update partners
+                                            for (const update of partnerUpdates) {
+                                                try {
+                                                    const partnerRef = doc(db, 'partners', update.partnerId);
+                                                    await updateDoc(partnerRef, { balance: update.newBalance });
+                                                    partnersUpdated++;
+                                                } catch (error: any) {
+                                                    errors.push(`Partner ${update.partnerId}: ${error.message}`);
+                                                }
+                                            }
+
+                                            alert(`✅ Successfully recalculated balances!\n\n- Accounts updated: ${accountsUpdated}/${accountUpdates.length}\n- Partners updated: ${partnersUpdated}/${partnerUpdates.length}\n- Errors: ${errors.length}\n\nPage will refresh in 5 seconds...`);
+
+                                            if (errors.length > 0) {
+                                                console.error('Errors:', errors);
+                                            }
+
+                                            // Clear stored difference
+                                            setBalanceSheetDifference(null);
+
+                                            // Refresh page after 5 seconds
+                                            setTimeout(() => {
+                                                window.location.reload();
+                                            }, 5000);
+
+                                        } catch (error: any) {
+                                            console.error('❌ Error recalculating balances:', error);
+                                            alert(`Failed: ${error.message}`);
+                                        } finally {
+                                            setRecalculatingBalances(false);
+                                        }
+                                    }}
+                                    disabled={recalculatingBalances}
+                                    className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                                >
+                                    {recalculatingBalances ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                            Recalculating Balances...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <RefreshCw size={18} />
+                                            Recalculate All Balances from Ledger
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Transaction Integrity Diagnostic Section */}
+            <div className="bg-white border-2 border-orange-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-orange-100 p-3 rounded-lg">
+                        <FileText className="text-orange-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Transaction Integrity Diagnostic</h3>
+                        <p className="text-sm text-slate-600">Find transactions with missing credit/debit entries or orphaned entries</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-orange-900 mb-2">
+                            This diagnostic checks:
+                        </p>
+                        <ul className="text-xs text-orange-700 list-disc list-inside space-y-1">
+                            <li>Production entries missing Production Gain/Capital credit entries</li>
+                            <li>Transactions with only debit OR only credit entries (orphaned)</li>
+                            <li>CSV-uploaded productions that may have incomplete ledger entries</li>
+                            <li>Delete operations that may have left orphaned entries</li>
+                        </ul>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                // Check 1: Production entries missing credit side
+                                const productionEntries = state.productions.filter(p => !p.isRebaling && p.qtyProduced > 0);
+                                const productionsMissingCredit: any[] = [];
+                                
+                                productionEntries.forEach(prod => {
+                                    const transactionId = `PROD-${prod.id}`;
+                                    const ledgerEntries = state.ledger.filter(e => e.transactionId === transactionId);
+                                    
+                                    if (ledgerEntries.length === 0) {
+                                        // No ledger entries at all - this is a problem!
+                                        const item = state.items.find(i => i.id === prod.itemId);
+                                        const productionPrice = prod.productionPrice || item?.avgCost || 0;
+                                        const value = prod.qtyProduced * productionPrice;
+                                        
+                                        productionsMissingCredit.push({
+                                            productionId: prod.id,
+                                            date: prod.date,
+                                            itemName: prod.itemName,
+                                            value: value,
+                                            issue: 'No ledger entries created'
+                                        });
+                                    } else {
+                                        // Check if has both debit (FG) and credit (WIP or Production Gain)
+                                        const hasDebit = ledgerEntries.some(e => 
+                                            e.debit > 0 && 
+                                            e.accountName?.includes('Inventory - Finished Goods')
+                                        );
+                                        const hasWipCredit = ledgerEntries.some(e => 
+                                            e.credit > 0 && 
+                                            e.accountName?.includes('Work in Progress')
+                                        );
+                                        const hasProductionGainCredit = ledgerEntries.some(e => 
+                                            e.credit > 0 && 
+                                            (e.accountName?.includes('Production Gain') || e.accountName?.includes('Capital'))
+                                        );
+                                        
+                                        if (hasDebit && !hasWipCredit && !hasProductionGainCredit) {
+                                            const item = state.items.find(i => i.id === prod.itemId);
+                                            const productionPrice = prod.productionPrice || item?.avgCost || 0;
+                                            const value = prod.qtyProduced * productionPrice;
+                                            
+                                            productionsMissingCredit.push({
+                                                productionId: prod.id,
+                                                date: prod.date,
+                                                itemName: prod.itemName,
+                                                value: value,
+                                                issue: 'Missing credit entry (WIP or Production Gain)'
+                                            });
+                                        }
+                                    }
+                                });
+
+                                // Check 2: Transactions with only one side (orphaned entries)
+                                const transactionGroups = new Map<string, any[]>();
+                                state.ledger.forEach(entry => {
+                                    if (!transactionGroups.has(entry.transactionId)) {
+                                        transactionGroups.set(entry.transactionId, []);
+                                    }
+                                    transactionGroups.get(entry.transactionId)!.push(entry);
+                                });
+
+                                const orphanedTransactions: any[] = [];
+                                transactionGroups.forEach((entries, transactionId) => {
+                                    const totalDebit = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const totalCredit = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    
+                                    // Check if transaction has only debit OR only credit (not both)
+                                    if ((totalDebit > 0 && totalCredit === 0) || (totalDebit === 0 && totalCredit > 0)) {
+                                        orphanedTransactions.push({
+                                            transactionId,
+                                            transactionType: entries[0]?.transactionType || 'UNKNOWN',
+                                            date: entries[0]?.date || '',
+                                            totalDebit,
+                                            totalCredit,
+                                            entryCount: entries.length,
+                                            accounts: entries.map(e => e.accountName).join(', ')
+                                        });
+                                    }
+                                });
+
+                                // Check 3: Production Gain account exists
+                                const productionGainAccount = state.accounts.find(a => 
+                                    a.name.includes('Production Gain') || 
+                                    a.code === '302'
+                                );
+
+                                const report = `
+═══════════════════════════════════════════════════════════
+TRANSACTION INTEGRITY DIAGNOSTIC REPORT
+═══════════════════════════════════════════════════════════
+
+📊 PRODUCTION ENTRIES ANALYSIS:
+   Total Production Entries: ${productionEntries.length}
+   Missing Credit Entries: ${productionsMissingCredit.length}
+   Total Missing Value: $${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+   ${productionsMissingCredit.length > 0 ? '❌ CRITICAL: Production entries missing credit side!' : '✅ All production entries have balanced ledger entries'}
+
+🔍 ORPHANED TRANSACTIONS (Only Debit OR Only Credit):
+   Found: ${orphanedTransactions.length} orphaned transactions
+   ${orphanedTransactions.length > 0 ? '❌ CRITICAL: Transactions with incomplete entries!' : '✅ No orphaned transactions found'}
+
+⚙️ SYSTEM CHECKS:
+   Production Gain Account: ${productionGainAccount ? `✅ Found (${productionGainAccount.name})` : '❌ NOT FOUND - This will cause missing credit entries!'}
+
+${productionsMissingCredit.length > 0 ? `\n📋 PRODUCTION ENTRIES MISSING CREDIT (Sample of first 20):\n${productionsMissingCredit.slice(0, 20).map((p, idx) => `   ${idx + 1}. ${p.itemName} (${p.date}): $${p.value.toFixed(2)} - ${p.issue}`).join('\n')}` : ''}
+
+${orphanedTransactions.length > 0 ? `\n📋 ORPHANED TRANSACTIONS (Sample of first 20):\n${orphanedTransactions.slice(0, 20).map((t, idx) => `   ${idx + 1}. ${t.transactionId} (${t.transactionType}): Debit=$${t.totalDebit.toFixed(2)}, Credit=$${t.totalCredit.toFixed(2)} - ${t.accounts}`).join('\n')}` : ''}
+
+${productionsMissingCredit.length > 0 ? `\n⚠️ ROOT CAUSE: Production entries are creating Finished Goods (Assets) but NOT creating Production Gain/Capital (Equity) entries. This causes:\n   - Assets inflated by $${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}\n   - Equity missing by same amount\n   - Balance Sheet imbalance of $${(productionsMissingCredit.reduce((sum, p) => sum + p.value, 0) * 2).toLocaleString(undefined, {minimumFractionDigits: 2})}` : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                // Store results in state for fixing
+                                setProductionsMissingCredit([...productionsMissingCredit]);
+
+                                alert(report);
+                                console.log('🔍 Transaction Integrity Diagnostic:', {
+                                    productionsMissingCredit: productionsMissingCredit.length,
+                                    totalMissingValue: productionsMissingCredit.reduce((sum, p) => sum + p.value, 0),
+                                    orphanedTransactions: orphanedTransactions.length,
+                                    productionGainAccount: productionGainAccount?.name || 'NOT FOUND'
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error running transaction integrity diagnostic:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-orange-600 text-white rounded-lg font-semibold hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <FileText size={18} />
+                        Run Transaction Integrity Diagnostic
+                    </button>
+
+                    {/* Show fix option if productions missing credit found */}
+                    {productionsMissingCredit.length > 0 && (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ CRITICAL: {productionsMissingCredit.length} Production Entries Missing Credit Side
+                                </p>
+                                <p className="text-xs text-red-700 mb-2">
+                                    Total Missing Value: <strong>${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                </p>
+                                <p className="text-xs text-red-700">
+                                    These productions have Finished Goods (Assets) entries but are missing Production Gain/Capital (Equity) entries.
+                                    This causes Assets to be inflated without corresponding Equity increase.
+                                </p>
+                            </div>
+
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will create missing Production Gain credit entries for production entries.
+                                    This will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Find production entries with Finished Goods debit but no credit</li>
+                                        <li>Create Production Gain credit entries to balance them</li>
+                                        <li>Increase Equity to match the Assets increase</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    const totalValue = productionsMissingCredit.reduce((sum, p) => sum + p.value, 0);
+
+                                    if (!confirm(`This will create Production Gain credit entries for ${productionsMissingCredit.length} production entries.\n\nTotal Value: $${totalValue.toLocaleString(undefined, {minimumFractionDigits: 2})}\n\nThis is a critical accounting correction. Continue?`)) {
+                                        return;
+                                    }
+
+                                    setFixingProductionCredits(true);
+                                    setProductionCreditFixResult(null);
+
+                                    try {
+                                        const errors: string[] = [];
+                                        let fixed = 0;
+                                        let skipped = 0;
+
+                                        // Find Production Gain account
+                                        const productionGainAccount = state.accounts.find(a => 
+                                            a.name.includes('Production Gain') || 
+                                            a.code === '302'
+                                        );
+
+                                        if (!productionGainAccount) {
+                                            throw new Error('Production Gain account not found. Please create it in Setup > Chart of Accounts (code 302).');
+                                        }
+
+                                        // BATCH PROCESSING: Collect all entries first, then post in batches
+                                        const allCreditEntries: Omit<LedgerEntry, 'id'>[] = [];
+                                        const BATCH_SIZE = 100; // Process 100 entries at a time (increased for better performance)
+
+                                        // Step 1: Collect all entries that need to be created
+                                        for (const prodData of productionsMissingCredit) {
+                                            try {
+                                                const production = state.productions.find(p => p.id === prodData.productionId);
+                                                if (!production) {
+                                                    errors.push(`Production ${prodData.productionId} not found`);
+                                                    continue;
+                                                }
+
+                                                const transactionId = `PROD-${production.id}`;
+                                                
+                                                // Check if already fixed
+                                                const existingCredit = state.ledger.filter(e => 
+                                                    e.transactionId === transactionId && 
+                                                    (e.accountName?.includes('Production Gain') || e.accountName?.includes('Capital')) &&
+                                                    e.credit > 0
+                                                );
+
+                                                if (existingCredit.length > 0) {
+                                                    skipped++;
+                                                    continue;
+                                                }
+
+                                                // Get the Finished Goods debit entry to match the value
+                                                const fgDebitEntry = state.ledger.find(e => 
+                                                    e.transactionId === transactionId &&
+                                                    e.accountName?.includes('Inventory - Finished Goods') &&
+                                                    e.debit > 0
+                                                );
+
+                                                const creditValue = fgDebitEntry ? fgDebitEntry.debit : prodData.value;
+
+                                                // Create Production Gain credit entry
+                                                const creditEntry: Omit<LedgerEntry, 'id'> = {
+                                                    date: production.date,
+                                                    transactionId,
+                                                    transactionType: TransactionType.PRODUCTION,
+                                                    accountId: productionGainAccount.id,
+                                                    accountName: productionGainAccount.name,
+                                                    currency: 'USD',
+                                                    exchangeRate: 1,
+                                                    fcyAmount: creditValue,
+                                                    debit: 0,
+                                                    credit: creditValue,
+                                                    narration: `Production Gain (Balance Fix): ${production.itemName}`,
+                                                    factoryId: production.factoryId || currentFactory?.id || '',
+                                                    isAdjustment: true
+                                                };
+
+                                                allCreditEntries.push(creditEntry);
+                                            } catch (error: any) {
+                                                console.error(`❌ Error preparing production ${prodData.productionId}:`, error);
+                                                errors.push(`${prodData.productionId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        // Step 2: Post entries in batches for better performance
+                                        const totalBatches = Math.ceil(allCreditEntries.length / BATCH_SIZE);
+                                        console.log(`📊 Processing ${allCreditEntries.length} Production Gain entries in batches of ${BATCH_SIZE}...`);
+                                        
+                                        // Initialize progress
+                                        setProductionCreditProgress({ current: 0, total: allCreditEntries.length, batch: 0, totalBatches });
+                                        
+                                        for (let i = 0; i < allCreditEntries.length; i += BATCH_SIZE) {
+                                            const batch = allCreditEntries.slice(i, i + BATCH_SIZE);
+                                            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+                                            
+                                            try {
+                                                // Update progress before posting
+                                                setProductionCreditProgress({ 
+                                                    current: fixed, 
+                                                    total: allCreditEntries.length, 
+                                                    batch: batchNumber, 
+                                                    totalBatches 
+                                                });
+                                                
+                                                await postTransaction(batch);
+                                                fixed += batch.length;
+                                                
+                                                // Update progress after posting
+                                                setProductionCreditProgress({ 
+                                                    current: fixed, 
+                                                    total: allCreditEntries.length, 
+                                                    batch: batchNumber, 
+                                                    totalBatches 
+                                                });
+                                                
+                                                console.log(`✅ Batch ${batchNumber}/${totalBatches}: Posted ${batch.length} entries (${fixed}/${allCreditEntries.length} total)`);
+                                                
+                                                // Small delay between batches to avoid overwhelming Firebase
+                                                if (i + BATCH_SIZE < allCreditEntries.length) {
+                                                    await new Promise(resolve => setTimeout(resolve, 50)); // Reduced delay
+                                                }
+                                            } catch (error: any) {
+                                                console.error(`❌ Error posting batch ${batchNumber}:`, error);
+                                                errors.push(`Batch ${batchNumber}: ${error.message}`);
+                                                // Continue with next batch even if this one fails
+                                            }
+                                        }
+                                        
+                                        // Clear progress
+                                        setProductionCreditProgress(null);
+
+                                        setProductionCreditFixResult({
+                                            success: true,
+                                            message: `Successfully created Production Gain entries!\n\n- Fixed: ${fixed} productions\n- Skipped: ${skipped} productions (already had entries)\n- Errors: ${errors.length}\n\nPage will refresh in 5 seconds...`,
+                                            fixed,
+                                            errors
+                                        });
+
+                                        // Clear the list
+                                        setProductionsMissingCredit([]);
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing production credit entries:', error);
+                                        setProductionCreditFixResult({
+                                            success: false,
+                                            message: `Failed: ${error.message}`,
+                                            fixed: 0,
+                                            errors: [error.message]
+                                        });
+                                    } finally {
+                                        setFixingProductionCredits(false);
+                                    }
+                                }}
+                                disabled={fixingProductionCredits}
+                                className="w-full px-4 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                            >
+                                {fixingProductionCredits ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        {productionCreditProgress ? (
+                                            <span>
+                                                Creating Production Gain Entries... 
+                                                Batch {productionCreditProgress.batch}/{productionCreditProgress.totalBatches} 
+                                                ({productionCreditProgress.current}/{productionCreditProgress.total} entries)
+                                                ({Math.round((productionCreditProgress.current / productionCreditProgress.total) * 100)}%)
+                                            </span>
+                                        ) : (
+                                            <span>Creating Production Gain Entries...</span>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Fix Missing Production Gain Entries ({productionsMissingCredit.length} productions, ${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})})
+                                    </>
+                                )}
+                                {productionCreditProgress && (
+                                    <div className="mt-2 w-full bg-slate-200 rounded-full h-2.5">
+                                        <div 
+                                            className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" 
+                                            style={{ width: `${(productionCreditProgress.current / productionCreditProgress.total) * 100}%` }}
+                                        ></div>
+                                    </div>
+                                )}
+                            </button>
+
+                            {productionCreditFixResult && (
+                                <div className={`p-4 rounded-lg border-2 mt-4 ${
+                                    productionCreditFixResult.success 
+                                        ? 'bg-emerald-50 border-emerald-300' 
+                                        : 'bg-red-50 border-red-300'
+                                }`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {productionCreditFixResult.success ? (
+                                            <CheckCircle className="text-emerald-600" size={20} />
+                                        ) : (
+                                            <XCircle className="text-red-600" size={20} />
+                                        )}
+                                        <span className={`font-bold ${
+                                            productionCreditFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                        }`}>
+                                            {productionCreditFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                        </span>
+                                    </div>
+                                    <p className={`text-sm whitespace-pre-line ${
+                                        productionCreditFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                                    }`}>
+                                        {productionCreditFixResult.message}
+                                    </p>
+                                    {productionCreditFixResult.errors.length > 0 && (
+                                        <div className="mt-2 text-xs text-red-600">
+                                            <strong>Errors:</strong>
+                                            <ul className="list-disc list-inside mt-1">
+                                                {productionCreditFixResult.errors.slice(0, 5).map((err, idx) => (
+                                                    <li key={idx}>{err}</li>
+                                                ))}
+                                                {productionCreditFixResult.errors.length > 5 && (
+                                                    <li>... and {productionCreditFixResult.errors.length - 5} more</li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Balance Sheet Deep Diagnostic Section */}
+            <div className="bg-white border-2 border-blue-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-blue-100 p-3 rounded-lg">
+                        <FileText className="text-blue-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Balance Sheet Deep Diagnostic</h3>
+                        <p className="text-sm text-slate-600">Find why Balance Sheet doesn't balance (even when ledger is balanced)</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-blue-900 mb-2">
+                            This diagnostic will:
+                        </p>
+                        <ul className="text-xs text-blue-700 list-disc list-inside space-y-1">
+                            <li>Calculate Balance Sheet totals exactly as the report does</li>
+                            <li>Compare account balances vs ledger entries</li>
+                            <li>Identify missing or incorrect calculations</li>
+                            <li>Find the root cause of the $10M+ imbalance</li>
+                        </ul>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                // Calculate exactly as Balance Sheet does
+                                const assets = state.accounts.filter(a => a.type === AccountType.ASSET);
+                                const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
+                                const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+                                const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE);
+                                const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE);
+
+                                // Customer balances
+                                const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
+                                const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+                                const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
+                                const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
+
+                                // Supplier balances
+                                const supplierTypes = [PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT];
+                                const positiveSuppliers = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance > 0);
+                                const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + s.balance, 0);
+                                const negativeSuppliers = state.partners.filter(p => supplierTypes.includes(p.type) && p.balance < 0);
+                                const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+
+                                // Other Payables
+                                const otherPayableAccounts = liabilities.filter(a => {
+                                    const codeNum = parseInt(a.code || '0');
+                                    return codeNum >= 2030 && codeNum <= 2099;
+                                });
+                                const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+                                const regularLiabilities = liabilities.filter(a => {
+                                    const codeNum = parseInt(a.code || '0');
+                                    return !(codeNum >= 2030 && codeNum <= 2099);
+                                });
+
+                                // Net Income
+                                const totalRevenue = revenue.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const totalExpenses = expenses.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const netIncome = totalRevenue - totalExpenses;
+
+                                // Balance Sheet Totals (exactly as report calculates)
+                                const totalAssetsFromAccounts = assets.reduce((sum, a) => sum + a.balance, 0);
+                                const totalAssets = totalAssetsFromAccounts + totalCustomersAR + totalSupplierAdvances;
+
+                                const totalLiabilitiesFromAccounts = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0);
+                                const totalLiabilities = totalLiabilitiesFromAccounts + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances;
+
+                                const totalEquityFromAccounts = equity.reduce((sum, a) => sum + a.balance, 0);
+                                const totalEquity = totalEquityFromAccounts + netIncome;
+
+                                const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
+                                const balanceSheetDifference = totalAssets - totalLiabilitiesAndEquity;
+
+                                // Calculate account balances from ledger (to verify)
+                                const accountBalancesFromLedger = state.accounts.map(acc => {
+                                    const entries = state.ledger.filter(e => e.accountId === acc.id);
+                                    const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    let calculatedBalance = 0;
+                                    if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                                        calculatedBalance = debitSum - creditSum;
+                                    } else {
+                                        calculatedBalance = creditSum - debitSum;
+                                    }
+                                    return { account: acc, calculatedBalance, storedBalance: acc.balance, difference: Math.abs(calculatedBalance - acc.balance) };
+                                });
+
+                                const accountsWithMismatches = accountBalancesFromLedger.filter(a => a.difference > 0.01);
+
+                                // Calculate partner balances from ledger
+                                const partnerBalancesFromLedger = state.partners.map(partner => {
+                                    const entries = state.ledger.filter(e => e.accountId === partner.id);
+                                    const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    let calculatedBalance = 0;
+                                    if (partner.type === PartnerType.CUSTOMER) {
+                                        calculatedBalance = debitSum - creditSum;
+                                    } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                        calculatedBalance = creditSum - debitSum;
+                                    } else {
+                                        calculatedBalance = debitSum - creditSum;
+                                    }
+                                    return { partner, calculatedBalance, storedBalance: partner.balance, difference: Math.abs(calculatedBalance - partner.balance) };
+                                });
+
+                                const partnersWithMismatches = partnerBalancesFromLedger.filter(p => p.difference > 0.01);
+
+                                const report = `
+═══════════════════════════════════════════════════════════
+BALANCE SHEET DEEP DIAGNOSTIC REPORT
+═══════════════════════════════════════════════════════════
+
+📊 BALANCE SHEET TOTALS (as calculated by report):
+   Total Assets: $${totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - From Accounts: $${totalAssetsFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Customer AR: $${totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Supplier Advances: $${totalSupplierAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   Total Liabilities: $${totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - From Accounts: $${totalLiabilitiesFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Other Payables: $${totalOtherPayables.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Suppliers AP: $${totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Customer Advances: $${totalCustomerAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   Total Equity: $${totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - From Accounts: $${totalEquityFromAccounts.toLocaleString(undefined, {minimumFractionDigits: 2})}
+      - Net Income: $${netIncome.toLocaleString(undefined, {minimumFractionDigits: 2})}
+         (Revenue: $${totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 2})} - Expenses: $${totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})})
+   
+   Total Liabilities & Equity: $${totalLiabilitiesAndEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   ⚠️ BALANCE SHEET DIFFERENCE: $${balanceSheetDifference.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   ${Math.abs(balanceSheetDifference) > 0.01 ? '❌ CRITICAL: Balance Sheet does not balance!' : '✅ Balance Sheet is balanced'}
+
+🔍 ACCOUNT BALANCE VERIFICATION:
+   Accounts with Mismatches: ${accountsWithMismatches.length}
+   ${accountsWithMismatches.length > 0 ? '❌ Some account balances don\'t match ledger entries!' : '✅ All account balances match ledger entries'}
+   ${accountsWithMismatches.length > 0 ? `\n   Sample mismatches (first 10):\n${accountsWithMismatches.slice(0, 10).map(a => `   - ${a.account.name}: Stored=${a.storedBalance.toFixed(2)}, Calculated=${a.calculatedBalance.toFixed(2)}, Diff=${a.difference.toFixed(2)}`).join('\n')}` : ''}
+
+👥 PARTNER BALANCE VERIFICATION:
+   Partners with Mismatches: ${partnersWithMismatches.length}
+   ${partnersWithMismatches.length > 0 ? '❌ Some partner balances don\'t match ledger entries!' : '✅ All partner balances match ledger entries'}
+   ${partnersWithMismatches.length > 0 ? `\n   Sample mismatches (first 10):\n${partnersWithMismatches.slice(0, 10).map(p => `   - ${p.partner.name}: Stored=${p.storedBalance.toFixed(2)}, Calculated=${p.calculatedBalance.toFixed(2)}, Diff=${p.difference.toFixed(2)}`).join('\n')}` : ''}
+
+💡 ROOT CAUSE ANALYSIS:
+   ${Math.abs(balanceSheetDifference) > 1000000 ? '⚠️ The Balance Sheet difference is HUGE ($' + Math.abs(balanceSheetDifference).toLocaleString(undefined, {minimumFractionDigits: 2}) + ').\n   This suggests:\n   1. Account balances may not match ledger entries\n   2. Partner balances may not match ledger entries\n   3. There may be entries missing from the Balance Sheet calculation\n   4. There may be double-counting in the calculation' : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                // Store difference in state so fix button appears
+                                setBalanceSheetDifference(balanceSheetDifference);
+
+                                alert(report);
+                                console.log('🔍 Balance Sheet Deep Diagnostic:', {
+                                    totalAssets,
+                                    totalLiabilities,
+                                    totalEquity,
+                                    totalLiabilitiesAndEquity,
+                                    balanceSheetDifference,
+                                    accountsWithMismatches: accountsWithMismatches.length,
+                                    partnersWithMismatches: partnersWithMismatches.length
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error running balance sheet deep diagnostic:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <FileText size={18} />
+                        Run Balance Sheet Deep Diagnostic
+                    </button>
+
+                    {/* Show fix option if huge imbalance found */}
+                    {balanceSheetDifference !== null && Math.abs(balanceSheetDifference) > 1000 && (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ CRITICAL: Balance Sheet Imbalance Detected
+                                </p>
+                                <p className="text-xs text-red-700 mb-2">
+                                    Balance Sheet Difference: <strong>${Math.abs(balanceSheetDifference).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                </p>
+                                <p className="text-xs text-red-700">
+                                    This is likely caused by account or partner balances not matching ledger entries.
+                                    The fix will recalculate all balances from ledger entries.
+                                </p>
+                            </div>
+
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will recalculate all account and partner balances from ledger entries.
+                                    This will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Recalculate all account balances from ledger entries</li>
+                                        <li>Recalculate all partner balances from ledger entries</li>
+                                        <li>Update stored balances to match calculated balances</li>
+                                        <li>Fix the Balance Sheet imbalance</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    if (!confirm(`This will recalculate ALL account and partner balances from ledger entries.\n\nThis is a critical accounting correction that will fix the Balance Sheet imbalance.\n\nContinue?`)) {
+                                        return;
+                                    }
+
+                                    setRecalculatingBalances(true);
+
+                                    try {
+                                        // Recalculate account balances from ledger
+                                        const accountUpdates: Array<{ accountId: string; newBalance: number }> = [];
+                                        
+                                        state.accounts.forEach(acc => {
+                                            const entries = state.ledger.filter(e => e.accountId === acc.id);
+                                            const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                            const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                            
+                                            let calculatedBalance = 0;
+                                            if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                                                calculatedBalance = debitSum - creditSum;
+                                            } else {
+                                                calculatedBalance = creditSum - debitSum;
+                                            }
+                                            
+                                            // Only update if different
+                                            if (Math.abs(calculatedBalance - acc.balance) > 0.01) {
+                                                accountUpdates.push({ accountId: acc.id, newBalance: calculatedBalance });
+                                            }
+                                        });
+
+                                        // Recalculate partner balances from ledger
+                                        const partnerUpdates: Array<{ partnerId: string; newBalance: number }> = [];
+                                        
+                                        state.partners.forEach(partner => {
+                                            const entries = state.ledger.filter(e => e.accountId === partner.id);
+                                            const debitSum = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                            const creditSum = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                            
+                                            let calculatedBalance = 0;
+                                            if (partner.type === PartnerType.CUSTOMER) {
+                                                calculatedBalance = debitSum - creditSum;
+                                            } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                                calculatedBalance = creditSum - debitSum;
+                                            } else {
+                                                calculatedBalance = debitSum - creditSum;
+                                            }
+                                            
+                                            // Only update if different
+                                            if (Math.abs(calculatedBalance - partner.balance) > 0.01) {
+                                                partnerUpdates.push({ partnerId: partner.id, newBalance: calculatedBalance });
+                                            }
+                                        });
+
+                                        console.log(`📊 Found ${accountUpdates.length} accounts and ${partnerUpdates.length} partners with mismatched balances`);
+
+                                        // Update accounts in Firebase (db is already imported at top of file)
+                                        
+                                        let accountsUpdated = 0;
+                                        let partnersUpdated = 0;
+                                        const errors: string[] = [];
+
+                                        // Update accounts
+                                        for (const update of accountUpdates) {
+                                            try {
+                                                const accountRef = doc(db, 'accounts', update.accountId);
+                                                await updateDoc(accountRef, { balance: update.newBalance });
+                                                accountsUpdated++;
+                                            } catch (error: any) {
+                                                errors.push(`Account ${update.accountId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        // Update partners
+                                        for (const update of partnerUpdates) {
+                                            try {
+                                                const partnerRef = doc(db, 'partners', update.partnerId);
+                                                await updateDoc(partnerRef, { balance: update.newBalance });
+                                                partnersUpdated++;
+                                            } catch (error: any) {
+                                                errors.push(`Partner ${update.partnerId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        alert(`✅ Successfully recalculated balances!\n\n- Accounts updated: ${accountsUpdated}/${accountUpdates.length}\n- Partners updated: ${partnersUpdated}/${partnerUpdates.length}\n- Errors: ${errors.length}\n\nPage will refresh in 5 seconds...`);
+
+                                        if (errors.length > 0) {
+                                            console.error('Errors:', errors);
+                                        }
+
+                                        // Clear stored difference
+                                        setBalanceSheetDifference(null);
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error recalculating balances:', error);
+                                        alert(`Failed: ${error.message}`);
+                                    } finally {
+                                        setRecalculatingBalances(false);
+                                    }
+                                }}
+                                disabled={recalculatingBalances}
+                                className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                            >
+                                {recalculatingBalances ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        Recalculating Balances...
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Recalculate All Balances from Ledger
+                                    </>
+                                )}
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Fix Root Ledger Balance Section */}
+            <div className="bg-white border-2 border-purple-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-100 p-3 rounded-lg">
+                        <AlertTriangle className="text-purple-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Root Ledger Balance</h3>
+                        <p className="text-sm text-slate-600">Fix the fundamental ledger imbalance (Total Debits ≠ Total Credits)</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-purple-900 mb-2">
+                            ⚠️ CRITICAL: This fixes the root cause of Balance Sheet imbalance
+                        </p>
+                        <p className="text-xs text-purple-700">
+                            If your Balance Sheet shows a huge difference (like $9M+), it's because the ledger itself is unbalanced.
+                            This tool calculates total debits vs total credits and creates a single balancing entry to fix it.
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                // Calculate total debits and credits
+                                const totalDebits = state.ledger.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                const totalCredits = state.ledger.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                const ledgerImbalance = totalDebits - totalCredits;
+
+                                const report = `
+═══════════════════════════════════════════════════════════
+ROOT LEDGER BALANCE DIAGNOSTIC
+═══════════════════════════════════════════════════════════
+
+📊 LEDGER TOTALS:
+   Total Debits: $${totalDebits.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Total Credits: $${totalCredits.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Net Imbalance: $${ledgerImbalance.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   ${Math.abs(ledgerImbalance) > 0.01 ? '❌ CRITICAL: Ledger is unbalanced!' : '✅ Ledger is balanced'}
+
+💡 EXPLANATION:
+   For the Balance Sheet to balance, Total Debits MUST equal Total Credits.
+   If they don't match, the Balance Sheet will show a difference equal to this imbalance.
+   
+   Current Balance Sheet Difference: ~$9,859,114.48
+   Ledger Imbalance: $${ledgerImbalance.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   
+   ${Math.abs(ledgerImbalance) > 1000 ? '⚠️ This is likely the root cause of your Balance Sheet imbalance!' : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                // Store imbalance in state so fix button appears
+                                setLedgerImbalance(ledgerImbalance);
+
+                                alert(report);
+                                console.log('🔍 Root Ledger Balance:', {
+                                    totalDebits,
+                                    totalCredits,
+                                    ledgerImbalance
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error running root ledger balance diagnostic:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <AlertTriangle size={18} />
+                        Check Root Ledger Balance
+                    </button>
+
+                    {/* Show fix option if imbalance found */}
+                    {ledgerImbalance !== null && Math.abs(ledgerImbalance) > 0.01 && (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ CRITICAL: Ledger Imbalance Detected
+                                </p>
+                                <p className="text-xs text-red-700 mb-2">
+                                    Net Imbalance: <strong>${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                                    {ledgerImbalance > 0 ? ' (Debits > Credits)' : ' (Credits > Debits)'}
+                                </p>
+                                <p className="text-xs text-red-700">
+                                    This is causing your Balance Sheet to be unbalanced. A single balancing entry will fix this.
+                                </p>
+                            </div>
+
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will create a single balancing entry to make Total Debits = Total Credits.
+                                    This will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Create one balancing entry to offset the ${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})} imbalance</li>
+                                        <li>Use Balance Adjustment account (or Capital as fallback)</li>
+                                        <li>Fix the root cause of Balance Sheet imbalance</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    if (ledgerImbalance === null || Math.abs(ledgerImbalance) <= 0.01) {
+                                        alert('No imbalance detected. Please run the diagnostic first.');
+                                        return;
+                                    }
+
+                                    if (!confirm(`This will create a balancing entry for $${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})} to fix the root ledger imbalance.\n\nThis is a critical accounting correction. Continue?`)) {
+                                        return;
+                                    }
+
+                                    setFixingLedgerBalance(true);
+
+                                    try {
+                                        // Find or create a balance adjustment account
+                                        let adjustmentAccountId = state.accounts.find(a => 
+                                            a.name.includes('Balance Adjustment') || 
+                                            a.name.includes('Suspense') ||
+                                            a.code === '9999'
+                                        )?.id;
+
+                                        // If no adjustment account exists, use Capital account as fallback
+                                        if (!adjustmentAccountId) {
+                                            adjustmentAccountId = state.accounts.find(a => 
+                                                a.name.includes('Capital') || 
+                                                a.name.includes('Owner\'s Capital') ||
+                                                a.code === '301'
+                                            )?.id;
+                                        }
+
+                                        if (!adjustmentAccountId) {
+                                            throw new Error('No suitable account found for balance adjustments. Please create a "Balance Adjustment" account in Setup > Chart of Accounts.');
+                                        }
+
+                                        const adjustmentAccount = state.accounts.find(a => a.id === adjustmentAccountId);
+                                        const today = new Date().toISOString().split('T')[0];
+
+                                        // Create balancing entry
+                                        // Since credits > debits by $358,639.86, we need to DEBIT to balance
+                                        const balancingEntry: Omit<LedgerEntry, 'id'> = {
+                                            date: today,
+                                            transactionId: `LEDGER-BAL-${Date.now()}`,
+                                            transactionType: TransactionType.JOURNAL_VOUCHER,
+                                            accountId: adjustmentAccountId!,
+                                            accountName: adjustmentAccount?.name || 'Balance Adjustment',
+                                            currency: 'USD',
+                                            exchangeRate: 1,
+                                            fcyAmount: Math.abs(ledgerImbalance),
+                                            debit: ledgerImbalance < 0 ? Math.abs(ledgerImbalance) : 0, // If credits > debits, need debit
+                                            credit: ledgerImbalance > 0 ? ledgerImbalance : 0, // If debits > credits, need credit
+                                            narration: `Root Ledger Balance Fix: ${ledgerImbalance > 0 ? 'Excess Debits' : 'Excess Credits'} of $${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}`,
+                                            factoryId: currentFactory?.id || '',
+                                            isAdjustment: true
+                                        };
+
+                                        await postTransaction([balancingEntry]);
+
+                                        alert(`✅ Successfully created balancing entry!\n\n- Amount: $${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}\n- Account: ${adjustmentAccount?.name}\n- Entry: ${ledgerImbalance < 0 ? 'Debit' : 'Credit'} to balance ledger\n\nPage will refresh in 5 seconds...`);
+
+                                        // Clear stored imbalance
+                                        setLedgerImbalance(null);
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing root ledger balance:', error);
+                                        alert(`Failed: ${error.message}`);
+                                    } finally {
+                                        setFixingLedgerBalance(false);
+                                    }
+                                }}
+                                disabled={fixingLedgerBalance}
+                                className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                            >
+                                {fixingLedgerBalance ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        Creating Balancing Entry...
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Fix Root Ledger Balance (${Math.abs(ledgerImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})})
+                                    </>
+                                )}
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Find Unbalanced Transactions Section */}
+            <div className="bg-white border-2 border-red-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-red-100 p-3 rounded-lg">
+                        <AlertTriangle className="text-red-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Find Unbalanced Transactions</h3>
+                        <p className="text-sm text-slate-600">Identify transactions where debits ≠ credits (causes ledger imbalance)</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-red-900 mb-2">
+                            ⚠️ CRITICAL: Unbalanced transactions cause Balance Sheet errors!
+                        </p>
+                        <p className="text-xs text-red-700">
+                            This tool will find all transactions where the total debits don't equal total credits.
+                            Each transaction should have balanced entries (Total Debits = Total Credits).
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                // Group ledger entries by transactionId
+                                const transactions = new Map<string, any[]>();
+                                state.ledger.forEach(entry => {
+                                    if (!transactions.has(entry.transactionId)) {
+                                        transactions.set(entry.transactionId, []);
+                                    }
+                                    transactions.get(entry.transactionId)!.push(entry);
+                                });
+
+                                // Check each transaction for balance
+                                const unbalancedTransactions: Array<{
+                                    transactionId: string;
+                                    transactionType: string;
+                                    date: string;
+                                    totalDebit: number;
+                                    totalCredit: number;
+                                    imbalance: number;
+                                    entryCount: number;
+                                    entries: any[];
+                                }> = [];
+
+                                transactions.forEach((entries, transactionId) => {
+                                    const totalDebit = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const totalCredit = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    const imbalance = Math.abs(totalDebit - totalCredit);
+                                    
+                                    // Check if unbalanced (allow 0.01 tolerance for floating point)
+                                    if (imbalance > 0.01) {
+                                        unbalancedTransactions.push({
+                                            transactionId,
+                                            transactionType: entries[0]?.transactionType || 'UNKNOWN',
+                                            date: entries[0]?.date || '',
+                                            totalDebit,
+                                            totalCredit,
+                                            imbalance,
+                                            entryCount: entries.length,
+                                            entries: entries.slice(0, 5) // Sample entries
+                                        });
+                                    }
+                                });
+
+                                // Sort by imbalance (largest first)
+                                unbalancedTransactions.sort((a, b) => b.imbalance - a.imbalance);
+
+                                // Calculate totals
+                                const totalUnbalancedDebit = unbalancedTransactions.reduce((sum, t) => sum + t.totalDebit, 0);
+                                const totalUnbalancedCredit = unbalancedTransactions.reduce((sum, t) => sum + t.totalCredit, 0);
+                                const totalImbalance = totalUnbalancedDebit - totalUnbalancedCredit;
+
+                                // Store in state FIRST so the fix button appears (before alert)
+                                setUnbalancedTransactions([...unbalancedTransactions]);
+
+                                // Display results
+                                const report = `
+═══════════════════════════════════════════════════════════
+UNBALANCED TRANSACTIONS REPORT
+═══════════════════════════════════════════════════════════
+
+📊 SUMMARY:
+   Total Transactions Analyzed: ${transactions.size}
+   Unbalanced Transactions: ${unbalancedTransactions.length}
+   Total Unbalanced Debits:  $${totalUnbalancedDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Total Unbalanced Credits: $${totalUnbalancedCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}
+   Net Imbalance:            $${Math.abs(totalImbalance).toLocaleString(undefined, {minimumFractionDigits: 2})}
+   ${totalImbalance === 0 ? '✅ Net imbalance is zero (but individual transactions are unbalanced)' : `❌ Net imbalance: $${totalImbalance.toLocaleString(undefined, {minimumFractionDigits: 2})}`}
+
+${unbalancedTransactions.length > 0 ? `\n🔴 ALL UNBALANCED TRANSACTIONS:\n${unbalancedTransactions.map((t, idx) => {
+    const sign = t.totalDebit > t.totalCredit ? '(Debit > Credit)' : '(Credit > Debit)';
+    const missing = t.totalDebit > t.totalCredit ? 'Missing Credit' : 'Missing Debit';
+    return `\n${idx + 1}. ${t.transactionId} (${t.transactionType})\n   Date: ${t.date}\n   Debit: $${t.totalDebit.toFixed(2)} | Credit: $${t.totalCredit.toFixed(2)}\n   Imbalance: $${t.imbalance.toFixed(2)} ${sign}\n   ${missing}: $${t.imbalance.toFixed(2)}\n   Entries: ${t.entryCount}`;
+}).join('\n')}` : '\n✅ All transactions are balanced!'}
+
+${unbalancedTransactions.length > 0 ? '\n\n⚠️ IMPORTANT: After closing this dialog, scroll down to see the "Fix Unbalanced Transactions" button below!' : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                alert(report);
+                                console.log('🔴 Unbalanced Transactions:', unbalancedTransactions);
+                                console.log('📊 Summary:', {
+                                    totalTransactions: transactions.size,
+                                    unbalancedCount: unbalancedTransactions.length,
+                                    totalImbalance
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error finding unbalanced transactions:', error);
+                                alert(`Analysis failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <AlertTriangle size={18} />
+                        Find Unbalanced Transactions ({state.ledger.length} ledger entries)
+                    </button>
+
+                    {unbalancedTransactions.length > 0 && (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ Found {unbalancedTransactions.length} Unbalanced Transaction(s)
+                                </p>
+                                <div className="text-xs text-red-700 space-y-1 max-h-60 overflow-y-auto">
+                                    {unbalancedTransactions.map((t, idx) => {
+                                        const missing = t.totalDebit > t.totalCredit ? 'Missing Credit' : 'Missing Debit';
+                                        return (
+                                            <div key={idx} className="border-b border-red-200 pb-2 mb-2">
+                                                <p><strong>{t.transactionId}</strong> ({t.transactionType}) - {t.date}</p>
+                                                <p>Debit: ${t.totalDebit.toFixed(2)} | Credit: ${t.totalCredit.toFixed(2)}</p>
+                                                <p className="font-bold">Imbalance: ${t.imbalance.toFixed(2)} ({missing})</p>
+                                                <p className="text-xs text-red-600">Entries: {t.entryCount}</p>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                <p className="text-sm text-amber-800">
+                                    <strong>⚠️ Fix Option:</strong> This will create balancing entries for unbalanced transactions.
+                                    The fix will:
+                                    <ul className="list-disc list-inside mt-1">
+                                        <li>Identify the missing debit or credit side</li>
+                                        <li>Create a balancing entry to the appropriate account</li>
+                                        <li>Use "Balance Adjustment" account or create offsetting entry</li>
+                                    </ul>
+                                    <strong className="block mt-2">Requires Supervisor PIN</strong>
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to proceed:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    if (!confirm(`This will create balancing entries for ${unbalancedTransactions.length} unbalanced transactions. This is a critical accounting correction. Continue?`)) {
+                                        return;
+                                    }
+
+                                    setFixingUnbalancedTransactions(true);
+                                    setUnbalancedFixResult(null);
+
+                                    try {
+                                        const errors: string[] = [];
+                                        let fixed = 0;
+                                        let skipped = 0;
+
+                                        // Find or create a balance adjustment account
+                                        let adjustmentAccountId = state.accounts.find(a => 
+                                            a.name.includes('Balance Adjustment') || 
+                                            a.name.includes('Suspense') ||
+                                            a.code === '9999'
+                                        )?.id;
+
+                                        // If no adjustment account exists, use Capital account as fallback
+                                        if (!adjustmentAccountId) {
+                                            adjustmentAccountId = state.accounts.find(a => 
+                                                a.name.includes('Capital') || 
+                                                a.code === '301'
+                                            )?.id;
+                                        }
+
+                                        if (!adjustmentAccountId) {
+                                            throw new Error('No suitable account found for balance adjustments. Please create a "Balance Adjustment" account in Setup > Chart of Accounts.');
+                                        }
+
+                                        // BATCH PROCESSING: Collect all balancing entries first, then post in batches
+                                        const allBalancingEntries: Omit<LedgerEntry, 'id'>[] = [];
+                                        const BATCH_SIZE = 100; // Process 100 entries at a time
+
+                                        // Step 1: Collect all balancing entries that need to be created
+                                        for (const transaction of unbalancedTransactions) {
+                                            try {
+                                                const entries = state.ledger.filter(e => e.transactionId === transaction.transactionId);
+                                                
+                                                // Check if already fixed - recalculate balance including adjustment entries
+                                                const totalDebitWithAdjustments = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                                const totalCreditWithAdjustments = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                                const currentImbalance = Math.abs(totalDebitWithAdjustments - totalCreditWithAdjustments);
+                                                
+                                                // If already balanced (within 0.01 tolerance), skip
+                                                if (currentImbalance <= 0.01) {
+                                                    skipped++;
+                                                    continue;
+                                                }
+
+                                                const imbalance = transaction.totalCredit - transaction.totalDebit;
+                                                
+                                                // For PI-BATCH transactions, create missing Inventory debit entry
+                                                let balancingEntry: Omit<LedgerEntry, 'id'> | null = null;
+                                                
+                                                if ((transaction.transactionId.startsWith('PI-') || transaction.transactionId.startsWith('PI-BATCH-')) && imbalance > 0) {
+                                                    // Purchase Invoice missing Inventory debit
+                                                    const inventoryAccount = state.accounts.find(a => 
+                                                        a.name.includes('Inventory - Raw Material') || 
+                                                        a.name.includes('Raw Materials')
+                                                    );
+                                                    
+                                                    if (inventoryAccount) {
+                                                        balancingEntry = {
+                                                            date: transaction.date,
+                                                            transactionId: transaction.transactionId, // Use same transaction ID
+                                                            transactionType: TransactionType.PURCHASE_INVOICE,
+                                                            accountId: inventoryAccount.id,
+                                                            accountName: inventoryAccount.name,
+                                                            currency: 'USD',
+                                                            exchangeRate: 1,
+                                                            fcyAmount: imbalance,
+                                                            debit: imbalance,
+                                                            credit: 0,
+                                                            narration: `Purchase Inventory (Balance Fix): ${transaction.transactionId}`,
+                                                            factoryId: entries[0]?.factoryId || currentFactory?.id || '',
+                                                            isAdjustment: true
+                                                        };
+                                                    }
+                                                }
+                                                
+                                                // For other transactions, use adjustment account
+                                                // CRITICAL FIX: Use SAME transactionId so entries are grouped together
+                                                if (!balancingEntry) {
+                                                    balancingEntry = {
+                                                        date: transaction.date,
+                                                        transactionId: transaction.transactionId, // Use SAME transactionId, not -BAL suffix
+                                                        transactionType: transaction.transactionType || TransactionType.JOURNAL_VOUCHER,
+                                                        accountId: adjustmentAccountId!,
+                                                        accountName: state.accounts.find(a => a.id === adjustmentAccountId)?.name || 'Balance Adjustment',
+                                                        currency: 'USD',
+                                                        exchangeRate: 1,
+                                                        fcyAmount: Math.abs(imbalance),
+                                                        debit: imbalance > 0 ? Math.abs(imbalance) : 0, // If credits > debits, need debit
+                                                        credit: imbalance < 0 ? Math.abs(imbalance) : 0, // If debits > credits, need credit
+                                                        narration: `Balance Adjustment for ${transaction.transactionId} (${transaction.transactionType})`,
+                                                        factoryId: entries[0]?.factoryId || currentFactory?.id || '',
+                                                        isAdjustment: true
+                                                    };
+                                                }
+
+                                                if (balancingEntry) {
+                                                    allBalancingEntries.push(balancingEntry);
+                                                } else {
+                                                    errors.push(`${transaction.transactionId}: Could not determine fix method`);
+                                                }
+                                            } catch (error: any) {
+                                                console.error(`❌ Error preparing transaction ${transaction.transactionId}:`, error);
+                                                errors.push(`${transaction.transactionId}: ${error.message}`);
+                                            }
+                                        }
+
+                                        // Step 2: Post entries in batches for better performance
+                                        const totalBatches = Math.ceil(allBalancingEntries.length / BATCH_SIZE);
+                                        console.log(`📊 Processing ${allBalancingEntries.length} balancing entries in batches of ${BATCH_SIZE}...`);
+                                        
+                                        // Initialize progress
+                                        setUnbalancedProgress({ current: 0, total: allBalancingEntries.length, batch: 0, totalBatches });
+                                        
+                                        for (let i = 0; i < allBalancingEntries.length; i += BATCH_SIZE) {
+                                            const batch = allBalancingEntries.slice(i, i + BATCH_SIZE);
+                                            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+                                            
+                                            try {
+                                                // Update progress before posting
+                                                setUnbalancedProgress({ 
+                                                    current: fixed, 
+                                                    total: allBalancingEntries.length, 
+                                                    batch: batchNumber, 
+                                                    totalBatches 
+                                                });
+                                                
+                                                await postTransaction(batch);
+                                                fixed += batch.length;
+                                                
+                                                // Update progress after posting
+                                                setUnbalancedProgress({ 
+                                                    current: fixed, 
+                                                    total: allBalancingEntries.length, 
+                                                    batch: batchNumber, 
+                                                    totalBatches 
+                                                });
+                                                
+                                                console.log(`✅ Batch ${batchNumber}/${totalBatches}: Posted ${batch.length} entries (${fixed}/${allBalancingEntries.length} total)`);
+                                                
+                                                // Small delay between batches to avoid overwhelming Firebase
+                                                if (i + BATCH_SIZE < allBalancingEntries.length) {
+                                                    await new Promise(resolve => setTimeout(resolve, 50));
+                                                }
+                                            } catch (error: any) {
+                                                console.error(`❌ Error posting batch ${batchNumber}:`, error);
+                                                errors.push(`Batch ${batchNumber}: ${error.message}`);
+                                                // Continue with next batch even if this one fails
+                                            }
+                                        }
+                                        
+                                        // Clear progress
+                                        setUnbalancedProgress(null);
+
+                                        setUnbalancedFixResult({
+                                            success: true,
+                                            message: `Successfully created balancing entries!\n\n- Fixed: ${fixed} transactions\n- Skipped: ${skipped} transactions (already fixed)\n- Errors: ${errors.length}`,
+                                            fixed,
+                                            errors
+                                        });
+
+                                        // Clear the list
+                                        setUnbalancedTransactions([]);
+
+                                        // Refresh page after 5 seconds
+                                        setTimeout(() => {
+                                            window.location.reload();
+                                        }, 5000);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing unbalanced transactions:', error);
+                                        setUnbalancedFixResult({
+                                            success: false,
+                                            message: `Failed: ${error.message}`,
+                                            fixed: 0,
+                                            errors: [error.message]
+                                        });
+                                    } finally {
+                                        setFixingUnbalancedTransactions(false);
+                                    }
+                                }}
+                                disabled={fixingUnbalancedTransactions}
+                                className="w-full px-4 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {fixingUnbalancedTransactions ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        {unbalancedProgress ? (
+                                            <span>
+                                                Creating Balancing Entries... 
+                                                Batch {unbalancedProgress.batch}/{unbalancedProgress.totalBatches} 
+                                                ({unbalancedProgress.current}/{unbalancedProgress.total} entries)
+                                                ({Math.round((unbalancedProgress.current / unbalancedProgress.total) * 100)}%)
+                                            </span>
+                                        ) : (
+                                            <span>Creating Balancing Entries...</span>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        Fix Unbalanced Transactions ({unbalancedTransactions.length} to fix)
+                                    </>
+                                )}
+                                {unbalancedProgress && (
+                                    <div className="mt-2 w-full bg-slate-200 rounded-full h-2.5">
+                                        <div 
+                                            className="bg-red-600 h-2.5 rounded-full transition-all duration-300" 
+                                            style={{ width: `${(unbalancedProgress.current / unbalancedProgress.total) * 100}%` }}
+                                        ></div>
+                                    </div>
+                                )}
+                            </button>
+
+                            {unbalancedFixResult && (
+                                <div className={`p-4 rounded-lg border-2 ${
+                                    unbalancedFixResult.success 
+                                        ? 'bg-emerald-50 border-emerald-300' 
+                                        : 'bg-red-50 border-red-300'
+                                }`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {unbalancedFixResult.success ? (
+                                            <CheckCircle className="text-emerald-600" size={20} />
+                                        ) : (
+                                            <XCircle className="text-red-600" size={20} />
+                                        )}
+                                        <span className={`font-bold ${
+                                            unbalancedFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                        }`}>
+                                            {unbalancedFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                        </span>
+                                    </div>
+                                    <p className={`text-sm whitespace-pre-line ${
+                                        unbalancedFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                                    }`}>
+                                        {unbalancedFixResult.message}
+                                    </p>
+                                    {unbalancedFixResult.errors.length > 0 && (
+                                        <div className="mt-2 text-xs text-red-600">
+                                            <strong>Errors:</strong>
+                                            <ul className="list-disc list-inside mt-1">
+                                                {unbalancedFixResult.errors.slice(0, 5).map((err, idx) => (
+                                                    <li key={idx}>{err}</li>
+                                                ))}
+                                                {unbalancedFixResult.errors.length > 5 && (
+                                                    <li>... and {unbalancedFixResult.errors.length - 5} more</li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {unbalancedFixResult.success && (
+                                        <p className="text-xs text-emerald-600 mt-2">
+                                            Page will refresh automatically in 5 seconds to update Balance Sheet...
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             </div>

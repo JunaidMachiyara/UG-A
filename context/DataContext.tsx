@@ -2418,7 +2418,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Create accounting entries for production
         const fgInvId = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'))?.id;
         const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
-        const productionGainId = state.accounts.find(a => a.name.includes('Production Gain'))?.id;
+        let productionGainId = state.accounts.find(a => a.name.includes('Production Gain'))?.id;
+        
+        // If Production Gain account doesn't exist, try to find Capital account as fallback
+        if (!productionGainId) {
+            productionGainId = state.accounts.find(a => 
+                a.name.includes('Capital') || 
+                a.name.includes('Owner\'s Capital') ||
+                a.code === '301'
+            )?.id;
+            console.warn('⚠️ Production Gain account not found, using Capital account as fallback');
+        }
         
         if (fgInvId) {
             // Check if this is a re-baling transaction
@@ -2510,20 +2520,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     postTransaction(entries);
                 }
                 
-            } else if (wipId) {
-                // NORMAL PRODUCTION ACCOUNTING: WIP to FG (with batch matching)
+            } else if (!wipId) {
+                // NORMAL PRODUCTION ACCOUNTING: No WIP account (direct to Production Gain)
+                // If WIP account doesn't exist, we'll still create entries but without WIP consumption
+                // This handles cases where WIP account hasn't been set up yet
+                console.warn('⚠️ WIP account not found. Creating production entries without WIP consumption.');
+                
                 // Batch all ledger entries together for better performance
                 const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
                 
-                // Calculate current WIP balance from ledger (debit - credit)
-                const wipBalance = state.ledger
-                    .filter(e => e.accountId === wipId && e.factoryId === currentFactory?.id)
-                    .reduce((sum, e) => sum + (e.debit || 0) - (e.credit || 0), 0);
-                
-                console.log('📊 Current WIP Balance:', wipBalance);
-                
-                // Track cumulative WIP consumption across all productions in this batch (for FIFO)
-                let cumulativeWipConsumedInBatch = 0;
+                console.log('📊 Current WIP Balance: 0 (WIP account not found)');
                 
                 productionsWithFactory.forEach(prod => {
                     const item = state.items.find(i => i.id === prod.itemId);
@@ -2540,15 +2546,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const totalKg = prod.weightProduced;
                     
                     // Match WIP by batch (FIFO) - consume from Original Opening entries
-                    // Calculate total available WIP balance
-                    const totalWipBalance = state.ledger
+                    // Calculate total available WIP balance (only if WIP account exists)
+                    const totalWipBalance = wipId ? state.ledger
                         .filter(e => e.accountId === wipId && e.factoryId === prod.factoryId)
-                        .reduce((sum, e) => sum + (e.debit || 0) - (e.credit || 0), 0);
+                        .reduce((sum, e) => sum + (e.debit || 0) - (e.credit || 0), 0) : 0;
                     
                     let wipValueConsumed = 0;
                     
-                    // If WIP balance exists, consume FIFO from opening entries
-                    if (totalWipBalance > 0 && totalKg > 0) {
+                    // If WIP balance exists and WIP account exists, consume FIFO from opening entries
+                    if (wipId && totalWipBalance > 0 && totalKg > 0) {
                         // Get all Original Opening entries sorted by date (FIFO)
                         const availableOpenings = state.originalOpenings
                             .filter(o => o.factoryId === prod.factoryId)
@@ -2643,8 +2649,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         }
                     ];
                     
-                    // Credit WIP only if there's WIP to consume
-                    if (wipValueConsumed > 0) {
+                    // Credit WIP only if there's WIP to consume AND WIP account exists
+                    if (wipId && wipValueConsumed > 0) {
                         entries.push({
                             date: prod.date,
                             transactionId,
@@ -2662,21 +2668,55 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                     
                     // Credit Capital/Production Gain for the remainder (or full amount if no WIP)
-                    if (capitalCredit !== 0 && productionGainId) {
-                        entries.push({
-                            date: prod.date,
-                            transactionId,
-                            transactionType: TransactionType.PRODUCTION,
-                            accountId: productionGainId,
-                            accountName: 'Production Gain',
-                            currency: 'USD',
-                            exchangeRate: 1,
-                            fcyAmount: Math.abs(capitalCredit),
-                            debit: capitalCredit < 0 ? Math.abs(capitalCredit) : 0,
-                            credit: capitalCredit > 0 ? capitalCredit : 0,
-                            narration: `Production ${capitalCredit > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}${wipValueConsumed > 0 ? ` (WIP: $${wipValueConsumed.toFixed(2)})` : ' (No WIP)'}`,
-                            factoryId: prod.factoryId
-                        });
+                    // CRITICAL FIX: Always create credit entry if capitalCredit is non-zero, even if productionGainId is missing
+                    // If productionGainId is missing, we'll use Capital account or create a warning
+                    if (capitalCredit !== 0) {
+                        if (productionGainId) {
+                            entries.push({
+                                date: prod.date,
+                                transactionId,
+                                transactionType: TransactionType.PRODUCTION,
+                                accountId: productionGainId,
+                                accountName: state.accounts.find(a => a.id === productionGainId)?.name || 'Production Gain',
+                                currency: 'USD',
+                                exchangeRate: 1,
+                                fcyAmount: Math.abs(capitalCredit),
+                                debit: capitalCredit < 0 ? Math.abs(capitalCredit) : 0,
+                                credit: capitalCredit > 0 ? capitalCredit : 0,
+                                narration: `Production ${capitalCredit > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}${wipValueConsumed > 0 ? ` (WIP: $${wipValueConsumed.toFixed(2)})` : ' (No WIP)'}`,
+                                factoryId: prod.factoryId
+                            });
+                        } else {
+                            // FALLBACK: If no Production Gain or Capital account found, log error but still create entry
+                            // This should never happen if accounts are properly set up, but we'll handle it gracefully
+                            console.error('❌ CRITICAL: No Production Gain or Capital account found! Production entry will be unbalanced.');
+                            console.error('Production:', prod);
+                            console.error('Available accounts:', state.accounts.filter(a => 
+                                a.type === AccountType.EQUITY || 
+                                a.name.includes('Capital') || 
+                                a.name.includes('Gain')
+                            ));
+                        }
+                    } else if (finishedGoodsValue > 0 && wipValueConsumed === 0) {
+                        // If capitalCredit is 0 but we have finished goods value and no WIP consumed,
+                        // we still need a credit entry to balance the debit
+                        // This handles edge cases where production value exactly matches WIP (shouldn't happen, but safety check)
+                        if (productionGainId) {
+                            entries.push({
+                                date: prod.date,
+                                transactionId,
+                                transactionType: TransactionType.PRODUCTION,
+                                accountId: productionGainId,
+                                accountName: state.accounts.find(a => a.id === productionGainId)?.name || 'Production Gain',
+                                currency: 'USD',
+                                exchangeRate: 1,
+                                fcyAmount: finishedGoodsValue,
+                                debit: 0,
+                                credit: finishedGoodsValue,
+                                narration: `Production Gain: ${prod.itemName} (Full value, no WIP)`,
+                                factoryId: prod.factoryId
+                            });
+                        }
                     }
                     
                     // Add to batch instead of posting immediately

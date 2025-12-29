@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useData } from '../context/DataContext';
-import { AccountType, TransactionType, PlannerPeriodType, PlannerEntityType, PlannerEntry, PartnerType, LedgerEntry } from '../types';
+import { AccountType, TransactionType, PlannerPeriodType, PlannerEntityType, PlannerEntry, PartnerType, LedgerEntry, PackingType } from '../types';
 import { 
     AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell 
 } from 'recharts';
@@ -587,12 +587,219 @@ const ProfitLoss: React.FC = () => {
     );
 };
 
+// Ledger Detail Modal Component
+const LedgerDetailModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    title: string;
+    type: 'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome';
+    accountId?: string;
+    state: any;
+}> = ({ isOpen, onClose, title, type, accountId, state }) => {
+    if (!isOpen) return null;
+
+    // Get ledger entries for account
+    const accountLedgerEntries = useMemo(() => {
+        if (type === 'account' && accountId) {
+            return state.ledger
+                .filter((e: any) => e.accountId === accountId)
+                .sort((a: any, b: any) => {
+                    // Sort by date ascending (oldest first), then by transaction ID for same date
+                    const dateDiff = new Date(a.date).getTime() - new Date(b.date).getTime();
+                    if (dateDiff !== 0) return dateDiff;
+                    return a.transactionId.localeCompare(b.transactionId);
+                });
+        }
+        return [];
+    }, [type, accountId, state.ledger]);
+
+    // Get breakdown data for aggregated items
+    const breakdownData = useMemo(() => {
+        if (type === 'debtors') {
+            return state.partners
+                .filter((p: any) => p.type === PartnerType.CUSTOMER && p.balance > 0)
+                .map((p: any) => ({ name: p.name, balance: p.balance }))
+                .sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'creditors') {
+            const supplierTypes = [
+                PartnerType.SUPPLIER,
+                PartnerType.VENDOR,
+                PartnerType.FREIGHT_FORWARDER,
+                PartnerType.CLEARING_AGENT,
+                PartnerType.COMMISSION_AGENT
+            ];
+            return state.partners
+                .filter((p: any) => supplierTypes.includes(p.type) && p.balance < 0)
+                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance) }))
+                .sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'otherPayables') {
+            return state.accounts
+                .filter((a: any) => {
+                    const codeNum = parseInt(a.code || '0');
+                    return codeNum >= 2030 && codeNum <= 2099 && (a.balance || 0) !== 0;
+                })
+                .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0) }))
+                .sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'customerAdvances') {
+            return state.partners
+                .filter((p: any) => p.type === PartnerType.CUSTOMER && p.balance < 0)
+                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance) }))
+                .sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'supplierAdvances') {
+            const supplierTypes = [
+                PartnerType.SUPPLIER,
+                PartnerType.VENDOR,
+                PartnerType.FREIGHT_FORWARDER,
+                PartnerType.CLEARING_AGENT,
+                PartnerType.COMMISSION_AGENT
+            ];
+            return state.partners
+                .filter((p: any) => supplierTypes.includes(p.type) && p.balance > 0)
+                .map((p: any) => ({ name: p.name, balance: p.balance }))
+                .sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'netIncome') {
+            const revenueAccounts = state.accounts
+                .filter((a: any) => a.type === AccountType.REVENUE && (a.balance || 0) !== 0)
+                .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0), type: 'revenue' }));
+            const expenseAccounts = state.accounts
+                .filter((a: any) => a.type === AccountType.EXPENSE && (a.balance || 0) !== 0)
+                .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0), type: 'expense' }));
+            return [...revenueAccounts, ...expenseAccounts].sort((a: any, b: any) => b.balance - a.balance);
+        }
+        return [];
+    }, [type, state.partners, state.accounts]);
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={onClose}>
+            <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                    <h2 className="text-xl font-bold text-slate-800">{title}</h2>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+                        <X size={24} />
+                    </button>
+                </div>
+                <div className="p-6 overflow-y-auto flex-1">
+                    {type === 'account' && accountLedgerEntries.length > 0 ? (
+                        <div className="space-y-4">
+                            <table className="w-full text-sm">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Date</th>
+                                        <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Transaction</th>
+                                        <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Narration</th>
+                                        <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Debit</th>
+                                        <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Credit</th>
+                                        <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200">
+                                    {(() => {
+                                        const account = state.accounts.find((a: any) => a.id === accountId);
+                                        let runningBalance = 0;
+                                        
+                                        return accountLedgerEntries.map((entry: any) => {
+                                            // Calculate running balance based on account type
+                                            if (account && [AccountType.ASSET, AccountType.EXPENSE].includes(account.type)) {
+                                                runningBalance += (entry.debit || 0) - (entry.credit || 0);
+                                            } else {
+                                                runningBalance += (entry.credit || 0) - (entry.debit || 0);
+                                            }
+                                            
+                                            return (
+                                                <tr key={entry.id} className="hover:bg-slate-50">
+                                                    <td className="px-4 py-2">{new Date(entry.date).toLocaleDateString()}</td>
+                                                    <td className="px-4 py-2">{entry.transactionType} - {entry.transactionId.slice(0, 8)}</td>
+                                                    <td className="px-4 py-2">{entry.narration || '-'}</td>
+                                                    <td className="px-4 py-2 text-right font-mono">{(entry.debit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                    <td className="px-4 py-2 text-right font-mono">{(entry.credit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                    <td className="px-4 py-2 text-right font-mono">{runningBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                </tr>
+                                            );
+                                        });
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : type === 'account' ? (
+                        <p className="text-slate-500 text-center py-8">No ledger entries found for this account.</p>
+                    ) : breakdownData.length > 0 ? (
+                        <div className="space-y-4">
+                            <table className="w-full text-sm">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Name</th>
+                                        {type === 'netIncome' && (
+                                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600">Type</th>
+                                        )}
+                                        <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200">
+                                    {breakdownData.map((item: any, idx: number) => (
+                                        <tr key={idx} className="hover:bg-slate-50">
+                                            <td className="px-4 py-2">{item.name}</td>
+                                            {type === 'netIncome' && (
+                                                <td className="px-4 py-2">
+                                                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                        item.type === 'revenue' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                                    }`}>
+                                                        {item.type === 'revenue' ? 'Revenue' : 'Expense'}
+                                                    </span>
+                                                </td>
+                                            )}
+                                            <td className="px-4 py-2 text-right font-mono font-medium">
+                                                {item.balance.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            <div className="border-t border-slate-200 pt-4 mt-4">
+                                <div className="flex justify-between items-center font-bold">
+                                    <span>Total</span>
+                                    <span className="font-mono">
+                                        {breakdownData.reduce((sum: number, item: any) => sum + item.balance, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="text-slate-500 text-center py-8">No data available.</p>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const BalanceSheet: React.FC = () => {
     const { state } = useData();
+    const [modalOpen, setModalOpen] = useState(false);
+    const [modalTitle, setModalTitle] = useState('');
+    const [modalType, setModalType] = useState<'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome'>('account');
+    const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
     
     const assets = state.accounts.filter(a => a.type === AccountType.ASSET);
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+    
+    // Filter "Other Payable" accounts (codes 2030-2099) for aggregation
+    const otherPayableAccounts = liabilities.filter(a => {
+        const codeNum = parseInt(a.code || '0');
+        return codeNum >= 2030 && codeNum <= 2099;
+    });
+    const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    
+    // Regular liabilities (excluding Other Payable accounts 2030-2099)
+    const regularLiabilities = liabilities.filter(a => {
+        const codeNum = parseInt(a.code || '0');
+        return !(codeNum >= 2030 && codeNum <= 2099);
+    });
     
     // Add customer balances (Accounts Receivable) - grouped as "Debtors"
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
@@ -621,9 +828,23 @@ const BalanceSheet: React.FC = () => {
     const netIncome = revenue - expenses;
 
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalSupplierAdvances;
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalSuppliersAP + totalCustomerAdvances;
+    const totalLiabilities = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances;
     // FIXED: Equity should preserve negative balances (like negative inventory costs)
     const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0) + netIncome;
+
+    const handleAccountClick = (accountId: string, accountName: string) => {
+        setModalTitle(accountName);
+        setModalType('account');
+        setSelectedAccountId(accountId);
+        setModalOpen(true);
+    };
+
+    const handleAggregatedClick = (title: string, type: 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome') => {
+        setModalTitle(title);
+        setModalType(type);
+        setSelectedAccountId(undefined);
+        setModalOpen(true);
+    };
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -631,21 +852,21 @@ const BalanceSheet: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
                     <div className="space-y-2">
-                        {assets.filter(a => a && a.balance !== undefined).map(a => (
-                            <div key={a.id} className="flex justify-between text-sm">
-                                <span className="text-slate-600">{a.name}</span>
+                        {assets.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
+                            <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
+                                <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
                                 <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         ))}
                         {totalCustomersAR > 0 && (
-                            <div className="flex justify-between text-sm">
-                                <span className="text-slate-600 font-medium">Debtors (Accounts Receivable)</span>
+                            <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Debtors (Accounts Receivable)', 'debtors')}>
+                                <span className="text-slate-600 font-medium hover:text-blue-600">Debtors (Accounts Receivable)</span>
                                 <span className="font-mono font-medium">{totalCustomersAR.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         )}
                         {totalSupplierAdvances > 0 && (
-                            <div className="flex justify-between text-sm">
-                                <span className="text-slate-600 font-medium">Advances to Suppliers</span>
+                            <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Advances to Suppliers', 'supplierAdvances')}>
+                                <span className="text-slate-600 font-medium hover:text-blue-600">Advances to Suppliers</span>
                                 <span className="font-mono font-medium">{totalSupplierAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             </div>
                         )}
@@ -662,21 +883,27 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Liabilities</h4>
                             <div className="space-y-2">
-                                {liabilities.filter(a => a && a.balance !== undefined).map(a => (
-                                    <div key={a.id} className="flex justify-between text-sm">
-                                        <span className="text-slate-600">{a.name}</span>
+                                {regularLiabilities.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
+                                    <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
+                                        <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
                                         <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
+                                {totalOtherPayables > 0 && (
+                                    <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Other Payables', 'otherPayables')}>
+                                        <span className="text-slate-600 font-medium hover:text-blue-600">Other Payables</span>
+                                        <span className="font-mono font-medium">{totalOtherPayables.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
                                 {totalSuppliersAP > 0 && (
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
+                                    <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Creditors (Accounts Payable)', 'creditors')}>
+                                        <span className="text-slate-600 font-medium hover:text-blue-600">Creditors (Accounts Payable)</span>
                                         <span className="font-mono font-medium">{totalSuppliersAP.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 )}
                                 {totalCustomerAdvances > 0 && (
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-600 font-medium">Customer Advances (Credit Balances)</span>
+                                    <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Customer Advances (Credit Balances)', 'customerAdvances')}>
+                                        <span className="text-slate-600 font-medium hover:text-blue-600">Customer Advances (Credit Balances)</span>
                                         <span className="font-mono font-medium text-blue-700">{totalCustomerAdvances.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 )}
@@ -690,17 +917,17 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Equity</h4>
                             <div className="space-y-2">
-                                {equity.filter(a => a && a.balance !== undefined).map(a => (
-                                    <div key={a.id} className="flex justify-between text-sm">
-                                        <span className="text-slate-600">{a.name}</span>
+                                {equity.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
+                                    <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
+                                        <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
                                         {/* FIXED: Show actual balance (can be negative for items with negative cost) */}
                                         <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
                                             {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
                                         </span>
                                     </div>
                                 ))}
-                                <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded">
-                                    <span className="text-emerald-700 font-medium">Net Income (Current)</span>
+                                <div className="flex justify-between text-sm bg-emerald-50 p-1 rounded cursor-pointer hover:bg-emerald-100" onClick={() => handleAggregatedClick('Net Income (Current)', 'netIncome')}>
+                                    <span className="text-emerald-700 font-medium hover:text-emerald-800">Net Income (Current)</span>
                                     <span className="font-mono font-bold text-emerald-700">{(netIncome || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                 </div>
                             </div>
@@ -716,6 +943,14 @@ const BalanceSheet: React.FC = () => {
                     </div>
                 </div>
             </div>
+            <LedgerDetailModal
+                isOpen={modalOpen}
+                onClose={() => setModalOpen(false)}
+                title={modalTitle}
+                type={modalType}
+                accountId={selectedAccountId}
+                state={state}
+            />
         </div>
     );
 };
@@ -1474,6 +1709,8 @@ const ProductionYield: React.FC = () => {
     const [workingCostRate, setWorkingCostRate] = useState<number>(0.25);
     const [groupBy, setGroupBy] = useState<'CATEGORY' | 'SECTION'>('CATEGORY');
     const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
+    const [sortColumn, setSortColumn] = useState<'name' | 'weight' | 'value' | null>(null);
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
     const yieldData = useMemo(() => {
         const openings = state.originalOpenings.filter(o => o.date >= startDate && o.date <= endDate);
@@ -1483,7 +1720,7 @@ const ProductionYield: React.FC = () => {
         const grandTotalCost = totalInputCost + totalWorkingCost;
 
         const production = state.productions.filter(p => p.date >= startDate && p.date <= endDate && p.qtyProduced > 0 && !p.isRebaling);
-        const grouped: Record<string, { name: string, weight: number, value: number, items: any[] }> = {};
+        const grouped: Record<string, { name: string, weight: number, value: number, packages: number, items: any[] }> = {};
         
         production.forEach(p => {
             const item = state.items.find(i => i.id === p.itemId);
@@ -1492,16 +1729,26 @@ const ProductionYield: React.FC = () => {
                 ? (state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized')
                 : (state.sections.find(s => s.id === item.section)?.name || item.section || 'No Section');
             
-            if (!grouped[groupKey]) grouped[groupKey] = { name: groupKey, weight: 0, value: 0, items: [] };
+            if (!grouped[groupKey]) grouped[groupKey] = { name: groupKey, weight: 0, value: 0, packages: 0, items: [] };
             const unitValue = priceBasis === 'COST' ? item.avgCost : (item.salePrice || 0);
             grouped[groupKey].weight += p.weightProduced;
             grouped[groupKey].value += p.qtyProduced * unitValue;
+            // Count packages (Bales/Box/Bags) - only count if packingType is BALE, BOX, or BAG
+            if (p.packingType === PackingType.BALE || p.packingType === PackingType.BOX || p.packingType === PackingType.BAG) {
+                grouped[groupKey].packages += p.qtyProduced;
+            }
             grouped[groupKey].items.push({ name: item.name, qty: p.qtyProduced, weight: p.weightProduced, value: p.qtyProduced * unitValue, price: unitValue });
         });
 
-        const outputs = Object.values(grouped);
+        let outputs = Object.values(grouped);
         const totalOutputWeight = outputs.reduce((sum, o) => sum + o.weight, 0);
         const totalOutputValue = outputs.reduce((sum, o) => sum + o.value, 0);
+        
+        // Add percentage share to each output
+        outputs = outputs.map(o => ({
+            ...o,
+            percentage: totalOutputValue > 0 ? (o.value / totalOutputValue) * 100 : 0
+        }));
         
         return {
             inputs: { weight: totalInputWeight, cost: totalInputCost, working: totalWorkingCost, total: grandTotalCost },
@@ -1534,6 +1781,37 @@ const ProductionYield: React.FC = () => {
     }, [state.productions, startDate, endDate]);
 
     const [drillCategory, setDrillCategory] = useState<string | null>(null);
+
+    // Sort outputs based on sortColumn and sortDirection
+    const sortedOutputs = useMemo(() => {
+        if (!sortColumn) return yieldData.outputs;
+        const sorted = [...yieldData.outputs].sort((a, b) => {
+            let aVal: any, bVal: any;
+            if (sortColumn === 'name') {
+                aVal = a.name.toLowerCase();
+                bVal = b.name.toLowerCase();
+            } else if (sortColumn === 'weight') {
+                aVal = a.weight;
+                bVal = b.weight;
+            } else if (sortColumn === 'value') {
+                aVal = a.value;
+                bVal = b.value;
+            }
+            if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+        return sorted;
+    }, [yieldData.outputs, sortColumn, sortDirection]);
+
+    const handleSort = (column: 'name' | 'weight' | 'value') => {
+        if (sortColumn === column) {
+            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortColumn(column);
+            setSortDirection('desc');
+        }
+    };
 
     return (
         <div className="space-y-6 animate-in fade-in h-full flex flex-col">
@@ -1582,11 +1860,53 @@ const ProductionYield: React.FC = () => {
                             <div className="p-4 bg-emerald-50/50 border-b border-emerald-100 flex justify-between items-center"><h3 className="font-bold text-emerald-800">Total Outputs (Value)</h3><span className="font-mono font-bold text-emerald-700">${yieldData.totalOutputValue.toLocaleString()}</span></div>
                             <div className="flex-1 overflow-auto">
                                 <table className="w-full text-sm text-left">
-                                    <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase sticky top-0"><tr><th className="px-4 py-2">{groupBy === 'CATEGORY' ? 'Category' : 'Section'}</th><th className="px-4 py-2 text-right">Kg</th><th className="px-4 py-2 text-right">Value</th></tr></thead>
+                                    <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase sticky top-0">
+                                        <tr>
+                                            <th 
+                                                className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleSort('name')}
+                                            >
+                                                <div className="flex items-center gap-1">
+                                                    {groupBy === 'CATEGORY' ? 'Category' : 'Section'}
+                                                    {sortColumn === 'name' && (
+                                                        sortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                            <th 
+                                                className="px-4 py-2 text-right cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleSort('weight')}
+                                            >
+                                                <div className="flex items-center justify-end gap-1">
+                                                    Kg
+                                                    {sortColumn === 'weight' && (
+                                                        sortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                            <th className="px-4 py-2 text-right">% Share</th>
+                                            <th className="px-4 py-2 text-right">Packages</th>
+                                            <th 
+                                                className="px-4 py-2 text-right cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleSort('value')}
+                                            >
+                                                <div className="flex items-center justify-end gap-1">
+                                                    Value
+                                                    {sortColumn === 'value' && (
+                                                        sortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                        </tr>
+                                    </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                        {yieldData.outputs.map((o, i) => (
+                                        {sortedOutputs.map((o, i) => (
                                             <tr key={i} className="hover:bg-slate-50 cursor-pointer" onClick={() => setDrillCategory(o.name)}>
-                                                <td className="px-4 py-2 font-medium text-slate-700">{o.name}</td><td className="px-4 py-2 text-right">{o.weight.toLocaleString()}</td><td className="px-4 py-2 text-right font-mono">${o.value.toLocaleString()}</td>
+                                                <td className="px-4 py-2 font-medium text-slate-700">{o.name}</td>
+                                                <td className="px-4 py-2 text-right">{o.weight.toLocaleString()}</td>
+                                                <td className="px-4 py-2 text-right font-mono text-slate-600">{o.percentage.toFixed(2)}%</td>
+                                                <td className="px-4 py-2 text-right font-mono">{o.packages.toLocaleString()}</td>
+                                                <td className="px-4 py-2 text-right font-mono">${o.value.toLocaleString()}</td>
                                             </tr>
                                         ))}
                                     </tbody>

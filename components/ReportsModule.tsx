@@ -146,6 +146,19 @@ const BalanceSheet: React.FC = () => {
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
 
+    // Filter "Other Payable" accounts (codes 2030-2099) for aggregation
+    const otherPayableAccounts = liabilities.filter(a => {
+        const codeNum = parseInt(a.code || '0');
+        return codeNum >= 2030 && codeNum <= 2099;
+    });
+    const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    
+    // Regular liabilities (excluding Other Payable accounts 2030-2099)
+    const regularLiabilities = liabilities.filter(a => {
+        const codeNum = parseInt(a.code || '0');
+        return !(codeNum >= 2030 && codeNum <= 2099);
+    });
+
     // Split customer balances
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
     const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
@@ -168,8 +181,8 @@ const BalanceSheet: React.FC = () => {
 
     // Total assets: sum of asset accounts + positive customer balance + positive supplier/agent advances
     const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalAdvancesToSuppliers;
-    // FIXED: Total liabilities: liabilities (credit-normal, positive) + creditors + customer advances
-    const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0) + totalCreditors + totalCustomerAdvances;
+    // FIXED: Total liabilities: regular liabilities + other payables + creditors + customer advances
+    const totalLiabilities = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalOtherPayables + totalCreditors + totalCustomerAdvances;
     // FIXED: Equity should preserve negative balances (like Owner's Drawings)
     const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0) + netIncome;
 
@@ -180,7 +193,7 @@ const BalanceSheet: React.FC = () => {
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
                     <div className="space-y-2">
-                        {assets.filter(a => a && a.balance !== undefined).map(a => (
+                        {assets.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
                             <div key={a.id} className="flex justify-between text-sm">
                                 <span className="text-slate-600">{a.name}</span>
                                 <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
@@ -216,14 +229,20 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Liabilities</h4>
                             <div className="space-y-2">
-                                {liabilities.filter(a => a && a.balance !== undefined).map(a => (
+                                {regularLiabilities.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
                                         <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
-                                            {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                            {Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
                                         </span>
                                     </div>
                                 ))}
+                                {totalOtherPayables > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-slate-600 font-medium">Other Payables</span>
+                                        <span className="font-mono font-medium">{totalOtherPayables.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    </div>
+                                )}
                                 {totalCreditors > 0 && (
                                     <div className="flex justify-between text-sm">
                                         <span className="text-slate-600 font-medium">Creditors (Accounts Payable)</span>
@@ -248,7 +267,7 @@ const BalanceSheet: React.FC = () => {
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Equity</h4>
                             <div className="space-y-2">
-                                {equity.filter(a => a && a.balance !== undefined).map(a => (
+                                {equity.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
                                     <div key={a.id} className="flex justify-between text-sm">
                                         <span className="text-slate-600">{a.name}</span>
                                         {/* FIXED: Show actual balance (Owner's Drawings can be negative) */}

@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
     return {
       server: {
         port: 3000,
-        host: true, // Enable localhost and network access (0.0.0.0)
+        host: 'localhost', // Enable localhost access
         strictPort: false, // Try next available port if 3000 is busy
         open: true, // Automatically open browser
       },
