@@ -1138,9 +1138,10 @@ const CurrencyManager: React.FC<{ data: any[] }> = ({ data }) => {
 
 // --- Chart of Accounts Manager with Bulk Import ---
 const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
-    const { addAccount, deleteEntity } = useData();
+    const { addAccount, updateAccount, deleteEntity } = useData();
     const [isImporting, setIsImporting] = useState(false);
     const [showForm, setShowForm] = useState(false);
+    const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
 
@@ -1232,9 +1233,19 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 options: Object.keys(EXCHANGE_RATES),
                 defaultValue: 'USD'
             },
-            { name: 'balance', label: 'Opening Balance', type: 'number', defaultValue: 0 }
+            { name: 'balance', label: 'Opening Balance (Read-only - calculated from ledger)', type: 'number', defaultValue: 0, readOnly: true }
         ],
         onSave: (data) => addAccount(data),
+        onUpdate: async (id: string, data: any) => {
+            try {
+                await updateAccount(id, data);
+                setEditingAccountId(null);
+                setShowForm(false);
+            } catch (error: any) {
+                alert(`Failed to update account: ${error.message || error}`);
+                throw error;
+            }
+        },
         onDelete: (id) => deleteEntity('accounts', id)
     };
 
@@ -1295,13 +1306,20 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 </div>
             )}
 
-            {showForm && (
+            {(showForm || editingAccountId) && (
                 <div className="mb-4 border-t pt-4">
                     <GenericForm 
                         config={accountConfig} 
                         data={data} 
-                        onCancel={() => setShowForm(false)} 
-                        onSuccess={() => setShowForm(false)} 
+                        initialOverrides={editingAccountId ? data.find(a => a.id === editingAccountId) : undefined}
+                        onCancel={() => {
+                            setShowForm(false);
+                            setEditingAccountId(null);
+                        }} 
+                        onSuccess={() => {
+                            setShowForm(false);
+                            setEditingAccountId(null);
+                        }} 
                     />
                 </div>
             )}
@@ -1332,12 +1350,25 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                                     <td className="px-4 py-2 text-sm">{account.type}</td>
                                     <td className="px-4 py-2 text-sm text-right">${account.balance || 0}</td>
                                     <td className="px-4 py-2 text-right">
-                                        <button
-                                            onClick={() => deleteEntity('accounts', account.id)}
-                                            className="text-red-600 hover:text-red-800"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
+                                        <div className="flex items-center justify-end gap-2">
+                                            <button
+                                                onClick={() => {
+                                                    setEditingAccountId(account.id);
+                                                    setShowForm(false);
+                                                }}
+                                                className="text-blue-600 hover:text-blue-800"
+                                                title="Edit account"
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            <button
+                                                onClick={() => deleteEntity('accounts', account.id)}
+                                                className="text-red-600 hover:text-red-800"
+                                                title="Delete account"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}

@@ -58,38 +58,63 @@ export const ItemPerformanceReport: React.FC = () => {
                 return invoice.status === 'Posted' && invoiceDate >= fromDate && invoiceDate <= toDate;
             });
 
-            // Calculate sales from invoice items
+            // Calculate sales from invoice items (use qty, not quantity)
             const totalSales = relevantInvoices.reduce((sum, invoice) => {
                 const invoiceItem = invoice.items.find(i => i.itemId === item.id);
-                return sum + (invoiceItem?.quantity || 0);
+                return sum + (invoiceItem?.qty || 0);
             }, 0);
 
-            // Calculate revenue from invoice items
+            // Calculate revenue from invoice items (use qty, not quantity)
+            // Fix NaN issue: Handle invalid rate values
             const revenue = relevantInvoices.reduce((sum, invoice) => {
                 const invoiceItem = invoice.items.find(i => i.itemId === item.id);
                 if (!invoiceItem) return sum;
-                return sum + (invoiceItem.quantity * invoiceItem.rate);
+                const rate = invoiceItem.rate || 0;
+                const qty = invoiceItem.qty || 0;
+                // Check for NaN
+                if (isNaN(rate) || isNaN(qty)) return sum;
+                return sum + (qty * rate);
             }, 0);
 
-            // Filter production by date range
+            // Filter production by date range (exclude re-baling)
             const relevantProduction = state.productions.filter(prod => {
                 const prodDate = new Date(prod.date);
                 const fromDate = dateFrom ? new Date(dateFrom) : new Date(0);
                 const toDate = dateTo ? new Date(dateTo) : new Date();
-                return prod.itemId === item.id && prodDate >= fromDate && prodDate <= toDate;
+                return prod.itemId === item.id && 
+                       !prod.isRebaling && 
+                       prod.qtyProduced > 0 &&
+                       prodDate >= fromDate && 
+                       prodDate <= toDate;
             });
 
-            const totalProduction = relevantProduction.reduce((sum, prod) => sum + prod.quantityProduced, 0);
+            // Use qtyProduced, not quantityProduced
+            const totalProduction = relevantProduction.reduce((sum, prod) => {
+                const qty = prod.qtyProduced || 0;
+                return isNaN(qty) ? sum : sum + qty;
+            }, 0);
             
-            // Calculate cost (production cost)
-            const productionCost = relevantProduction.reduce((sum, prod) => sum + (prod.totalCost || 0), 0);
+            // Calculate cost (production cost): qtyProduced * productionPrice (or avgCost if not set)
+            const productionCost = relevantProduction.reduce((sum, prod) => {
+                const qty = prod.qtyProduced || 0;
+                if (isNaN(qty) || qty <= 0) return sum;
+                // Use productionPrice if available, otherwise use item.avgCost
+                const unitCost = prod.productionPrice || item.avgCost || 0;
+                if (isNaN(unitCost)) return sum;
+                return sum + (qty * unitCost);
+            }, 0);
             
-            const profit = revenue - productionCost;
-            const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
+            // Fix NaN handling for profit calculation
+            const validRevenue = isNaN(revenue) ? 0 : revenue;
+            const validCost = isNaN(productionCost) ? 0 : productionCost;
+            const profit = validRevenue - validCost;
+            const profitMargin = validRevenue > 0 ? (profit / validRevenue) * 100 : 0;
 
-            // Simple stock calculation
-            const openingStock = item.openingStock || 0;
-            const closingStock = openingStock + totalProduction - totalSales;
+            // Calculate opening stock: current stock + sales - production (for the period)
+            // This gives us the stock at the start of the period
+            const currentStock = item.stockQty || 0;
+            const openingStock = Math.max(0, currentStock + totalSales - totalProduction);
+            const closingStock = currentStock; // Current stock is the closing stock
 
             result.push({
                 itemId: item.id,
@@ -110,12 +135,30 @@ export const ItemPerformanceReport: React.FC = () => {
         return result.sort((a, b) => b.revenue - a.revenue);
     }, [state.items, state.salesInvoices, state.productions, selectedCategory, selectedSection, dateFrom, dateTo]);
 
-    const totals = useMemo(() => ({
-        totalRevenue: performanceData.reduce((sum, item) => sum + item.revenue, 0),
-        totalCost: performanceData.reduce((sum, item) => sum + item.cost, 0),
-        totalProfit: performanceData.reduce((sum, item) => sum + item.profit, 0),
-        totalSales: performanceData.reduce((sum, item) => sum + item.sales, 0)
-    }), [performanceData]);
+    const totals = useMemo(() => {
+        const revenue = performanceData.reduce((sum, item) => {
+            const val = isNaN(item.revenue) ? 0 : item.revenue;
+            return sum + val;
+        }, 0);
+        const cost = performanceData.reduce((sum, item) => {
+            const val = isNaN(item.cost) ? 0 : item.cost;
+            return sum + val;
+        }, 0);
+        const profit = performanceData.reduce((sum, item) => {
+            const val = isNaN(item.profit) ? 0 : item.profit;
+            return sum + val;
+        }, 0);
+        const sales = performanceData.reduce((sum, item) => {
+            const val = isNaN(item.sales) ? 0 : item.sales;
+            return sum + val;
+        }, 0);
+        return {
+            totalRevenue: revenue,
+            totalCost: cost,
+            totalProfit: profit,
+            totalSales: sales
+        };
+    }, [performanceData]);
 
     // Prepare chart data (top 10 items by revenue)
     const chartData = useMemo(() => {
@@ -123,10 +166,11 @@ export const ItemPerformanceReport: React.FC = () => {
             .slice(0, 10)
             .map(item => ({
                 name: item.itemName.length > 15 ? item.itemName.substring(0, 15) + '...' : item.itemName,
-                Revenue: item.revenue,
-                Cost: item.cost,
-                Profit: item.profit
-            }));
+                Revenue: isNaN(item.revenue) ? 0 : item.revenue,
+                Cost: isNaN(item.cost) ? 0 : item.cost,
+                Profit: isNaN(item.profit) ? 0 : item.profit
+            }))
+            .filter(item => item.Revenue > 0 || item.Cost > 0 || item.Profit !== 0); // Only show items with data
     }, [performanceData]);
 
     const handlePrint = () => window.print();
@@ -241,7 +285,7 @@ export const ItemPerformanceReport: React.FC = () => {
                         <DollarSign className="text-blue-500" size={20} />
                     </div>
                     <div className="text-2xl font-bold text-slate-800">
-                        ${totals.totalRevenue.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        ${isNaN(totals.totalRevenue) ? '0' : totals.totalRevenue.toLocaleString(undefined, {maximumFractionDigits: 2})}
                     </div>
                 </div>
 
@@ -251,7 +295,7 @@ export const ItemPerformanceReport: React.FC = () => {
                         <TrendingUp className="text-red-500" size={20} />
                     </div>
                     <div className="text-2xl font-bold text-slate-800">
-                        ${totals.totalCost.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        ${isNaN(totals.totalCost) ? '0' : totals.totalCost.toLocaleString(undefined, {maximumFractionDigits: 2})}
                     </div>
                 </div>
 
@@ -261,7 +305,7 @@ export const ItemPerformanceReport: React.FC = () => {
                         <BarChart3 className="text-emerald-500" size={20} />
                     </div>
                     <div className={`text-2xl font-bold ${totals.totalProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        ${totals.totalProfit.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        ${isNaN(totals.totalProfit) ? '0' : totals.totalProfit.toLocaleString(undefined, {maximumFractionDigits: 2})}
                     </div>
                 </div>
 
@@ -271,7 +315,7 @@ export const ItemPerformanceReport: React.FC = () => {
                         <Package2 className="text-purple-500" size={20} />
                     </div>
                     <div className="text-2xl font-bold text-slate-800">
-                        {totals.totalSales.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                        {isNaN(totals.totalSales) ? '0' : totals.totalSales.toLocaleString(undefined, {maximumFractionDigits: 0})}
                     </div>
                 </div>
             </div>
@@ -346,25 +390,25 @@ export const ItemPerformanceReport: React.FC = () => {
                                         {item.openingStock.toFixed(0)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-blue-600">
-                                        {item.production.toFixed(0)}
+                                        {isNaN(item.production) ? '0' : item.production.toFixed(0)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-red-600">
-                                        {item.sales.toFixed(0)}
+                                        {isNaN(item.sales) ? '0' : item.sales.toFixed(0)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono font-bold text-slate-800">
-                                        {item.closingStock.toFixed(0)}
+                                        {isNaN(item.closingStock) ? '0' : item.closingStock.toFixed(0)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-blue-600">
-                                        ${item.revenue.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        ${isNaN(item.revenue) ? '0' : item.revenue.toLocaleString(undefined, {maximumFractionDigits: 2})}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-right font-mono text-red-600">
-                                        ${item.cost.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        ${isNaN(item.cost) ? '0' : item.cost.toLocaleString(undefined, {maximumFractionDigits: 2})}
                                     </td>
                                     <td className={`px-6 py-4 text-sm text-right font-mono font-semibold ${item.profit >= 0 ? 'text-emerald-600' : 'text-red-700'}`}>
-                                        ${item.profit.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        ${isNaN(item.profit) ? '0' : item.profit.toLocaleString(undefined, {maximumFractionDigits: 2})}
                                     </td>
                                     <td className={`px-6 py-4 text-sm text-right font-mono font-semibold ${item.profitMargin >= 0 ? 'text-emerald-600' : 'text-red-700'}`}>
-                                        {item.profitMargin.toFixed(1)}%
+                                        {isNaN(item.profitMargin) ? '0.0' : item.profitMargin.toFixed(1)}%
                                     </td>
                                 </tr>
                             ))}

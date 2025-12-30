@@ -175,3 +175,4 @@ When user clicks "Save":
 
 **"MUST PASS BOTH DEBIT AND CREDIT ENTRIES"** ✅ **IMPLEMENTED**
 
+

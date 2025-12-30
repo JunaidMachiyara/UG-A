@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { UserRole, TransactionType, LedgerEntry, PartnerType, SalesInvoice, AccountType } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search, CheckSquare } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Search, CheckSquare, Package } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs, getDoc, query, where, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { getExchangeRates } from '../context/DataContext';
@@ -17,7 +17,7 @@ import { UserManagement } from './UserManagement';
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state, postTransaction, deleteTransaction, addOriginalOpening } = useData();
+    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -94,6 +94,9 @@ export const AdminModule: React.FC = () => {
     } | null>(null);
     const [deletingFactoryItems, setDeletingFactoryItems] = useState(false);
     const [deleteItemsResult, setDeleteItemsResult] = useState<{ success: boolean; message: string; deleted: number; errors: string[] } | null>(null);
+    const [itemsWithInvalidSalePrice, setItemsWithInvalidSalePrice] = useState<Array<{ id: string; code: string; name: string; category: string; avgCost: number; salePrice: any; issue: string }>>([]);
+    const [fixingInvalidSalePrices, setFixingInvalidSalePrices] = useState(false);
+    const [invalidSalePriceFixResult, setInvalidSalePriceFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
     const [activeTab, setActiveTab] = useState<'admin' | 'csv-validator' | 'import-export'>('admin');
     const [scanningLedger, setScanningLedger] = useState(false);
     const [ledgerScanResult, setLedgerScanResult] = useState<{
@@ -5079,7 +5082,7 @@ ${accountsWithMismatches.length > 0 ? `\n📋 ACCOUNTS WITH BALANCE MISMATCHES (
                                     }
                                 });
 
-                                // Check 2: Transactions with only one side (orphaned entries)
+                                // Check 2: Transactions with only one side (orphaned entries) OR unbalanced transactions
                                 const transactionGroups = new Map<string, any[]>();
                                 state.ledger.forEach(entry => {
                                     if (!transactionGroups.has(entry.transactionId)) {
@@ -5089,9 +5092,25 @@ ${accountsWithMismatches.length > 0 ? `\n📋 ACCOUNTS WITH BALANCE MISMATCHES (
                                 });
 
                                 const orphanedTransactions: any[] = [];
+                                const unbalancedTransactions: any[] = [];
                                 transactionGroups.forEach((entries, transactionId) => {
                                     const totalDebit = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
                                     const totalCredit = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    const imbalance = Math.abs(totalDebit - totalCredit);
+                                    
+                                    // Check if transaction is unbalanced (imbalance > 0.01)
+                                    if (imbalance > 0.01) {
+                                        unbalancedTransactions.push({
+                                            transactionId,
+                                            transactionType: entries[0]?.transactionType || 'UNKNOWN',
+                                            date: entries[0]?.date || '',
+                                            totalDebit,
+                                            totalCredit,
+                                            imbalance,
+                                            entryCount: entries.length,
+                                            accounts: entries.map(e => e.accountName).join(', ')
+                                        });
+                                    }
                                     
                                     // Check if transaction has only debit OR only credit (not both)
                                     if ((totalDebit > 0 && totalCredit === 0) || (totalDebit === 0 && totalCredit > 0)) {
@@ -5113,6 +5132,9 @@ ${accountsWithMismatches.length > 0 ? `\n📋 ACCOUNTS WITH BALANCE MISMATCHES (
                                     a.code === '302'
                                 );
 
+                                // Check for specific invoice transaction (INV-SINV-1002)
+                                const specificInvoiceCheck = unbalancedTransactions.find(t => t.transactionId === 'INV-SINV-1002');
+                                
                                 const report = `
 ═══════════════════════════════════════════════════════════
 TRANSACTION INTEGRITY DIAGNOSTIC REPORT
@@ -5124,6 +5146,11 @@ TRANSACTION INTEGRITY DIAGNOSTIC REPORT
    Total Missing Value: $${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
    ${productionsMissingCredit.length > 0 ? '❌ CRITICAL: Production entries missing credit side!' : '✅ All production entries have balanced ledger entries'}
 
+🔍 UNBALANCED TRANSACTIONS (Debits ≠ Credits):
+   Found: ${unbalancedTransactions.length} unbalanced transactions
+   ${unbalancedTransactions.length > 0 ? '❌ CRITICAL: Transactions with imbalanced entries!' : '✅ No unbalanced transactions found'}
+   ${specificInvoiceCheck ? `\n   ⚠️ SPECIFIC INVOICE FOUND: INV-SINV-1002\n      Debit: $${specificInvoiceCheck.totalDebit.toFixed(2)}\n      Credit: $${specificInvoiceCheck.totalCredit.toFixed(2)}\n      Imbalance: $${specificInvoiceCheck.imbalance.toFixed(2)}\n      Accounts: ${specificInvoiceCheck.accounts}` : ''}
+
 🔍 ORPHANED TRANSACTIONS (Only Debit OR Only Credit):
    Found: ${orphanedTransactions.length} orphaned transactions
    ${orphanedTransactions.length > 0 ? '❌ CRITICAL: Transactions with incomplete entries!' : '✅ No orphaned transactions found'}
@@ -5133,9 +5160,13 @@ TRANSACTION INTEGRITY DIAGNOSTIC REPORT
 
 ${productionsMissingCredit.length > 0 ? `\n📋 PRODUCTION ENTRIES MISSING CREDIT (Sample of first 20):\n${productionsMissingCredit.slice(0, 20).map((p, idx) => `   ${idx + 1}. ${p.itemName} (${p.date}): $${p.value.toFixed(2)} - ${p.issue}`).join('\n')}` : ''}
 
+${unbalancedTransactions.length > 0 ? `\n📋 UNBALANCED TRANSACTIONS (Sample of first 20):\n${unbalancedTransactions.slice(0, 20).map((t, idx) => `   ${idx + 1}. ${t.transactionId} (${t.transactionType}): Debit=$${t.totalDebit.toFixed(2)}, Credit=$${t.totalCredit.toFixed(2)}, Imbalance=$${t.imbalance.toFixed(2)} - ${t.accounts}`).join('\n')}` : ''}
+
 ${orphanedTransactions.length > 0 ? `\n📋 ORPHANED TRANSACTIONS (Sample of first 20):\n${orphanedTransactions.slice(0, 20).map((t, idx) => `   ${idx + 1}. ${t.transactionId} (${t.transactionType}): Debit=$${t.totalDebit.toFixed(2)}, Credit=$${t.totalCredit.toFixed(2)} - ${t.accounts}`).join('\n')}` : ''}
 
 ${productionsMissingCredit.length > 0 ? `\n⚠️ ROOT CAUSE: Production entries are creating Finished Goods (Assets) but NOT creating Production Gain/Capital (Equity) entries. This causes:\n   - Assets inflated by $${productionsMissingCredit.reduce((sum, p) => sum + p.value, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}\n   - Equity missing by same amount\n   - Balance Sheet imbalance of $${(productionsMissingCredit.reduce((sum, p) => sum + p.value, 0) * 2).toLocaleString(undefined, {minimumFractionDigits: 2})}` : ''}
+
+${specificInvoiceCheck ? `\n⚠️ RECOVERY FOR INV-SINV-1002:\n   1. Go to Posting Module\n   2. Find invoice SINV-1002\n   3. If status is "Unposted", simply re-post it (the fix is now in place)\n   4. If status is "Posted" but has unbalanced entries, delete the invoice and re-post it` : ''}
 
 ═══════════════════════════════════════════════════════════
                                 `;
@@ -5422,6 +5453,272 @@ ${productionsMissingCredit.length > 0 ? `\n⚠️ ROOT CAUSE: Production entries
                                                 ))}
                                                 {productionCreditFixResult.errors.length > 5 && (
                                                     <li>... and {productionCreditFixResult.errors.length - 5} more</li>
+                                                )}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Items with Invalid Sale Price Fix Utility */}
+            <div className="bg-white border-2 border-purple-200 rounded-xl p-6 shadow-lg">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-100 p-3 rounded-lg">
+                        <Package className="text-purple-600" size={24} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800">Fix Items with Invalid Sale Price</h3>
+                        <p className="text-sm text-slate-600">Find and fix items with NaN, undefined, or null salePrice values</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <p className="text-sm font-semibold text-purple-900 mb-2">
+                            This utility will:
+                        </p>
+                        <ul className="text-xs text-purple-700 list-disc list-inside space-y-1">
+                            <li>Scan all items for invalid salePrice values (NaN, undefined, null)</li>
+                            <li>Show a list of items that need fixing</li>
+                            <li>Option to auto-fix by setting salePrice to avgCost (or 0 if avgCost is also invalid)</li>
+                            <li>Prevents "$NaN" errors in Production Yield and other reports</li>
+                        </ul>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                const invalidItems: Array<{ id: string; code: string; name: string; category: string; avgCost: number; salePrice: any; issue: string }> = [];
+                                
+                                state.items.forEach(item => {
+                                    const salePrice = item.salePrice;
+                                    let issue = '';
+                                    
+                                    if (salePrice === undefined) {
+                                        issue = 'salePrice is undefined';
+                                    } else if (salePrice === null) {
+                                        issue = 'salePrice is null';
+                                    } else if (isNaN(salePrice)) {
+                                        issue = 'salePrice is NaN';
+                                    }
+                                    
+                                    if (issue) {
+                                        const categoryName = state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized';
+                                        invalidItems.push({
+                                            id: item.id,
+                                            code: item.code || item.id,
+                                            name: item.name,
+                                            category: categoryName,
+                                            avgCost: item.avgCost || 0,
+                                            salePrice: salePrice,
+                                            issue: issue
+                                        });
+                                    }
+                                });
+
+                                setItemsWithInvalidSalePrice(invalidItems);
+                                
+                                const report = `
+═══════════════════════════════════════════════════════════
+ITEMS WITH INVALID SALE PRICE - DIAGNOSTIC REPORT
+═══════════════════════════════════════════════════════════
+
+📊 SCAN RESULTS:
+   Total Items Scanned: ${state.items.length}
+   Items with Invalid salePrice: ${invalidItems.length}
+   ${invalidItems.length > 0 ? '❌ CRITICAL: Items found with invalid salePrice values!' : '✅ All items have valid salePrice values'}
+
+${invalidItems.length > 0 ? `\n📋 ITEMS REQUIRING FIX (${invalidItems.length} items):\n${invalidItems.map((item, idx) => `   ${idx + 1}. ${item.code} - ${item.name} (${item.category})\n      Issue: ${item.issue}\n      Current salePrice: ${item.salePrice}\n      avgCost: $${item.avgCost.toFixed(2)}\n      Suggested fix: Set salePrice to $${item.avgCost.toFixed(2)} (or 0 if avgCost is invalid)`).join('\n')}` : ''}
+
+${invalidItems.length > 0 ? `\n💡 QUICK FIX OPTIONS:\n   1. Use the "Auto-Fix All Items" button below to set salePrice = avgCost for all invalid items\n   2. Or manually edit items in Setup > Inventory Items\n   3. Items with avgCost = 0 or invalid will be set to salePrice = 0` : ''}
+
+═══════════════════════════════════════════════════════════
+                                `;
+
+                                alert(report);
+                                console.log('🔍 Invalid Sale Price Diagnostic:', {
+                                    totalItems: state.items.length,
+                                    invalidItems: invalidItems.length,
+                                    items: invalidItems
+                                });
+
+                            } catch (error: any) {
+                                console.error('❌ Error running invalid salePrice diagnostic:', error);
+                                alert(`Diagnostic failed: ${error.message}`);
+                            }
+                        }}
+                        className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        <Search size={18} />
+                        Scan for Items with Invalid Sale Price
+                    </button>
+
+                    {/* Show fix option if invalid items found */}
+                    {itemsWithInvalidSalePrice.length > 0 && (
+                        <>
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
+                                <p className="text-sm font-semibold text-red-900 mb-2">
+                                    ⚠️ Found {itemsWithInvalidSalePrice.length} Items with Invalid salePrice
+                                </p>
+                                <p className="text-xs text-red-700 mb-3">
+                                    These items will cause "$NaN" errors in Production Yield and other reports when using "Sales" basis.
+                                </p>
+                                <div className="max-h-60 overflow-y-auto mb-3">
+                                    <table className="w-full text-xs">
+                                        <thead className="bg-red-100 sticky top-0">
+                                            <tr>
+                                                <th className="px-2 py-1 text-left">Code</th>
+                                                <th className="px-2 py-1 text-left">Name</th>
+                                                <th className="px-2 py-1 text-left">Category</th>
+                                                <th className="px-2 py-1 text-left">Issue</th>
+                                                <th className="px-2 py-1 text-right">avgCost</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-red-100">
+                                            {itemsWithInvalidSalePrice.slice(0, 20).map((item, idx) => (
+                                                <tr key={item.id} className="hover:bg-red-100">
+                                                    <td className="px-2 py-1 font-mono text-xs">{item.code}</td>
+                                                    <td className="px-2 py-1">{item.name}</td>
+                                                    <td className="px-2 py-1 text-slate-600">{item.category}</td>
+                                                    <td className="px-2 py-1 text-red-600">{item.issue}</td>
+                                                    <td className="px-2 py-1 text-right font-mono">${item.avgCost.toFixed(2)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    {itemsWithInvalidSalePrice.length > 20 && (
+                                        <p className="text-xs text-red-600 mt-2 text-center">
+                                            ... and {itemsWithInvalidSalePrice.length - 20} more items
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    if (!confirm(`This will update ${itemsWithInvalidSalePrice.length} items. Set salePrice = avgCost for all invalid items?\n\nItems with avgCost = 0 or invalid will be set to salePrice = 0.`)) {
+                                        return;
+                                    }
+
+                                    setFixingInvalidSalePrices(true);
+                                    setInvalidSalePriceFixResult(null);
+
+                                    try {
+                                        const batch = writeBatch(db);
+                                        let fixed = 0;
+                                        const errors: string[] = [];
+                                        const BATCH_SIZE = 500;
+
+                                        for (let i = 0; i < itemsWithInvalidSalePrice.length; i += BATCH_SIZE) {
+                                            const batchItems = itemsWithInvalidSalePrice.slice(i, i + BATCH_SIZE);
+                                            
+                                            batchItems.forEach(item => {
+                                                try {
+                                                    const itemRef = doc(db, 'items', item.id);
+                                                    // Set salePrice to avgCost if valid, otherwise 0
+                                                    const newSalePrice = (item.avgCost !== undefined && item.avgCost !== null && !isNaN(item.avgCost) && item.avgCost !== 0) 
+                                                        ? item.avgCost 
+                                                        : 0;
+                                                    
+                                                    batch.update(itemRef, {
+                                                        salePrice: newSalePrice,
+                                                        updatedAt: serverTimestamp()
+                                                    });
+                                                    fixed++;
+                                                } catch (error: any) {
+                                                    errors.push(`Item ${item.code}: ${error.message}`);
+                                                }
+                                            });
+
+                                            await batch.commit();
+                                            console.log(`✅ Fixed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchItems.length} items`);
+                                        }
+
+                                        // Update local state
+                                        itemsWithInvalidSalePrice.forEach(item => {
+                                            const updatedItem = state.items.find(i => i.id === item.id);
+                                            if (updatedItem) {
+                                                const newSalePrice = (item.avgCost !== undefined && item.avgCost !== null && !isNaN(item.avgCost) && item.avgCost !== 0) 
+                                                    ? item.avgCost 
+                                                    : 0;
+                                                updateItem(item.id, { ...updatedItem, salePrice: newSalePrice });
+                                            }
+                                        });
+
+                                        setInvalidSalePriceFixResult({
+                                            success: true,
+                                            message: `✅ Successfully fixed ${fixed} items!\n\nAll invalid salePrice values have been set to avgCost (or 0 if avgCost is invalid).\n\nThe Production Yield report should now show correct values instead of "$NaN".`,
+                                            fixed: fixed,
+                                            errors: errors
+                                        });
+
+                                        // Clear the list
+                                        setItemsWithInvalidSalePrice([]);
+
+                                    } catch (error: any) {
+                                        console.error('❌ Error fixing invalid salePrice values:', error);
+                                        setInvalidSalePriceFixResult({
+                                            success: false,
+                                            message: `Fix failed: ${error.message}`,
+                                            fixed: 0,
+                                            errors: [error.message]
+                                        });
+                                    } finally {
+                                        setFixingInvalidSalePrices(false);
+                                    }
+                                }}
+                                disabled={fixingInvalidSalePrices}
+                                className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {fixingInvalidSalePrices ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                        <span>Fixing {itemsWithInvalidSalePrice.length} items...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <CheckSquare size={18} />
+                                        Auto-Fix All Items (Set salePrice = avgCost)
+                                    </>
+                                )}
+                            </button>
+
+                            {invalidSalePriceFixResult && (
+                                <div className={`p-4 rounded-lg border-2 mt-4 ${
+                                    invalidSalePriceFixResult.success 
+                                        ? 'bg-emerald-50 border-emerald-300' 
+                                        : 'bg-red-50 border-red-300'
+                                }`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {invalidSalePriceFixResult.success ? (
+                                            <CheckCircle className="text-emerald-600" size={20} />
+                                        ) : (
+                                            <XCircle className="text-red-600" size={20} />
+                                        )}
+                                        <span className={`font-bold ${
+                                            invalidSalePriceFixResult.success ? 'text-emerald-900' : 'text-red-900'
+                                        }`}>
+                                            {invalidSalePriceFixResult.success ? 'Fix Successful!' : 'Fix Failed'}
+                                        </span>
+                                    </div>
+                                    <p className={`text-sm whitespace-pre-line ${
+                                        invalidSalePriceFixResult.success ? 'text-emerald-700' : 'text-red-700'
+                                    }`}>
+                                        {invalidSalePriceFixResult.message}
+                                    </p>
+                                    {invalidSalePriceFixResult.errors.length > 0 && (
+                                        <div className="mt-2 text-xs text-red-600">
+                                            <strong>Errors:</strong>
+                                            <ul className="list-disc list-inside mt-1">
+                                                {invalidSalePriceFixResult.errors.slice(0, 5).map((err, idx) => (
+                                                    <li key={idx}>{err}</li>
+                                                ))}
+                                                {invalidSalePriceFixResult.errors.length > 5 && (
+                                                    <li>... and {invalidSalePriceFixResult.errors.length - 5} more</li>
                                                 )}
                                             </ul>
                                         </div>

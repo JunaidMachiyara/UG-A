@@ -404,6 +404,10 @@ export const Accounting: React.FC = () => {
         
         // Variable to store item stock update function for IA vouchers
         let pendingItemUpdates: (() => Promise<void>) | null = null;
+        
+        // Declare account variables at function scope for use in logging/debugging
+        let inventoryAccount: Account | undefined = undefined;
+        let adjustmentAccount: Account | undefined = undefined;
         if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
         if (vType !== 'JV' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
@@ -642,24 +646,70 @@ export const Accounting: React.FC = () => {
             }
             
             // Lookup accounts dynamically (factory-specific, always correct)
-            const inventoryAccount = state.accounts.find(a => 
+            inventoryAccount = state.accounts.find(a => 
                 a.name.includes('Finished Goods') || 
                 a.name.includes('Inventory - Finished Goods') ||
                 a.code === '105' ||
                 a.code === '1202'
             );
-            const adjustmentAccount = state.accounts.find(a => 
-                a.name.includes('Inventory Adjustment') || 
-                a.name.includes('Write-off') ||
-                a.code === '503'
+            // CRITICAL FIX: Lookup Inventory Adjustment account - should be EXPENSE type (code 503)
+            // Prefer EXPENSE type accounts, but allow EQUITY as fallback
+            // DO NOT use ASSET type accounts (they appear in Assets section, not Expenses)
+            adjustmentAccount = state.accounts.find(a => 
+                (a.name.includes('Inventory Adjustment') || 
+                 a.name.includes('Write-off') ||
+                 a.code === '503') &&
+                (a.type === AccountType.EXPENSE || a.type === AccountType.EQUITY)
             );
+            
+            // Fallback: if no EXPENSE/EQUITY account found, find by name/code only (for backward compatibility)
+            if (!adjustmentAccount) {
+                adjustmentAccount = state.accounts.find(a => 
+                    a.name.includes('Inventory Adjustment') || 
+                    a.name.includes('Write-off') ||
+                    a.code === '503'
+                ) || undefined;
+                
+                if (adjustmentAccount && adjustmentAccount.type === AccountType.ASSET) {
+                    console.error('❌ CRITICAL ERROR: Inventory Adjustment account is an ASSET account!');
+                    console.error('   This will cause Balance Sheet issues. The account should be EXPENSE or EQUITY type.');
+                    console.error('   Account found:', {
+                        id: adjustmentAccount.id,
+                        name: adjustmentAccount.name,
+                        code: adjustmentAccount.code,
+                        type: adjustmentAccount.type
+                    });
+                    return alert(`❌ CRITICAL ERROR: Inventory Adjustment account "${adjustmentAccount.name}" is an ASSET account.\n\n` +
+                        `This will cause Balance Sheet imbalance. The account should be:\n` +
+                        `- Type: EXPENSE (recommended) or EQUITY\n` +
+                        `- Code: 503\n\n` +
+                        `Please update the account type in Setup > Chart of Accounts.\n\n` +
+                        `Current account: ${adjustmentAccount.name} (Type: ${adjustmentAccount.type})`);
+                }
+            }
             
             if (!inventoryAccount || !adjustmentAccount) {
                 const missingAccounts = [];
                 if (!inventoryAccount) missingAccounts.push('Inventory - Finished Goods (105 or 1202)');
-                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503)');
+                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503) - EXPENSE or EQUITY type');
                 return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
             }
+            
+            // CRITICAL: Log account IDs to verify they match Balance Sheet calculation
+            console.log('🔍 Inventory Adjustment Account Lookup:', {
+                inventoryAccount: {
+                    id: inventoryAccount.id,
+                    name: inventoryAccount.name,
+                    code: inventoryAccount.code,
+                    type: inventoryAccount.type
+                },
+                adjustmentAccount: {
+                    id: adjustmentAccount.id,
+                    name: adjustmentAccount.name,
+                    code: adjustmentAccount.code,
+                    type: adjustmentAccount.type
+                }
+            });
             
             // Store item updates for Firestore (to update after posting ledger entries)
             const itemStockUpdates: Array<{ itemId: string; newStockQty: number; newAvgCost: number }> = [];
@@ -1061,6 +1111,44 @@ export const Accounting: React.FC = () => {
             }
         }
 
+        // Log entries before posting to verify account IDs (for IA vouchers)
+        if (vType === 'IA' && inventoryAccount && adjustmentAccount) {
+            console.log('📊 Inventory Adjustment - Ledger Entries to Post:', {
+                totalEntries: entries.length,
+                entries: entries.map(e => ({
+                    accountId: e.accountId,
+                    accountName: e.accountName,
+                    debit: e.debit,
+                    credit: e.credit,
+                    transactionId: e.transactionId
+                })),
+                expectedAccountIds: {
+                    inventoryAccountId: inventoryAccount.id,
+                    adjustmentAccountId: adjustmentAccount.id
+                },
+                'Note': 'Balance Sheet calculates balances by matching ledgerEntry.accountId === account.id. Verify these IDs match.'
+            });
+            
+            // CRITICAL: Verify account IDs match what's in state
+            const inventoryAccountInState = state.accounts.find(a => a.id === inventoryAccount.id);
+            const adjustmentAccountInState = state.accounts.find(a => a.id === adjustmentAccount.id);
+            
+            if (!inventoryAccountInState) {
+                console.error('❌ CRITICAL: Inventory Account ID not found in state.accounts!', {
+                    lookupId: inventoryAccount.id,
+                    lookupName: inventoryAccount.name,
+                    'Available account IDs': state.accounts.filter(a => a.name.includes('Finished Goods')).map(a => ({ id: a.id, name: a.name }))
+                });
+            }
+            if (!adjustmentAccountInState) {
+                console.error('❌ CRITICAL: Adjustment Account ID not found in state.accounts!', {
+                    lookupId: adjustmentAccount.id,
+                    lookupName: adjustmentAccount.name,
+                    'Available account IDs': state.accounts.filter(a => a.name.includes('Adjustment') || a.name.includes('Write-off')).map(a => ({ id: a.id, name: a.name }))
+                });
+            }
+        }
+        
         await postTransaction(entries);
         
         // Update item stocks in Firestore if this was an IA voucher
@@ -1069,7 +1157,13 @@ export const Accounting: React.FC = () => {
         }
         
         const wasEditing = !!transactionIdToDelete;
-        alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
+        
+        // For IA vouchers, add reminder about Balance Sheet
+        if (vType === 'IA') {
+            alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}\n\n✅ Ledger entries created.\n✅ Item stock and costs updated.\n\n💡 Please refresh the Balance Sheet page to see the changes.`);
+        } else {
+            alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
+        }
         
         // Clear edit state if it was set (should already be cleared, but just in case)
         if (editingTransactionId) {

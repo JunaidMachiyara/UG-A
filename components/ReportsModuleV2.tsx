@@ -34,7 +34,8 @@ import {
     ChevronRight,
     ExternalLink,
     Truck,
-    History
+    History,
+    ChevronUp
 } from 'lucide-react';
 import { CHART_COLORS, EXCHANGE_RATES } from '../constants';
 import { EntitySelector } from './EntitySelector';
@@ -133,11 +134,58 @@ function calculatePeriodActuals(ledger: any[], entityId: string, entityType: Pla
 const BiDashboard: React.FC = () => {
     const { state } = useData();
 
-    // Metrics
-    const totalRevenue = state.accounts.filter(a => a && a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
-    const totalExpenses = state.accounts.filter(a => a && a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
+    // Metrics - Calculate from account balances
+    // For REVENUE accounts: credits increase revenue, debits decrease it
+    // Balance = creditSum - debitSum (should be positive for revenue)
+    const revenueAccounts = state.accounts.filter(a => a && a.type === AccountType.REVENUE);
+    const totalRevenue = revenueAccounts.reduce((sum, a) => {
+        // For revenue accounts, balance should be positive (credits - debits)
+        // But we'll use absolute value to handle any negative balances
+        const balance = a?.balance || 0;
+        // If balance is negative, it means more debits than credits (unusual but possible)
+        // We'll still count it as revenue (absolute value)
+        return sum + Math.abs(balance);
+    }, 0);
+    const expenseAccounts = state.accounts.filter(a => a && a.type === AccountType.EXPENSE);
+    const totalExpenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(a?.balance || 0), 0);
     const netProfit = totalRevenue - totalExpenses;
     const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+    // DIAGNOSTIC: Check revenue account and ledger entries
+    const revenueAccount = state.accounts.find(a => 
+        a.name.includes('Sales Revenue') || 
+        a.name.includes('Revenue') ||
+        a.code === '401' ||
+        a.type === AccountType.REVENUE
+    );
+    
+    // Calculate revenue from ledger entries (for comparison)
+    const revenueLedgerEntries = state.ledger.filter(e => {
+        if (e.credit > 0) {
+            const account = state.accounts.find(a => a.id === e.accountId);
+            return account && account.type === AccountType.REVENUE;
+        }
+        return false;
+    });
+    const revenueFromLedger = revenueLedgerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+    
+    // Check for orphaned revenue entries (accountId doesn't match any account)
+    const orphanedRevenueEntries = state.ledger.filter(e => {
+        if (e.credit > 0 && e.narration?.includes('Revenue') || e.narration?.includes('Sales')) {
+            const account = state.accounts.find(a => a.id === e.accountId);
+            return !account; // Entry exists but account doesn't
+        }
+        return false;
+    });
+    const orphanedRevenueAmount = orphanedRevenueEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+    
+    // Check posted sales invoices
+    const postedInvoices = state.salesInvoices.filter(inv => inv.status === 'Posted');
+    const totalSalesFromInvoices = postedInvoices.reduce((sum, inv) => sum + inv.netTotal, 0);
+    
+    // Check unposted invoices
+    const unpostedInvoices = state.salesInvoices.filter(inv => inv.status !== 'Posted');
+    const totalUnpostedSales = unpostedInvoices.reduce((sum, inv) => sum + inv.netTotal, 0);
 
     // Charts Data
     const salesByCat = useMemo(() => {
@@ -223,6 +271,114 @@ const BiDashboard: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            {/* DIAGNOSTIC SECTION - Revenue Analysis - HIDDEN */}
+            {false && (totalRevenue === 0 || Math.abs(revenueFromLedger - totalRevenue) > 0.01) && (
+                <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6">
+                    <h4 className="font-bold text-yellow-800 mb-4 flex items-center gap-2">
+                        <AlertTriangle size={20} /> Revenue Diagnostic
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <p className="text-yellow-700 font-semibold mb-2">Account Analysis:</p>
+                            <ul className="space-y-1 text-yellow-600">
+                                <li>• Revenue Accounts Found: {revenueAccounts.length}</li>
+                                <li>• Revenue Account Balance: ${totalRevenue.toLocaleString()}</li>
+                                {revenueAccount ? (
+                                    <li className="text-green-600">✓ Revenue Account: {revenueAccount.name} (Code: {revenueAccount.code}, ID: {revenueAccount.id?.substring(0, 20)}...)</li>
+                                ) : (
+                                    <li className="text-red-600">✗ No Revenue Account Found! (Looking for: "Sales Revenue" or Code 401)</li>
+                                )}
+                            </ul>
+                        </div>
+                        <div>
+                            <p className="text-yellow-700 font-semibold mb-2">Ledger Analysis:</p>
+                            <ul className="space-y-1 text-yellow-600">
+                                <li>• Posted Invoices: {postedInvoices.length}</li>
+                                <li>• Unposted Invoices: {unpostedInvoices.length} (${totalUnpostedSales.toLocaleString()})</li>
+                                <li>• Total Sales (Posted): ${totalSalesFromInvoices.toLocaleString()}</li>
+                                <li>• Revenue Ledger Entries: {revenueLedgerEntries.length}</li>
+                                <li>• Revenue from Ledger: ${revenueFromLedger.toLocaleString()}</li>
+                                {orphanedRevenueEntries.length > 0 && (
+                                    <li className="text-red-600 font-bold">⚠️ {orphanedRevenueEntries.length} Orphaned Revenue Entries (${orphanedRevenueAmount.toLocaleString()}) - Account ID mismatch!</li>
+                                )}
+                                {revenueFromLedger > 0 && totalRevenue === 0 && (
+                                    <li className="text-red-600 font-bold">⚠️ MISMATCH: Ledger has ${revenueFromLedger.toLocaleString()} but accounts show $0!</li>
+                                )}
+                                {totalSalesFromInvoices > 0 && revenueFromLedger === 0 && (
+                                    <li className="text-orange-600 font-bold">⚠️ Posted invoices exist but no revenue ledger entries found!</li>
+                                )}
+                            </ul>
+                        </div>
+                    </div>
+                    {!revenueAccount && (
+                        <div className="mt-4 p-3 bg-red-100 border border-red-300 rounded">
+                            <p className="text-red-800 font-semibold">⚠️ ACTION REQUIRED:</p>
+                            <p className="text-red-700 text-sm mt-1">
+                                Create a Revenue account in <strong>Setup &gt; Chart of Accounts</strong>:
+                                <br />• Code: <strong>401</strong>
+                                <br />• Name: <strong>Sales Revenue</strong>
+                                <br />• Type: <strong>REVENUE</strong>
+                            </p>
+                        </div>
+                    )}
+                    {orphanedRevenueEntries.length > 0 && (
+                        <div className="mt-4 p-3 bg-orange-100 border border-orange-300 rounded">
+                            <p className="text-orange-800 font-semibold">⚠️ ORPHANED LEDGER ENTRIES DETECTED:</p>
+                            <p className="text-orange-700 text-sm mt-1">
+                                Found {orphanedRevenueEntries.length} revenue ledger entries with account IDs that don't match any account.
+                                <br />Total Amount: <strong>${orphanedRevenueAmount.toLocaleString()}</strong>
+                                <br />
+                                <br />This likely means sales invoices were posted before the revenue account existed, or the account ID was wrong.
+                                <br />
+                                <br />Sample Account IDs from orphaned entries:
+                                <br />{Array.from(new Set(orphanedRevenueEntries.slice(0, 5).map(e => e.accountId))).map(id => (
+                                    <span key={id} className="font-mono text-xs">• {id}</span>
+                                ))}
+                                <br />
+                                <br />Go to <strong>Admin Module</strong> to fix these entries or re-post the invoices.
+                            </p>
+                        </div>
+                    )}
+                    {revenueAccounts.length > 0 && (
+                        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                            <p className="text-blue-800 font-semibold mb-2">Revenue Accounts Details:</p>
+                            <div className="text-sm text-blue-700 space-y-1">
+                                {revenueAccounts.map(acc => {
+                                    // Calculate balance from ledger for this account
+                                    const accountLedgerEntries = state.ledger.filter(e => e.accountId === acc.id);
+                                    const creditSum = accountLedgerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                    const debitSum = accountLedgerEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                    const calculatedBalance = creditSum - debitSum; // REVENUE: credits - debits
+                                    const storedBalance = acc.balance || 0;
+                                    const hasMismatch = Math.abs(calculatedBalance - storedBalance) > 0.01;
+                                    
+                                    return (
+                                        <div key={acc.id} className={`flex justify-between ${hasMismatch ? 'bg-yellow-100 p-2 rounded' : ''}`}>
+                                            <div>
+                                                <span>{acc.name} (Code: {acc.code})</span>
+                                                {hasMismatch && (
+                                                    <span className="text-red-600 text-xs ml-2">⚠️ MISMATCH!</span>
+                                                )}
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="font-mono">Stored: ${storedBalance.toLocaleString()}</div>
+                                                {hasMismatch && (
+                                                    <div className="font-mono text-green-600 text-xs">Calc: ${calculatedBalance.toLocaleString()}</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <p className="text-xs text-blue-600 mt-2">
+                                💡 If "MISMATCH" appears, the account balance is not synced with ledger entries. 
+                                Use Admin Module &gt; Recalculate All Balances to fix.
+                            </p>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };
@@ -230,22 +386,138 @@ const BiDashboard: React.FC = () => {
 // 2. INVENTORY INTELLIGENCE
 const InventoryIntelligence: React.FC = () => {
     const { state } = useData();
+    const [sortField, setSortField] = useState<string>('totalSold');
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+    const [categoryFilter, setCategoryFilter] = useState<string>('all');
+    const [itemFilter, setItemFilter] = useState<string>('');
+    const [showLowStockPopup, setShowLowStockPopup] = useState<boolean>(false);
+    const [selectedInvoiceNos, setSelectedInvoiceNos] = useState<string[] | null>(null);
 
-    // Derived Metrics (Assuming 'cat-raw' is ID for Raw Material category in constants)
-    const rawItems = state.items.filter(i => i.category === 'cat-raw'); 
-    const fgItems = state.items.filter(i => i.category !== 'cat-raw');
+    // Calculate Raw Material Value from Original Stock (purchases - openings - direct sales)
+    // This matches the Original Stock Report calculation
+    const rawMaterialValue = useMemo(() => {
+        // Group purchases by supplier and original type
+        const stockData: Record<string, Record<string, { weightPurchased: number, weightOpened: number, totalCost: number }>> = {};
 
-    const rawValue = rawItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.avgCost || 0)), 0);
+        // Add purchases
+        state.purchases.forEach(purchase => {
+            const supplierId = purchase.supplierId;
+            if (!supplierId) return;
+
+            if (purchase.items && purchase.items.length > 0) {
+                purchase.items.forEach(item => {
+                    const typeId = item.originalTypeId || 'UNKNOWN';
+                    if (!stockData[supplierId]) stockData[supplierId] = {};
+                    if (!stockData[supplierId][typeId]) {
+                        stockData[supplierId][typeId] = { weightPurchased: 0, weightOpened: 0, totalCost: 0 };
+                    }
+                    stockData[supplierId][typeId].weightPurchased += item.weightPurchased || 0;
+                    stockData[supplierId][typeId].totalCost += item.totalCostUSD || 0;
+                });
+            } else {
+                const typeId = purchase.originalTypeId || 'UNKNOWN';
+                if (!stockData[supplierId]) stockData[supplierId] = {};
+                if (!stockData[supplierId][typeId]) {
+                    stockData[supplierId][typeId] = { weightPurchased: 0, weightOpened: 0, totalCost: 0 };
+                }
+                stockData[supplierId][typeId].weightPurchased += purchase.weightPurchased || 0;
+                stockData[supplierId][typeId].totalCost += purchase.totalLandedCost || 0;
+            }
+        });
+
+        // Subtract openings
+        state.originalOpenings.forEach(opening => {
+            const supplierId = opening.supplierId;
+            if (!supplierId || !stockData[supplierId]) return;
+            const typeId = opening.originalType || 'UNKNOWN';
+            if (stockData[supplierId][typeId]) {
+                stockData[supplierId][typeId].weightOpened += opening.weightOpened || 0;
+            }
+        });
+
+        // Subtract direct sales
+        const directSalesInvoices = state.salesInvoices.filter(inv => 
+            inv.status === 'Posted' && (inv.invoiceNo.startsWith('DS-') || inv.invoiceNo.startsWith('DSINV-'))
+        );
+
+        directSalesInvoices.forEach(inv => {
+            inv.items.forEach(item => {
+                if (item.originalPurchaseId) {
+                    const purchase = state.purchases.find(p => p.id === item.originalPurchaseId);
+                    if (purchase && purchase.supplierId) {
+                        const supplierId = purchase.supplierId;
+                        const typeId = purchase.originalTypeId || (purchase.items?.[0]?.originalTypeId) || 'UNKNOWN';
+                        if (stockData[supplierId] && stockData[supplierId][typeId]) {
+                            stockData[supplierId][typeId].weightOpened += item.totalKg || 0;
+                        }
+                    }
+                }
+            });
+        });
+
+        // Calculate total value: (weightPurchased - weightOpened) * avgCostPerKg
+        let totalValue = 0;
+        Object.values(stockData).forEach(types => {
+            Object.values(types).forEach(data => {
+                const weightInHand = data.weightPurchased - data.weightOpened;
+                if (weightInHand > 0 && data.weightPurchased > 0) {
+                    const avgCostPerKg = data.totalCost / data.weightPurchased;
+                    totalValue += weightInHand * avgCostPerKg;
+                }
+            });
+        });
+
+        return totalValue;
+    }, [state.purchases, state.originalOpenings, state.salesInvoices]);
+
+    // Finished Goods are all other items (not raw materials)
+    const fgItems = useMemo(() => {
+        const rawMaterialItemIds = new Set(
+            state.items.filter(item => {
+                const hasOriginalLink = state.originalOpenings.some(oo => oo.itemId === item.id);
+                const hasPurchaseLink = state.purchases.some(p => 
+                    p.items?.some(pi => pi.originalProductId === item.id) || 
+                    p.originalProductId === item.id
+                );
+                return hasOriginalLink || hasPurchaseLink;
+            }).map(i => i.id)
+        );
+        return state.items.filter(i => !rawMaterialItemIds.has(i.id));
+    }, [state.items, state.originalOpenings, state.purchases]);
+
     const fgValue = fgItems.reduce((acc, i) => acc + ((i?.stockQty || 0) * (i?.avgCost || 0)), 0);
 
-    const lowStockItems = state.items.filter(i => i.stockQty > 0 && i.stockQty < 50);
-    const nonMovingItems = state.items.filter(i => i.stockQty > 0 && !state.salesInvoices.some(inv => inv.items.some(si => si.itemId === i.id)));
+    // Low Stock Alert: Items with stock < 20% of average stock OR < 50 units (whichever is higher)
+    // Calculate average stock per item first
+    const avgStockPerItem = state.items.length > 0 
+        ? state.items.reduce((sum, i) => sum + (i.stockQty || 0), 0) / state.items.length 
+        : 0;
+    const lowStockThreshold = Math.max(50, avgStockPerItem * 0.2);
+    const lowStockItems = state.items.filter(i => 
+        i.stockQty > 0 && i.stockQty < lowStockThreshold
+    );
+
+    // Non-Moving Items: Items with stock > 0 but NO sales in ANY POSTED invoices
+    // Fixed: Check ALL posted invoices, not just last 90 days
+    const nonMovingItems = state.items.filter(i => {
+        if (i.stockQty <= 0) return false;
+        
+        // Check if item has sales in ANY POSTED invoices
+        const hasAnySales = state.salesInvoices
+            .filter(inv => inv.status === 'Posted')
+            .some(inv => inv.items.some(si => si.itemId === i.id));
+        
+        return !hasAnySales;
+    });
 
     // --- Feasibility Logic ---
     const feasibilityData = useMemo(() => {
         return fgItems.map(item => {
-            const margin = (item.salePrice || 0) - item.avgCost;
-            const marginPct = item.avgCost > 0 ? (margin / item.avgCost) * 100 : 0;
+            const avgCost = item.avgCost || 0;
+            // Fix NaN issue: Check if salePrice is NaN, undefined, or null
+            const salePrice = (item.salePrice !== undefined && item.salePrice !== null && !isNaN(item.salePrice)) ? item.salePrice : 0;
+            const margin = salePrice - avgCost;
+            const marginPct = avgCost > 0 ? (margin / avgCost) * 100 : 0;
             
             // Calculate sales frequency from invoices (if headers exist)
             const salesFreq = state.salesInvoices.filter(inv => inv.status === 'Posted' && inv.items.some(i => i.itemId === item.id)).length;
@@ -293,13 +565,16 @@ const InventoryIntelligence: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-blue-600">
                     <p className="text-xs font-bold text-slate-500 uppercase">Raw Material Value</p>
-                    <h3 className="text-2xl font-bold text-slate-800">${(rawValue || 0).toLocaleString()}</h3>
+                    <h3 className="text-2xl font-bold text-slate-800">${(rawMaterialValue || 0).toLocaleString()}</h3>
                 </div>
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-emerald-500">
                     <p className="text-xs font-bold text-slate-500 uppercase">Finished Goods Value</p>
                     <h3 className="text-2xl font-bold text-slate-800">${(fgValue || 0).toLocaleString()}</h3>
                 </div>
-                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-amber-500">
+                <div 
+                    className={`bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-amber-500 ${lowStockItems.length > 0 ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}
+                    onClick={() => lowStockItems.length > 0 && setShowLowStockPopup(true)}
+                >
                     <p className="text-xs font-bold text-slate-500 uppercase">Low Stock Alerts</p>
                     <h3 className="text-2xl font-bold text-slate-800">{lowStockItems.length} <span className="text-sm font-normal text-slate-400">Items</span></h3>
                     <div className="mt-4 flex items-center gap-2">
@@ -330,7 +605,7 @@ const InventoryIntelligence: React.FC = () => {
                                 <tr key={i.id}>
                                     <td className="px-4 py-3 font-medium text-slate-700">{i.name}</td>
                                     <td className="px-4 py-3 text-right">{i.stockQty}</td>
-                                    <td className="px-4 py-3 text-right font-mono">${(i.stockQty * i.avgCost).toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right font-mono">${((i.stockQty || 0) * (i.avgCost || 0)).toLocaleString()}</td>
                                 </tr>
                             ))}
                             {nonMovingItems.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-slate-400">Great! No dead stock found.</td></tr>}
@@ -343,34 +618,65 @@ const InventoryIntelligence: React.FC = () => {
                         <h4 className="font-bold text-blue-800 flex items-center gap-2"><Layers size={18} /> Stock by Category</h4>
                     </div>
                     <div className="p-4">
-                        <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%" minHeight={0}>
-                                <PieChart>
-                                    <Pie
-                                        data={fgItems.reduce((acc: any[], item) => {
-                                            const catName = state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized';
-                                            const existing = acc.find((x: any) => x.name === catName);
-                                            if (existing) existing.value += item.stockQty;
-                                            else acc.push({ name: catName, value: item.stockQty });
-                                            return acc;
-                                        }, [])}
-                                        cx="50%"
-                                        cy="50%"
-                                        innerRadius={60}
-                                        outerRadius={80}
-                                        fill="#8884d8"
-                                        paddingAngle={5}
-                                        dataKey="value"
-                                    >
-                                        {fgItems.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={Object.values(CHART_COLORS)[index % 4]} />
+                        {(() => {
+                            // Calculate category data with value and percentage
+                            const categoryData = fgItems.reduce((acc: any[], item) => {
+                                const catName = state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized';
+                                const stockValue = (item.stockQty || 0) * (item.avgCost || 0);
+                                const existing = acc.find((x: any) => x.name === catName);
+                                if (existing) {
+                                    existing.value += stockValue;
+                                    existing.qty += (item.stockQty || 0);
+                                } else {
+                                    acc.push({ name: catName, value: stockValue, qty: (item.stockQty || 0) });
+                                }
+                                return acc;
+                            }, []);
+                            
+                            const totalValue = categoryData.reduce((sum, cat) => sum + cat.value, 0);
+                            const categoryDataWithPct = categoryData.map(cat => ({
+                                ...cat,
+                                percentage: totalValue > 0 ? (cat.value / totalValue) * 100 : 0
+                            })).sort((a, b) => b.value - a.value);
+                            
+                            return (
+                                <div className="h-80">
+                                    <ResponsiveContainer width="100%" height="100%" minHeight={0}>
+                                        <BarChart data={categoryDataWithPct} layout="vertical">
+                                            <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
+                                            <XAxis type="number" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v/1000}k`} />
+                                            <YAxis dataKey="name" type="category" fontSize={12} tickLine={false} axisLine={false} width={120} />
+                                            <Tooltip 
+                                                cursor={{fill: '#f8fafc'}} 
+                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                formatter={(value: number, name: string) => {
+                                                    if (name === 'value') {
+                                                        return [`$${value.toLocaleString(undefined, {minimumFractionDigits: 2})}`, 'Value'];
+                                                    }
+                                                    if (name === 'percentage') {
+                                                        return [`${value.toFixed(1)}%`, 'Share'];
+                                                    }
+                                                    return [value, name];
+                                                }}
+                                            />
+                                            <Bar dataKey="value" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]}>
+                                                {categoryDataWithPct.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={Object.values(CHART_COLORS)[index % Object.keys(CHART_COLORS).length]} />
+                                                ))}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                    <div className="mt-4 text-xs text-slate-600 space-y-1">
+                                        {categoryDataWithPct.map((cat, idx) => (
+                                            <div key={idx} className="flex justify-between">
+                                                <span>{cat.name}</span>
+                                                <span className="font-mono">${cat.value.toLocaleString(undefined, {minimumFractionDigits: 2})} ({cat.percentage.toFixed(1)}%)</span>
+                                            </div>
                                         ))}
-                                    </Pie>
-                                    <Tooltip />
-                                    <Legend />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                     </div>
                 </div>
             </div>
@@ -383,15 +689,129 @@ const InventoryIntelligence: React.FC = () => {
                         <p className="text-sm text-slate-500">Track inventory changes: Opening Stock → Quantity Sold → Current Stock</p>
                     </div>
                 </div>
+                
+                {/* Filters */}
+                <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-4 items-end">
+                    <div className="flex-1 min-w-[200px]">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Filter by Category</label>
+                        <select
+                            value={categoryFilter}
+                            onChange={(e) => setCategoryFilter(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            <option value="all">All Categories</option>
+                            {state.categories.map(cat => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="flex-1 min-w-[200px]">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Filter by Item</label>
+                        <input
+                            type="text"
+                            value={itemFilter}
+                            onChange={(e) => setItemFilter(e.target.value)}
+                            placeholder="Search by item name or code..."
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                    </div>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => {
+                                setCategoryFilter('all');
+                                setItemFilter('');
+                            }}
+                            className="px-4 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50"
+                        >
+                            Clear Filters
+                        </button>
+                    </div>
+                </div>
+
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left min-w-full">
                         <thead className="bg-white text-slate-500 uppercase font-bold text-xs border-b border-slate-200">
                             <tr>
-                                <th className="px-4 py-4 whitespace-nowrap">Item Code</th>
-                                <th className="px-4 py-4 min-w-[250px]">Item Name</th>
-                                <th className="px-4 py-4 text-right whitespace-nowrap">Opening Stock</th>
-                                <th className="px-4 py-4 text-right whitespace-nowrap">Quantity Sold</th>
-                                <th className="px-4 py-4 text-right whitespace-nowrap">Current Stock</th>
+                                <th 
+                                    className="px-4 py-4 whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                    onClick={() => {
+                                        if (sortField === 'itemCode') {
+                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('itemCode');
+                                            setSortDirection('asc');
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        Item Code
+                                        {sortField === 'itemCode' && (sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                                    </div>
+                                </th>
+                                <th 
+                                    className="px-4 py-4 min-w-[250px] cursor-pointer hover:bg-slate-100 select-none"
+                                    onClick={() => {
+                                        if (sortField === 'itemName') {
+                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('itemName');
+                                            setSortDirection('asc');
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        Item Name
+                                        {sortField === 'itemName' && (sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                                    </div>
+                                </th>
+                                <th 
+                                    className="px-4 py-4 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                    onClick={() => {
+                                        if (sortField === 'openingStock') {
+                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('openingStock');
+                                            setSortDirection('desc');
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-end gap-2">
+                                        Opening Stock
+                                        {sortField === 'openingStock' && (sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                                    </div>
+                                </th>
+                                <th 
+                                    className="px-4 py-4 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                    onClick={() => {
+                                        if (sortField === 'totalSold') {
+                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('totalSold');
+                                            setSortDirection('desc');
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-end gap-2">
+                                        Quantity Sold
+                                        {sortField === 'totalSold' && (sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                                    </div>
+                                </th>
+                                <th 
+                                    className="px-4 py-4 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                    onClick={() => {
+                                        if (sortField === 'currentStock') {
+                                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('currentStock');
+                                            setSortDirection('desc');
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-end gap-2">
+                                        Current Stock
+                                        {sortField === 'currentStock' && (sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+                                    </div>
+                                </th>
                                 <th className="px-4 py-4 text-center whitespace-nowrap">Invoices</th>
                             </tr>
                         </thead>
@@ -420,11 +840,52 @@ const InventoryIntelligence: React.FC = () => {
                                             item,
                                             totalSold,
                                             invoicesWithItem,
-                                            openingStock
+                                            openingStock,
+                                            itemCode: item.code || item.id,
+                                            itemName: item.name,
+                                            currentStock: item.stockQty || 0
                                         };
                                     })
-                                    .filter(data => data.totalSold > 0 || data.item.stockQty > 0)
-                                    .sort((a, b) => b.totalSold - a.totalSold);
+                                    .filter(data => {
+                                        // Apply category filter
+                                        if (categoryFilter !== 'all' && data.item.category !== categoryFilter) {
+                                            return false;
+                                        }
+                                        // Apply item name/code filter
+                                        if (itemFilter && !data.item.name.toLowerCase().includes(itemFilter.toLowerCase()) && 
+                                            !(data.item.code || '').toLowerCase().includes(itemFilter.toLowerCase()) &&
+                                            !data.item.id.toLowerCase().includes(itemFilter.toLowerCase())) {
+                                            return false;
+                                        }
+                                        return data.totalSold > 0 || data.item.stockQty > 0;
+                                    })
+                                    .sort((a, b) => {
+                                        let aVal: any, bVal: any;
+                                        switch (sortField) {
+                                            case 'itemCode':
+                                                aVal = a.itemCode || '';
+                                                bVal = b.itemCode || '';
+                                                return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                                            case 'itemName':
+                                                aVal = a.itemName || '';
+                                                bVal = b.itemName || '';
+                                                return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                                            case 'openingStock':
+                                                aVal = a.openingStock || 0;
+                                                bVal = b.openingStock || 0;
+                                                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+                                            case 'totalSold':
+                                                aVal = a.totalSold || 0;
+                                                bVal = b.totalSold || 0;
+                                                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+                                            case 'currentStock':
+                                                aVal = a.currentStock || 0;
+                                                bVal = b.currentStock || 0;
+                                                return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+                                            default:
+                                                return b.totalSold - a.totalSold;
+                                        }
+                                    });
                                 
                                 if (itemsWithMovements.length === 0) {
                                     return (
@@ -436,10 +897,10 @@ const InventoryIntelligence: React.FC = () => {
                                     );
                                 }
                                 
-                                return itemsWithMovements.map(({ item, totalSold, invoicesWithItem, openingStock }) => (
+                                return itemsWithMovements.map(({ item, totalSold, invoicesWithItem, openingStock, itemCode, itemName, currentStock }) => (
                                     <tr key={item.id} className="hover:bg-slate-50">
-                                        <td className="px-6 py-3 font-mono text-slate-700">{item.id}</td>
-                                        <td className="px-6 py-3 font-medium text-slate-700">{item.name}</td>
+                                        <td className="px-6 py-3 font-mono text-slate-700">{itemCode}</td>
+                                        <td className="px-6 py-3 font-medium text-slate-700">{itemName}</td>
                                         <td className="px-6 py-3 text-right font-mono text-slate-600">
                                             {openingStock.toLocaleString()} <span className="text-xs text-slate-400">units</span>
                                         </td>
@@ -447,17 +908,32 @@ const InventoryIntelligence: React.FC = () => {
                                             -{totalSold.toLocaleString()} <span className="text-xs text-slate-400">units</span>
                                         </td>
                                         <td className="px-6 py-3 text-right font-mono text-emerald-600 font-bold">
-                                            {item.stockQty.toLocaleString()} <span className="text-xs text-slate-400">units</span>
+                                            {currentStock.toLocaleString()} <span className="text-xs text-slate-400">units</span>
                                         </td>
                                         <td className="px-6 py-3 text-center">
                                             <div className="flex flex-col gap-1">
                                                 {invoicesWithItem.slice(0, 3).map(invNo => (
-                                                    <span key={invNo} className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                                                    <span 
+                                                        key={invNo} 
+                                                        className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded cursor-pointer hover:bg-blue-100 transition-colors"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedInvoiceNos([invNo]);
+                                                        }}
+                                                    >
                                                         {invNo}
                                                     </span>
                                                 ))}
                                                 {invoicesWithItem.length > 3 && (
-                                                    <span className="text-xs text-slate-400">+{invoicesWithItem.length - 3} more</span>
+                                                    <span 
+                                                        className="text-xs text-blue-600 cursor-pointer hover:underline"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedInvoiceNos(invoicesWithItem);
+                                                        }}
+                                                    >
+                                                        +{invoicesWithItem.length - 3} more
+                                                    </span>
                                                 )}
                                                 {invoicesWithItem.length === 0 && (
                                                     <span className="text-xs text-slate-400">-</span>
@@ -511,10 +987,10 @@ const InventoryIntelligence: React.FC = () => {
                                             {item.status}
                                         </span>
                                     </td>
-                                    <td className="px-6 py-3 text-right font-mono">${item.avgCost.toFixed(2)}</td>
-                                    <td className="px-6 py-3 text-right font-mono">${item.salePrice?.toFixed(2) || '-'}</td>
-                                    <td className={`px-6 py-3 text-right font-mono font-bold ${item.margin >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                        {item.margin.toFixed(2)} ({item.marginPct.toFixed(0)}%)
+                                    <td className="px-6 py-3 text-right font-mono">${((item.avgCost || 0)).toFixed(2)}</td>
+                                    <td className="px-6 py-3 text-right font-mono">${((item.salePrice !== undefined && item.salePrice !== null && !isNaN(item.salePrice)) ? item.salePrice : 0).toFixed(2)}</td>
+                                    <td className={`px-6 py-3 text-right font-mono font-bold ${(item.margin || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                        ${((item.margin || 0)).toFixed(2)} ({((item.marginPct || 0)).toFixed(0)}%)
                                     </td>
                                     <td className="px-6 py-3 text-center">{item.salesFreq}</td>
                                     <td className="px-6 py-3 text-center text-xs">
@@ -526,6 +1002,149 @@ const InventoryIntelligence: React.FC = () => {
                     </table>
                 </div>
             </div>
+
+            {/* Low Stock Items Popup */}
+            {showLowStockPopup && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowLowStockPopup(false)}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-amber-500 text-white px-6 py-4 flex justify-between items-center">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <AlertTriangle size={20} /> Low Stock Items ({lowStockItems.length})
+                            </h3>
+                            <button onClick={() => setShowLowStockPopup(false)} className="text-white hover:bg-amber-600 rounded p-1 transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+                            <p className="text-sm text-slate-600 mb-4">
+                                Items with stock below threshold (Threshold: {lowStockThreshold.toFixed(0)} units or 20% of average stock)
+                            </p>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-slate-50 text-slate-600 uppercase text-xs">
+                                        <tr>
+                                            <th className="px-4 py-3 text-left">Item Code</th>
+                                            <th className="px-4 py-3 text-left">Item Name</th>
+                                            <th className="px-4 py-3 text-right">Current Stock</th>
+                                            <th className="px-4 py-3 text-right">Avg Cost</th>
+                                            <th className="px-4 py-3 text-right">Value ($)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {lowStockItems.map(item => (
+                                            <tr key={item.id} className="hover:bg-slate-50">
+                                                <td className="px-4 py-3 font-mono text-slate-700">{item.code || item.id}</td>
+                                                <td className="px-4 py-3 font-medium text-slate-700">{item.name}</td>
+                                                <td className="px-4 py-3 text-right font-mono text-red-600">{item.stockQty || 0}</td>
+                                                <td className="px-4 py-3 text-right font-mono text-slate-600">${(item.avgCost || 0).toFixed(2)}</td>
+                                                <td className="px-4 py-3 text-right font-mono text-slate-800">
+                                                    ${((item.stockQty || 0) * (item.avgCost || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Invoice Details Popup */}
+            {selectedInvoiceNos && selectedInvoiceNos.length > 0 && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setSelectedInvoiceNos(null)}>
+                    <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-blue-600 text-white px-6 py-4 flex justify-between items-center">
+                            <h3 className="text-lg font-bold">Invoice Details</h3>
+                            <button onClick={() => setSelectedInvoiceNos(null)} className="text-white hover:bg-blue-700 rounded p-1 transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)] space-y-6">
+                            {selectedInvoiceNos.map(invNo => {
+                                const invoice = state.salesInvoices.find(inv => inv.invoiceNo === invNo);
+                                if (!invoice) return null;
+                                
+                                const customer = state.partners.find(p => p.id === invoice.customerId);
+                                
+                                return (
+                                    <div key={invNo} className="border border-slate-200 rounded-lg p-4">
+                                        <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-slate-200">
+                                            <div>
+                                                <p className="text-xs text-slate-500 font-semibold uppercase">Invoice Number</p>
+                                                <p className="text-lg font-bold text-slate-800">{invoice.invoiceNo}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-slate-500 font-semibold uppercase">Date</p>
+                                                <p className="text-lg font-bold text-slate-800">{invoice.date}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-slate-500 font-semibold uppercase">Customer</p>
+                                                <p className="text-lg font-bold text-slate-800">{customer?.name || 'Unknown'}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-slate-500 font-semibold uppercase">Status</p>
+                                                <p className={`text-lg font-bold ${invoice.status === 'Posted' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                                    {invoice.status}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="mb-4">
+                                            <p className="text-xs text-slate-500 font-semibold uppercase mb-2">Items</p>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-slate-50 text-slate-600 uppercase text-xs">
+                                                        <tr>
+                                                            <th className="px-3 py-2 text-left">Item</th>
+                                                            <th className="px-3 py-2 text-right">Qty</th>
+                                                            <th className="px-3 py-2 text-right">Rate</th>
+                                                            <th className="px-3 py-2 text-right">Total</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {invoice.items.map((item, idx) => (
+                                                            <tr key={idx}>
+                                                                <td className="px-3 py-2 font-medium text-slate-700">{item.itemName}</td>
+                                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{item.qty}</td>
+                                                                <td className="px-3 py-2 text-right font-mono text-slate-600">${item.rate.toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-right font-mono text-slate-800 font-semibold">${item.total.toFixed(2)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex justify-end gap-4 pt-4 border-t border-slate-200">
+                                            <div className="text-right">
+                                                <p className="text-xs text-slate-500 mb-1">Gross Total</p>
+                                                <p className="text-lg font-bold text-slate-800">${invoice.grossTotal.toFixed(2)}</p>
+                                            </div>
+                                            {invoice.discount > 0 && (
+                                                <div className="text-right">
+                                                    <p className="text-xs text-slate-500 mb-1">Discount</p>
+                                                    <p className="text-lg font-bold text-red-600">-${invoice.discount.toFixed(2)}</p>
+                                                </div>
+                                            )}
+                                            {invoice.surcharge > 0 && (
+                                                <div className="text-right">
+                                                    <p className="text-xs text-slate-500 mb-1">Surcharge</p>
+                                                    <p className="text-lg font-bold text-blue-600">+${invoice.surcharge.toFixed(2)}</p>
+                                                </div>
+                                            )}
+                                            <div className="text-right">
+                                                <p className="text-xs text-slate-500 mb-1">Net Total</p>
+                                                <p className="text-xl font-bold text-emerald-600">${invoice.netTotal.toFixed(2)}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -1711,6 +2330,8 @@ const ProductionYield: React.FC = () => {
     const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
     const [sortColumn, setSortColumn] = useState<'name' | 'weight' | 'value' | null>(null);
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+    const [inputSortColumn, setInputSortColumn] = useState<'name' | 'weight' | 'value' | null>(null);
+    const [inputSortDirection, setInputSortDirection] = useState<'asc' | 'desc'>('desc');
 
     const yieldData = useMemo(() => {
         const openings = state.originalOpenings.filter(o => o.date >= startDate && o.date <= endDate);
@@ -1718,6 +2339,32 @@ const ProductionYield: React.FC = () => {
         const totalInputCost = openings.reduce((sum, i) => sum + i.totalValue, 0);
         const totalWorkingCost = totalInputWeight * workingCostRate;
         const grandTotalCost = totalInputCost + totalWorkingCost;
+
+        // Group inputs by Original Type
+        const inputGrouped: Record<string, { name: string, weight: number, value: number, items: any[] }> = {};
+        openings.forEach(opening => {
+            const originalTypeName = state.originalTypes.find(ot => ot.id === opening.originalType)?.name || opening.originalType || 'Unknown Type';
+            
+            if (!inputGrouped[originalTypeName]) {
+                inputGrouped[originalTypeName] = { name: originalTypeName, weight: 0, value: 0, items: [] };
+            }
+            
+            inputGrouped[originalTypeName].weight += opening.weightOpened || 0;
+            inputGrouped[originalTypeName].value += opening.totalValue || 0;
+            inputGrouped[originalTypeName].items.push({
+                date: opening.date,
+                weight: opening.weightOpened || 0,
+                value: opening.totalValue || 0,
+                costPerKg: opening.costPerKg || 0
+            });
+        });
+
+        let inputs = Object.values(inputGrouped);
+        // Add percentage share to each input
+        inputs = inputs.map(i => ({
+            ...i,
+            percentage: totalInputCost > 0 ? (i.value / totalInputCost) * 100 : 0
+        }));
 
         const production = state.productions.filter(p => p.date >= startDate && p.date <= endDate && p.qtyProduced > 0 && !p.isRebaling);
         const grouped: Record<string, { name: string, weight: number, value: number, packages: number, items: any[] }> = {};
@@ -1730,7 +2377,20 @@ const ProductionYield: React.FC = () => {
                 : (state.sections.find(s => s.id === item.section)?.name || item.section || 'No Section');
             
             if (!grouped[groupKey]) grouped[groupKey] = { name: groupKey, weight: 0, value: 0, packages: 0, items: [] };
-            const unitValue = priceBasis === 'COST' ? item.avgCost : (item.salePrice || 0);
+            // Fix NaN issue: Check if salePrice is NaN, undefined, or null, and fallback to avgCost or 0
+            let unitValue: number;
+            if (priceBasis === 'COST') {
+                unitValue = item.avgCost || 0;
+            } else {
+                // For SALES basis: Check if salePrice is valid (not NaN, undefined, or null)
+                const salePrice = item.salePrice;
+                if (salePrice === undefined || salePrice === null || isNaN(salePrice)) {
+                    // Fallback to avgCost if salePrice is invalid
+                    unitValue = item.avgCost || 0;
+                } else {
+                    unitValue = salePrice;
+                }
+            }
             grouped[groupKey].weight += p.weightProduced;
             grouped[groupKey].value += p.qtyProduced * unitValue;
             // Count packages (Bales/Box/Bags) - only count if packingType is BALE, BOX, or BAG
@@ -1751,10 +2411,10 @@ const ProductionYield: React.FC = () => {
         }));
         
         return {
-            inputs: { weight: totalInputWeight, cost: totalInputCost, working: totalWorkingCost, total: grandTotalCost },
+            inputs: { weight: totalInputWeight, cost: totalInputCost, working: totalWorkingCost, total: grandTotalCost, grouped: inputs },
             outputs, totalOutputWeight, totalOutputValue, loss: totalInputWeight - totalOutputWeight, profit: totalOutputValue - grandTotalCost
         };
-    }, [state.originalOpenings, state.productions, startDate, endDate, priceBasis, workingCostRate, groupBy, state.items, state.categories, state.sections]);
+    }, [state.originalOpenings, state.productions, startDate, endDate, priceBasis, workingCostRate, groupBy, state.items, state.categories, state.sections, state.originalTypes]);
 
     const dailyData = useMemo(() => {
         const prod = state.productions.filter(p => p.date === dailyDate && p.qtyProduced > 0 && !p.isRebaling);
@@ -1804,12 +2464,43 @@ const ProductionYield: React.FC = () => {
         return sorted;
     }, [yieldData.outputs, sortColumn, sortDirection]);
 
+    // Sort inputs based on inputSortColumn and inputSortDirection
+    const sortedInputs = useMemo(() => {
+        if (!inputSortColumn) return yieldData.inputs.grouped || [];
+        const sorted = [...(yieldData.inputs.grouped || [])].sort((a, b) => {
+            let aVal: any, bVal: any;
+            if (inputSortColumn === 'name') {
+                aVal = a.name.toLowerCase();
+                bVal = b.name.toLowerCase();
+            } else if (inputSortColumn === 'weight') {
+                aVal = a.weight;
+                bVal = b.weight;
+            } else if (inputSortColumn === 'value') {
+                aVal = a.value;
+                bVal = b.value;
+            }
+            if (aVal < bVal) return inputSortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return inputSortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+        return sorted;
+    }, [yieldData.inputs.grouped, inputSortColumn, inputSortDirection]);
+
     const handleSort = (column: 'name' | 'weight' | 'value') => {
         if (sortColumn === column) {
             setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
         } else {
             setSortColumn(column);
             setSortDirection('desc');
+        }
+    };
+
+    const handleInputSort = (column: 'name' | 'weight' | 'value') => {
+        if (inputSortColumn === column) {
+            setInputSortDirection(inputSortDirection === 'asc' ? 'desc' : 'asc');
+        } else {
+            setInputSortColumn(column);
+            setInputSortDirection('desc');
         }
     };
 
@@ -1849,11 +2540,82 @@ const ProductionYield: React.FC = () => {
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 overflow-hidden">
                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-                            <div className="p-4 bg-red-50/50 border-b border-red-100 flex justify-between items-center"><h3 className="font-bold text-red-800">Total Inputs (Cost)</h3><span className="font-mono font-bold text-red-700">${yieldData.inputs.total.toLocaleString()}</span></div>
-                            <div className="p-6 space-y-4">
-                                <div className="flex justify-between items-center"><span className="text-slate-600">Material Weight</span><span className="font-mono font-bold">{yieldData.inputs.weight.toLocaleString()} Kg</span></div>
-                                <div className="flex justify-between items-center text-sm"><span className="text-slate-500">Raw Material Cost</span><span className="font-mono">${yieldData.inputs.cost.toLocaleString()}</span></div>
-                                <div className="flex justify-between items-center text-sm"><span className="text-slate-500">Working Cost</span><span className="font-mono">${yieldData.inputs.working.toLocaleString()}</span></div>
+                            <div className="p-4 bg-red-50/50 border-b border-red-100 flex justify-between items-center">
+                                <h3 className="font-bold text-red-800">Total Inputs (Cost)</h3>
+                                <span className="font-mono font-bold text-red-700">${yieldData.inputs.total.toLocaleString()}</span>
+                            </div>
+                            <div className="flex-1 overflow-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase sticky top-0">
+                                        <tr>
+                                            <th 
+                                                className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleInputSort('name')}
+                                            >
+                                                <div className="flex items-center gap-1">
+                                                    Original Type
+                                                    {inputSortColumn === 'name' && (
+                                                        inputSortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                            <th 
+                                                className="px-4 py-2 text-right cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleInputSort('weight')}
+                                            >
+                                                <div className="flex items-center justify-end gap-1">
+                                                    Kg
+                                                    {inputSortColumn === 'weight' && (
+                                                        inputSortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                            <th className="px-4 py-2 text-right">% Share</th>
+                                            <th 
+                                                className="px-4 py-2 text-right cursor-pointer hover:bg-slate-100 select-none"
+                                                onClick={() => handleInputSort('value')}
+                                            >
+                                                <div className="flex items-center justify-end gap-1">
+                                                    Value
+                                                    {inputSortColumn === 'value' && (
+                                                        inputSortDirection === 'asc' ? '↑' : '↓'
+                                                    )}
+                                                </div>
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {sortedInputs.map((i, idx) => (
+                                            <tr key={idx} className="hover:bg-slate-50">
+                                                <td className="px-4 py-2 font-medium text-slate-700">{i.name}</td>
+                                                <td className="px-4 py-2 text-right">{i.weight.toLocaleString()}</td>
+                                                <td className="px-4 py-2 text-right font-mono text-slate-600">{i.percentage.toFixed(2)}%</td>
+                                                <td className="px-4 py-2 text-right font-mono">${i.value.toLocaleString()}</td>
+                                            </tr>
+                                        ))}
+                                        {sortedInputs.length === 0 && (
+                                            <tr>
+                                                <td colSpan={4} className="p-4 text-center text-slate-400">
+                                                    No original openings found for the selected date range.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs space-y-2">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-600">Total Material Weight</span>
+                                    <span className="font-mono font-bold">{yieldData.inputs.weight.toLocaleString()} Kg</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-500">Raw Material Cost</span>
+                                    <span className="font-mono">${yieldData.inputs.cost.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-500">Working Cost ({workingCostRate}/kg)</span>
+                                    <span className="font-mono">${yieldData.inputs.working.toLocaleString()}</span>
+                                </div>
                             </div>
                         </div>
                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">

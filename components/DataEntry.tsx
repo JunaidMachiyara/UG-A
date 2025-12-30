@@ -1787,14 +1787,44 @@ export const DataEntry: React.FC = () => {
         setIsProcessingProduction(true);
         try {
             console.log('✅ Calling addProduction with:', stagedProds);
+            // Clear any previous skipped items
+            delete (window as any).__skippedProductionItems;
+            
             await addProduction(stagedProds);
             setStagedProds([]);
             setTempSerialTracker({});
             setShowProdSummary(false);
-            alert("Production Saved Successfully");
-        } catch (error) {
+            
+            // Check for skipped items and show message
+            const skippedItems = (window as any).__skippedProductionItems;
+            if (skippedItems && skippedItems.length > 0) {
+                const skippedList = skippedItems.slice(0, 10).map((s: any) => 
+                    `  • ${s.itemName} (Qty: ${s.qty}) - ${s.reason}`
+                ).join('\n');
+                const moreCount = skippedItems.length > 10 ? `\n  ... and ${skippedItems.length - 10} more items` : '';
+                
+                alert(`✅ Production Saved Successfully!\n\n⚠️ However, ${skippedItems.length} item(s) were skipped due to invalid prices:\n\n${skippedList}${moreCount}\n\nPlease update the production prices (avgCost) in Setup > Items for these items and re-upload them.`);
+                
+                // Clear the skipped items from window
+                delete (window as any).__skippedProductionItems;
+            } else {
+                alert("✅ Production Saved Successfully!");
+            }
+        } catch (error: any) {
             console.error('❌ Error saving production:', error);
-            alert("Error saving production. Please try again.");
+            
+            // Check if there were skipped items even on error
+            const skippedItems = (window as any).__skippedProductionItems;
+            if (skippedItems && skippedItems.length > 0) {
+                const skippedList = skippedItems.slice(0, 5).map((s: any) => 
+                    `  • ${s.itemName} - ${s.reason}`
+                ).join('\n');
+                alert(`❌ Error saving production: ${error.message || 'Unknown error'}\n\n⚠️ ${skippedItems.length} item(s) were also skipped due to invalid prices:\n${skippedList}${skippedItems.length > 5 ? `\n  ... and ${skippedItems.length - 5} more` : ''}\n\nPlease check the browser console (F12) for details.`);
+                delete (window as any).__skippedProductionItems;
+            } else {
+                alert(`❌ Error saving production: ${error.message || 'Unknown error'}\n\nPlease check the browser console (F12) for details.`);
+            }
+            // Don't clear stagedProds on error so user can retry
         } finally {
             setIsProcessingProduction(false);
         }

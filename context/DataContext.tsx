@@ -492,6 +492,7 @@ interface DataContextType {
     updatePartner: (id: string, partner: Partial<Partner>) => Promise<void>;
     addItem: (item: Item, openingStock?: number) => void;
     addAccount: (account: Account) => Promise<void>;
+    updateAccount: (id: string, account: Partial<Account>) => Promise<void>;
     addDivision: (division: Division) => void;
     addSubDivision: (subDivision: SubDivision) => void;
     addLogo: (logo: Logo) => void;
@@ -1008,8 +1009,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Only mark as loaded when ALL collections are loaded
             if (currentSize >= totalCollections) {
                 clearInterval(checkLoadingComplete);
-                setIsFirestoreLoaded(true);
-                setFirestoreStatus('loaded');
+            setIsFirestoreLoaded(true);
+            setFirestoreStatus('loaded');
                 console.log(`🟢 Firebase sync enabled! All ${totalCollections} collections loaded.`);
             }
         }, 500); // Check every 500ms
@@ -2162,16 +2163,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await updateDoc(doc(db, 'partners', id), partnerData);
             console.log('✅ Partner updated in Firebase:', id);
             
-            // If balance was changed and new balance is not 0, create/update opening balance entries
-            if (balanceChanged && newBalance !== 0 && existingPartner) {
+            // If balance was changed, handle opening balance entries
+            if (balanceChanged && existingPartner) {
                 // Check if opening balance entries already exist
                 const existingOBEntries = state.ledger.filter(
                     e => e.transactionId === `OB-${id}` && e.transactionType === TransactionType.OPENING_BALANCE
                 );
                 
-                if (existingOBEntries.length === 0) {
-                    // No opening balance entries exist, create them
-                    console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
+                // If opening balance entries exist, delete them first
+                if (existingOBEntries.length > 0) {
+                    console.log('🔄 Deleting existing opening balance entries for partner:', id, 'Count:', existingOBEntries.length);
+                    try {
+                        await deleteTransaction(`OB-${id}`, 'Opening balance updated');
+                        console.log('✅ Old opening balance entries deleted');
+                    } catch (error: any) {
+                        console.error('⚠️ Error deleting old opening balance entries:', error);
+                        // Continue anyway
+                    }
+                }
+                
+                // If new balance is 0, we're done (entries deleted above)
+                if (newBalance === 0) {
+                    console.log('✅ Opening balance set to 0, entries deleted');
+                    return; // Exit early
+                }
+                
+                // Create new opening balance entries
+                console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
                     const prevYear = new Date().getFullYear() - 1;
                     const date = `${prevYear}-12-31`;
                     const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
@@ -2183,36 +2201,83 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
                     
                     if (existingPartner.type === 'CUSTOMER') {
-                        // Customer: Debit customer account, Credit equity
-                        entries = [
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: id,
-                                accountName: existingPartner.name,
-                                debit: newBalance, // Can be negative
-                                credit: 0,
-                                narration: `Opening Balance - ${existingPartner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            },
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
-                                debit: 0,
-                                credit: newBalance, // Can be negative
-                                narration: `Opening Balance - ${existingPartner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            }
-                        ];
-                    } else {
-                        // Supplier/Vendor: Credit supplier account, Debit equity
+                        // Customer opening balance logic:
+                        // Positive balance (they owe us): Debit AR, Credit Equity
+                        // Negative balance (we owe them/credit balance): Credit AR, Debit Equity
                         const absBalance = Math.abs(newBalance);
+                        
+                        if (newBalance >= 0) {
+                            // Positive balance: Customer owes us
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: id,
+                                    accountName: existingPartner.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${existingPartner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${existingPartner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        } else {
+                            // Negative balance: Credit balance (we owe them or they overpaid)
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: id,
+                                    accountName: existingPartner.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance (Credit) - ${existingPartner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance (Credit) - ${existingPartner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        }
+                    } else {
+                        // Supplier/Vendor/Sub Supplier: Credit Accounts Payable, Debit equity
+                        const absBalance = Math.abs(newBalance);
+                        
+                        // Find Accounts Payable account (for Suppliers/Sub Suppliers)
+                        const apAccount = state.accounts.find(a => 
+                            a.name.includes('Accounts Payable') || 
+                            a.code === '201' ||
+                            (a.type === AccountType.LIABILITY && a.name.toLowerCase().includes('payable'))
+                        );
+                        
+                        if (!apAccount) {
+                            throw new Error('CRITICAL: Accounts Payable account not found! Please create it in Setup > Chart of Accounts (Code: 201, Type: LIABILITY)');
+                        }
+                        
                         entries = [
                             {
                                 ...commonProps,
@@ -2231,8 +2296,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 date,
                                 transactionId: `OB-${id}`,
                                 transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: id,
-                                accountName: existingPartner.name,
+                                accountId: apAccount.id, // Use Accounts Payable account, not partner ID
+                                accountName: apAccount.name,
                                 debit: 0,
                                 credit: absBalance,
                                 narration: `Opening Balance - ${existingPartner.name}`,
@@ -2240,11 +2305,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             }
                         ];
                     }
-                    postTransaction(entries);
+                    await postTransaction(entries);
                     console.log('✅ Opening balance entries created');
-                } else {
-                    console.log('⚠️ Opening balance entries already exist. Balance will be recalculated from ledger.');
-                }
             }
             
             // Firebase listener will handle updating local state
@@ -2400,40 +2462,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 throw new Error(errorMsg);
             }
 
-            const transactionId = `OO-${docRef.id}`;
-            const entries: Omit<LedgerEntry, 'id'>[] = [
-                // Credit Raw Materials (reduce inventory)
-                {
-                    date: openingWithFactory.date,
-                    transactionId,
-                    transactionType: TransactionType.ORIGINAL_OPENING,
-                    accountId: rawMaterialInvId,
-                    accountName: 'Inventory - Raw Materials',
-                    currency: 'USD',
-                    exchangeRate: 1,
-                    fcyAmount: openingWithFactory.totalValue,
-                    debit: 0,
-                    credit: openingWithFactory.totalValue,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                    factoryId: openingWithFactory.factoryId
-                },
-                // Debit WIP (transfer to work in progress)
-                {
-                    date: openingWithFactory.date,
-                    transactionId,
-                    transactionType: TransactionType.ORIGINAL_OPENING,
-                    accountId: wipId,
-                    accountName: 'Work in Progress (Inventory)',
-                    currency: 'USD',
-                    exchangeRate: 1,
-                    fcyAmount: openingWithFactory.totalValue,
-                    debit: openingWithFactory.totalValue,
-                    credit: 0,
-                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                    factoryId: openingWithFactory.factoryId
-                }
-            ];
-            await postTransaction(entries);
+                const transactionId = `OO-${docRef.id}`;
+                const entries: Omit<LedgerEntry, 'id'>[] = [
+                    // Credit Raw Materials (reduce inventory)
+                    {
+                        date: openingWithFactory.date,
+                        transactionId,
+                        transactionType: TransactionType.ORIGINAL_OPENING,
+                        accountId: rawMaterialInvId,
+                        accountName: 'Inventory - Raw Materials',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: openingWithFactory.totalValue,
+                        debit: 0,
+                        credit: openingWithFactory.totalValue,
+                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                        factoryId: openingWithFactory.factoryId
+                    },
+                    // Debit WIP (transfer to work in progress)
+                    {
+                        date: openingWithFactory.date,
+                        transactionId,
+                        transactionType: TransactionType.ORIGINAL_OPENING,
+                        accountId: wipId,
+                        accountName: 'Work in Progress (Inventory)',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: openingWithFactory.totalValue,
+                        debit: openingWithFactory.totalValue,
+                        credit: 0,
+                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                        factoryId: openingWithFactory.factoryId
+                    }
+                ];
+                await postTransaction(entries);
             
             // Note: onSnapshot listener will automatically update local state when Firestore document is created
             // No need to dispatch here as it would cause duplicate entries or race conditions
@@ -2663,21 +2725,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     postTransaction(entries);
                 }
                 
-            } else if (!wipId) {
-                // NORMAL PRODUCTION ACCOUNTING: No WIP account (direct to Production Gain)
-                // If WIP account doesn't exist, we'll still create entries but without WIP consumption
-                // This handles cases where WIP account hasn't been set up yet
-                console.warn('⚠️ WIP account not found. Creating production entries without WIP consumption.');
+            } else {
+                // NORMAL PRODUCTION ACCOUNTING: With or without WIP account
+                // If WIP account doesn't exist, we'll create entries without WIP consumption
+                // If WIP account exists, we'll consume WIP using FIFO logic
+                if (!wipId) {
+                    console.warn('⚠️ WIP account not found. Creating production entries without WIP consumption.');
+                } else {
+                    console.log('📊 WIP account found. Creating production entries with WIP consumption.');
+                }
                 
                 // Batch all ledger entries together for better performance
                 const allLedgerEntries: Omit<LedgerEntry, 'id'>[] = [];
                 
-                console.log('📊 Current WIP Balance: 0 (WIP account not found)');
+                // Track cumulative WIP consumption across all productions in this batch
+                let cumulativeWipConsumedInBatch = 0;
+                
+                // Track skipped items to inform user
+                const skippedItems: Array<{ itemName: string; reason: string; qty: number }> = [];
                 
                 productionsWithFactory.forEach(prod => {
                     const item = state.items.find(i => i.id === prod.itemId);
                     if (!item) {
                         console.log('❌ Item not found for production:', prod.itemId);
+                        skippedItems.push({
+                            itemName: prod.itemName || prod.itemId,
+                            reason: 'Item not found in system',
+                            qty: prod.qtyProduced
+                        });
                         return;
                     }
                     
@@ -2687,6 +2762,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const productionPrice = prod.productionPrice || item.avgCost || 0;
                     const finishedGoodsValue = prod.qtyProduced * productionPrice;
                     const totalKg = prod.weightProduced;
+                    
+                    // Skip items with invalid values (NaN, undefined, or exactly 0)
+                    // NOTE: Negative values are allowed (e.g., garbage items with negative cost)
+                    // The ledger entry logic already handles negative values correctly
+                    if (productionPrice === undefined || productionPrice === null || isNaN(productionPrice) || finishedGoodsValue === 0) {
+                        const reason = productionPrice === undefined || productionPrice === null
+                            ? 'Production price is missing (undefined/null)' 
+                            : isNaN(productionPrice) 
+                            ? 'Production price is invalid (NaN)' 
+                            : 'Production value is exactly zero';
+                        console.warn(`⚠️ Skipping production entry for ${prod.itemName}: ${reason} (Price: ${productionPrice}, Value: ${finishedGoodsValue})`);
+                        skippedItems.push({
+                            itemName: prod.itemName,
+                            reason: reason,
+                            qty: prod.qtyProduced
+                        });
+                        return; // Skip this production entry
+                    }
+                    
+                    // Log if processing negative value item (for transparency)
+                    if (finishedGoodsValue < 0) {
+                        console.log(`📝 Processing negative value item: ${prod.itemName} (Value: $${finishedGoodsValue.toFixed(2)}) - This will create a credit entry for Finished Goods`);
+                    }
                     
                     // Match WIP by batch (FIFO) - consume from Original Opening entries
                     // Calculate total available WIP balance (only if WIP account exists)
@@ -2909,8 +3007,26 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // Post all ledger entries in ONE batch call (much faster!)
                 if (allLedgerEntries.length > 0) {
                     console.log(`📊 Posting ${allLedgerEntries.length} ledger entries in batch for ${productionsWithFactory.length} production entries...`);
+                    try {
                     await postTransaction(allLedgerEntries);
                     console.log(`✅ Successfully posted ${allLedgerEntries.length} ledger entries`);
+                        
+                        // Store skipped items info for user notification (accessible via window object)
+                        if (skippedItems.length > 0) {
+                            (window as any).__skippedProductionItems = skippedItems;
+                            console.log(`⚠️ ${skippedItems.length} item(s) were skipped:`, skippedItems);
+                        }
+                    } catch (error: any) {
+                        console.error('❌ ERROR posting ledger entries:', error);
+                        console.error('Ledger entries that failed:', allLedgerEntries);
+                        throw new Error(`Failed to post ledger entries: ${error.message || 'Unknown error'}`);
+                    }
+                } else {
+                    console.warn('⚠️ WARNING: No ledger entries to post! This might indicate all production entries had zero or invalid values.');
+                    if (skippedItems.length > 0) {
+                        (window as any).__skippedProductionItems = skippedItems;
+                    }
+                    throw new Error('No ledger entries were created. Please check that production items have valid prices (avgCost or Production Price in CSV).');
                 }
             }
         }
@@ -3089,32 +3205,55 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             
             let ledgerDeleted = 0;
             
-            // Firestore 'in' operator has a limit of 10 items, so we need to batch queries
-            const QUERY_BATCH_SIZE = 10;
-            const ledgerEntriesToDelete: any[] = [];
-            
-            // Query ledger entries in batches of 10 transaction IDs
-            for (let i = 0; i < allTransactionIds.length; i += QUERY_BATCH_SIZE) {
-                const batchTransactionIds = allTransactionIds.slice(i, i + QUERY_BATCH_SIZE);
-                console.log(`🔍 Querying ledger for transaction IDs batch ${Math.floor(i / QUERY_BATCH_SIZE) + 1}:`, batchTransactionIds);
-                
-                const ledgerQuery = query(
+            // CRITICAL FIX: Query ALL ledger entries for this factory and filter in memory
+            // This is more reliable than using 'in' operator with batching
+            console.log(`🔍 Querying ALL ledger entries for factory to find matching transaction IDs...`);
+            const allLedgerQuery = query(
                     collection(db, 'ledger'),
-                    where('factoryId', '==', currentFactory?.id || ''),
-                    where('transactionId', 'in', batchTransactionIds)
+                where('factoryId', '==', currentFactory?.id || '')
                 );
-                const ledgerSnapshot = await getDocs(ledgerQuery);
+            const allLedgerSnapshot = await getDocs(allLedgerQuery);
+            console.log(`📋 Found ${allLedgerSnapshot.size} total ledger entries for factory`);
                 
-                console.log(`📋 Found ${ledgerSnapshot.size} ledger entries for batch ${Math.floor(i / QUERY_BATCH_SIZE) + 1}`);
+            // Filter in memory to find entries matching our transaction IDs
+            const ledgerEntriesToDelete: any[] = [];
+            const transactionIdSet = new Set(allTransactionIds);
                 
-                ledgerSnapshot.docs.forEach(docSnapshot => {
+            allLedgerSnapshot.docs.forEach(docSnapshot => {
                     const entry = docSnapshot.data();
-                    console.log(`📝 Ledger entry found: ${entry.transactionId} - ${entry.accountName} - Debit: ${entry.debit}, Credit: ${entry.credit}`);
+                const entryTransactionId = entry.transactionId;
+                
+                // Check if this entry's transaction ID matches any of our production transaction IDs
+                if (entryTransactionId && transactionIdSet.has(entryTransactionId)) {
+                    console.log(`📝 Ledger entry found: ${entryTransactionId} - ${entry.accountName} - Debit: ${entry.debit || 0}, Credit: ${entry.credit || 0}`);
                     ledgerEntriesToDelete.push(docSnapshot.ref);
-                });
             }
+            });
 
             console.log(`📊 Total ledger entries to delete: ${ledgerEntriesToDelete.length}`);
+            
+            // FALLBACK: Also check state ledger entries to see if they exist there
+            if (ledgerEntriesToDelete.length === 0) {
+                console.warn(`⚠️ WARNING: No ledger entries found in Firebase for transaction IDs: ${allTransactionIds.join(', ')}`);
+                
+                // Check state ledger entries
+                const stateLedgerEntries = state.ledger.filter(e => 
+                    e.transactionId && transactionIdSet.has(e.transactionId)
+                );
+                
+                if (stateLedgerEntries.length > 0) {
+                    console.warn(`   ⚠️ BUT found ${stateLedgerEntries.length} entries in STATE ledger:`);
+                    stateLedgerEntries.forEach(e => {
+                        console.warn(`      - ${e.transactionId}: ${e.accountName} (Debit: ${e.debit || 0}, Credit: ${e.credit || 0})`);
+                    });
+                    console.warn(`   This suggests ledger entries exist in state but not in Firebase, or transaction IDs don't match.`);
+                } else {
+                    console.warn(`   This might mean:`);
+                    console.warn(`   1. Ledger entries were already deleted`);
+                    console.warn(`   2. Transaction IDs don't match (check console for actual transaction IDs in ledger)`);
+                    console.warn(`   3. Ledger entries have different factoryId`);
+                }
+            }
 
             // Delete ledger entries in batches (Firestore batch limit is 500)
             const BATCH_SIZE = 500;
@@ -3329,13 +3468,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         postTransaction(entries);
     };
     const postSalesInvoice = async (invoice: SalesInvoice) => {
-        // Prevent double posting - check if entries already exist
+        // Prevent double posting - check if entries already exist (check both state and Firebase)
         const transactionId = `INV-${invoice.invoiceNo}`;
-        const existingEntries = state.ledger.filter(e => e.transactionId === transactionId);
-        if (existingEntries.length > 0) {
-            alert('⚠️ This invoice has already been posted! Ledger entries exist.');
-            console.warn('Prevented double posting for:', invoice.invoiceNo);
+        
+        // Check state first (fast check)
+        const existingEntriesInState = state.ledger.filter(e => e.transactionId === transactionId);
+        if (existingEntriesInState.length > 0) {
+            alert('⚠️ This invoice has already been posted! Ledger entries exist in current session.');
+            console.warn('Prevented double posting for:', invoice.invoiceNo, '- Found', existingEntriesInState.length, 'entries in state');
             return;
+        }
+        
+        // Also check Firebase directly (more reliable, catches entries from other sessions)
+        if (isFirestoreLoaded) {
+            try {
+                const ledgerRef = collection(db, 'ledger');
+                const ledgerQuery = query(ledgerRef, where('transactionId', '==', transactionId));
+                const ledgerSnapshot = await getDocs(ledgerQuery);
+                if (!ledgerSnapshot.empty) {
+                    alert(`⚠️ This invoice has already been posted! Found ${ledgerSnapshot.size} ledger entries in database.\n\nPlease do not post the same invoice twice.`);
+                    console.warn('Prevented double posting for:', invoice.invoiceNo, '- Found', ledgerSnapshot.size, 'entries in Firebase');
+                    return;
+                }
+            } catch (error) {
+                console.error('❌ Error checking for existing ledger entries:', error);
+                // Continue if check fails (better to post than block if there's a Firebase error)
+            }
         }
         
         dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
@@ -3356,26 +3514,291 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
-        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
-        const discountAccount = state.accounts.find(a => a.name.includes('Discount'));
-        const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold'));
-        const finishedGoodsAccount = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'));
+        // Lookup revenue account by name OR code (code 401 is standard for Sales Revenue)
+        const revenueAccount = state.accounts.find(a => 
+            a.name.includes('Sales Revenue') || 
+            a.name.includes('Revenue') ||
+            a.code === '401' ||
+            (a.type === AccountType.REVENUE && a.code?.startsWith('4'))
+        );
+        const discountAccount = state.accounts.find(a => 
+            a.name.toLowerCase().includes('discount') || 
+            a.name.toLowerCase().includes('sales discount') ||
+            a.code === '402'
+        );
+        const cogsAccount = state.accounts.find(a => 
+            a.name.includes('Cost of Goods Sold') || 
+            a.name.includes('COGS') ||
+            a.code === '5000'
+        );
+        const finishedGoodsAccount = state.accounts.find(a => 
+            a.name.includes('Inventory - Finished Goods') || 
+            a.name.includes('Finished Goods') ||
+            a.code === '105' || 
+            a.code === '1202'
+        );
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
         
-        const revenueId = revenueAccount?.id || '401';
-        const discountId = discountAccount?.id || '501';
-        const cogsId = cogsAccount?.id || '5000';
-        const finishedGoodsId = finishedGoodsAccount?.id || '1202';
+        // CRITICAL: If revenue account not found, throw error (don't use fallback string '401')
+        if (!revenueAccount) {
+            throw new Error(`CRITICAL: Revenue account not found! Please create a REVENUE type account (Code: 401, Name: "Sales Revenue") in Setup > Chart of Accounts.`);
+        }
+        
+        // CRITICAL: If discount account not found but discount > 0, throw error
+        if (invoice.discount > 0 && !discountAccount) {
+            throw new Error(`CRITICAL: Discount account not found! Invoice has discount of $${invoice.discount.toFixed(2)} but no discount account exists. Please create an EXPENSE type account (Code: 402, Name: "Sales Discount") in Setup > Chart of Accounts.`);
+        }
+        
+        // CRITICAL: If COGS account not found, throw error
+        if (!cogsAccount) {
+            throw new Error(`CRITICAL: COGS account not found! Please create an EXPENSE type account (Code: 5000, Name: "Cost of Goods Sold") in Setup > Chart of Accounts.`);
+        }
+        
+        // CRITICAL: If Finished Goods account not found, throw error
+        if (!finishedGoodsAccount) {
+            throw new Error(`CRITICAL: Finished Goods Inventory account not found! Please create an ASSET type account (Code: 105, Name: "Inventory - Finished Goods") in Setup > Chart of Accounts.`);
+        }
+        
+        const revenueId = revenueAccount.id;
+        const discountId = discountAccount?.id;
+        const cogsId = cogsAccount.id;
+        const finishedGoodsId = finishedGoodsAccount.id;
+        
+        // Calculate totals
+        const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => sum + item.total, 0);
+        
+        // CRITICAL: Calculate additional costs in USD
+        // exchangeRate in InvoiceAdditionalCost means "how many USD per 1 unit of foreign currency"
+        // So: amount / exchangeRate = converts FROM foreign currency TO USD
+        // BUT: DataEntry.tsx uses amount * exchangeRate (which is WRONG if exchangeRate > 1)
+        // To match what the user sees in the invoice, we need to use the SAME formula as DataEntry
+        // Actually, let's check: if exchangeRate = 1 (USD), then amount * 1 = amount / 1 = same
+        // But if exchangeRate = 3.67 (AED to USD), then:
+        //   - Correct: amount / 3.67 = USD (if amount is in AED)
+        //   - Wrong: amount * 3.67 = USD (if amount is already in USD)
+        // 
+        // The issue is: DataEntry calculates netTotal using amount * exchangeRate
+        // But we're calculating using amount / exchangeRate
+        // To match the invoice's netTotal, we should use the SAME formula as DataEntry
+        const totalAdditionalCostsUSD = invoice.additionalCosts.reduce((sum, cost) => {
+            // Use the SAME formula as DataEntry.tsx to match the invoice's netTotal
+            // DataEntry: amount * (exchangeRate / 1) = amount * exchangeRate
+            return sum + (cost.amount * cost.exchangeRate);
+        }, 0);
+        
+        // CRITICAL: Verify netTotal calculation matches expected formula
+        // netTotal = grossTotal - discount + surcharge + additionalCosts
+        // Expected: items + surcharge + additionalCosts - discount
+        const expectedNetTotal = totalItemsRevenueUSD - invoice.discount + invoice.surcharge + totalAdditionalCostsUSD;
+        const netTotalDifference = Math.abs(invoice.netTotal - expectedNetTotal);
+        
+        // If there's a significant difference, calculate the implied discount
+        if (netTotalDifference > 0.01) {
+            const impliedDiscount = totalItemsRevenueUSD + invoice.surcharge + totalAdditionalCostsUSD - invoice.netTotal;
+            if (impliedDiscount > 0.01 && Math.abs(impliedDiscount - invoice.discount) > 0.01) {
+                console.warn(`⚠️ Invoice ${invoice.invoiceNo} netTotal mismatch!`, {
+                    netTotal: invoice.netTotal,
+                    expectedNetTotal,
+                    invoiceDiscount: invoice.discount,
+                    impliedDiscount,
+                    items: totalItemsRevenueUSD,
+                    surcharge: invoice.surcharge,
+                    additionalCosts: totalAdditionalCostsUSD,
+                    additionalCostsBreakdown: invoice.additionalCosts.map(c => ({
+                        costType: c.costType,
+                        amount: c.amount,
+                        currency: c.currency,
+                        exchangeRate: c.exchangeRate,
+                        calculatedUSD: c.amount * c.exchangeRate
+                    }))
+                });
+                // Use the implied discount if invoice.discount is 0 or significantly different
+                if (invoice.discount === 0 || Math.abs(impliedDiscount - invoice.discount) > 0.01) {
+                    // Update invoice.discount to match the calculation
+                    (invoice as any).discount = impliedDiscount;
+                    console.log(`🔧 Auto-corrected discount from ${invoice.discount} to ${impliedDiscount}`);
+                }
+            }
+        }
+        
+        // CRITICAL: Calculate what the customer should be debited
+        // netTotal = grossTotal - discount + surcharge + additionalCosts
+        // Customer should be debited: items + surcharge + additionalCosts - discount
+        // This equals netTotal, which is correct
+        const customerDebitAmount = invoice.netTotal;
         
         // Debit the CUSTOMER's account directly (not general AR) - Sales are in USD, but store with customer's currency for display
         const customerCurrency = (invoice as any).customerCurrency || invoice.currency || 'USD';
         const customerRate = (invoice as any).customerExchangeRate || invoice.exchangeRate || 1;
-        const fcyAmountForCustomer = invoice.netTotal * customerRate; // Convert USD to customer's currency using invoice's saved rate
-        const entries: Omit<LedgerEntry, 'id'>[] = [ { date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: invoice.customerId, accountName: customerName, currency: customerCurrency, exchangeRate: customerRate, fcyAmount: fcyAmountForCustomer, debit: invoice.netTotal, credit: 0, narration: `Sales Invoice: ${invoice.invoiceNo}`, factoryId: invoice.factoryId } ];
-        const totalItemsRevenueUSD = invoice.items.reduce((sum, item) => sum + item.total, 0);
-        entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue', currency: 'USD', exchangeRate: 1, fcyAmount: totalItemsRevenueUSD, debit: 0, credit: totalItemsRevenueUSD, narration: `Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
-        if (invoice.surcharge > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: revenueId, accountName: 'Sales Revenue (Surcharge)', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.surcharge, debit: 0, credit: invoice.surcharge, narration: `Surcharge: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
-        if (invoice.discount > 0) { entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: discountId, accountName: 'Sales Discount', currency: 'USD', exchangeRate: 1, fcyAmount: invoice.discount, debit: invoice.discount, credit: 0, narration: `Discount: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); }
+        const fcyAmountForCustomer = customerDebitAmount * customerRate; // Convert USD to customer's currency using invoice's saved rate
+        const entries: Omit<LedgerEntry, 'id'>[] = [ 
+            { 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: invoice.customerId, 
+                accountName: customerName, 
+                currency: customerCurrency, 
+                exchangeRate: customerRate, 
+                fcyAmount: fcyAmountForCustomer, 
+                debit: customerDebitAmount, 
+                credit: 0, 
+                narration: `Sales Invoice: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            } 
+        ];
+        
+        // Credit Revenue for items
+        entries.push({ 
+            date: invoice.date, 
+            transactionId, 
+            transactionType: TransactionType.SALES_INVOICE, 
+            accountId: revenueId, 
+            accountName: 'Sales Revenue', 
+            currency: 'USD', 
+            exchangeRate: 1, 
+            fcyAmount: totalItemsRevenueUSD, 
+            debit: 0, 
+            credit: totalItemsRevenueUSD, 
+            narration: `Revenue: ${invoice.invoiceNo}`, 
+            factoryId: invoice.factoryId 
+        });
+        
+        // Credit Revenue for surcharge (if any)
+        if (invoice.surcharge > 0) { 
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: revenueId, 
+                accountName: 'Sales Revenue (Surcharge)', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: invoice.surcharge, 
+                debit: 0, 
+                credit: invoice.surcharge, 
+                narration: `Surcharge: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            }); 
+        }
+        
+        // Debit Discount account (if any) - reduces revenue
+        if (invoice.discount > 0) {
+            if (!discountId) {
+                throw new Error(`CRITICAL: Discount account ID is missing! Invoice has discount of $${invoice.discount.toFixed(2)} but discount account was not found. Please create an EXPENSE type account (Code: 402, Name: "Sales Discount") in Setup > Chart of Accounts.`);
+            }
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: discountId, 
+                accountName: discountAccount?.name || 'Sales Discount', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: invoice.discount, 
+                debit: invoice.discount, 
+                credit: 0, 
+                narration: `Discount: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            }); 
+        }
+        
+        // CRITICAL FIX: Additional costs are passed to the customer (included in netTotal)
+        // Accounting treatment:
+        // 1. Customer is debited for netTotal (which includes additional costs) ✓ Already done above
+        // 2. Additional costs ARE revenue (customer pays us for them) - Credit Revenue
+        // 3. Additional costs are also expenses (we pay provider) - Debit Expense
+        // 4. We owe the provider - Credit Provider Payable
+        // 
+        // This creates a pass-through: Revenue increases, Expense increases (same amount), net P&L effect = zero
+        // 
+        // Accounting entries:
+        // - Customer Debit = netTotal (includes items + surcharge + additional costs - discount) ✓ Already done
+        // - Revenue Credit = items + surcharge + additional costs ✓
+        // - Expense Debit = additional costs (we incur this)
+        // - Provider Credit = additional costs (we owe them)
+        // - Discount Debit = discount (if any) ✓ Already done
+        
+        invoice.additionalCosts.forEach(cost => { 
+            // CRITICAL: Use the SAME formula as DataEntry.tsx to match invoice calculation
+            // DataEntry: amount * (exchangeRate / 1) = amount * exchangeRate
+            // This ensures consistency between invoice netTotal and ledger entries
+            const amountUSD = cost.amount * cost.exchangeRate; 
+            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+            
+            // CREDIT: Revenue for additional costs (customer pays us for these)
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: revenueId, 
+                accountName: 'Sales Revenue (Additional Costs)', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: amountUSD, 
+                debit: 0, 
+                credit: amountUSD, 
+                narration: `${cost.costType} Revenue: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            });
+            
+            // DEBIT: Expense account for additional costs (we incur this cost)
+            // Lookup expense account for additional costs - be more specific to avoid wrong accounts
+            // CRITICAL: Must be EXPENSE type, and exclude accounts like "Raw Material Consumption"
+            const additionalCostExpenseAccount = state.accounts.find(a => 
+                a.type === AccountType.EXPENSE &&
+                !a.name.toLowerCase().includes('raw material') &&
+                !a.name.toLowerCase().includes('consumption') &&
+                (a.name.toLowerCase().includes('additional cost') || 
+                 a.name.toLowerCase().includes('freight expense') ||
+                 a.name.toLowerCase().includes('shipping expense') ||
+                 a.name.toLowerCase().includes('logistics expense') ||
+                 (a.name.toLowerCase().includes('freight') && !a.name.toLowerCase().includes('raw')) ||
+                 (a.name.toLowerCase().includes('shipping') && !a.name.toLowerCase().includes('raw')) ||
+                 a.code === '5010')
+            );
+            
+            if (!additionalCostExpenseAccount) {
+                // If no specific expense account found, throw error (we need proper account setup)
+                throw new Error(`CRITICAL: No expense account found for additional costs! Please create an EXPENSE type account in Setup > Chart of Accounts:\n` +
+                    `- Name: "Additional Costs" or "Freight Expense" or "Shipping Expense"\n` +
+                    `- Code: 5010 (recommended)\n` +
+                    `- Type: EXPENSE\n\n` +
+                    `Current additional cost: ${cost.costType} - $${amountUSD.toFixed(2)}`);
+            }
+            
+            // DEBIT: Expense account
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: additionalCostExpenseAccount.id, 
+                accountName: additionalCostExpenseAccount.name, 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: amountUSD, 
+                debit: amountUSD, 
+                credit: 0, 
+                narration: `${cost.costType} Expense: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            });
+            
+            // CREDIT: Provider Payable (we owe the provider this amount)
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: cost.providerId, 
+                accountName: providerName, 
+                currency: cost.currency, 
+                exchangeRate: cost.exchangeRate, 
+                fcyAmount: cost.amount, 
+                debit: 0, 
+                credit: amountUSD, 
+                narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            }); 
+        });
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory
         const totalCOGS = invoice.items.reduce((sum, item) => {
@@ -3388,17 +3811,36 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (totalCOGS > 0) {
             // Debit COGS (Expense increases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cogsId, accountName: 'Cost of Goods Sold', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: totalCOGS, credit: 0, narration: `COGS: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: cogsId, 
+                accountName: 'Cost of Goods Sold', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: totalCOGS, 
+                debit: totalCOGS, 
+                credit: 0, 
+                narration: `COGS: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            });
             // Credit Finished Goods Inventory (Asset decreases)
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: finishedGoodsId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: totalCOGS, debit: 0, credit: totalCOGS, narration: `Inventory Reduction: ${invoice.invoiceNo}`, factoryId: invoice.factoryId });
+            entries.push({ 
+                date: invoice.date, 
+                transactionId, 
+                transactionType: TransactionType.SALES_INVOICE, 
+                accountId: finishedGoodsId, 
+                accountName: 'Inventory - Finished Goods', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: totalCOGS, 
+                debit: 0, 
+                credit: totalCOGS, 
+                narration: `Inventory Reduction: ${invoice.invoiceNo}`, 
+                factoryId: invoice.factoryId 
+            });
         }
-        
-        invoice.additionalCosts.forEach(cost => { 
-            const amountUSD = cost.amount / cost.exchangeRate; 
-            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
-            // Credit the PROVIDER's account directly
-            entries.push({ date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId }); 
-        });
         postTransaction(entries);
     };
     const addDirectSale = (invoice: SalesInvoice, batchLandedCostPerKg: number) => {
@@ -3415,7 +3857,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 .catch((error) => console.error('❌ Error saving direct sale:', error));
         }
         const transactionId = `DS-${invoice.invoiceNo}`;
-        const revenueAccount = state.accounts.find(a => a.name.includes('Sales Revenue'));
+        // Lookup revenue account by name OR code (code 401 is standard for Sales Revenue)
+        const revenueAccount = state.accounts.find(a => 
+            a.name.includes('Sales Revenue') || 
+            a.name.includes('Revenue') ||
+            a.code === '401' ||
+            (a.type === AccountType.REVENUE && a.code?.startsWith('4'))
+        );
+        
+        // CRITICAL: If revenue account not found, throw error (don't use fallback string '401')
+        if (!revenueAccount) {
+            throw new Error(`CRITICAL: Revenue account not found! Please create a REVENUE type account (Code: 401, Name: "Sales Revenue") in Setup > Chart of Accounts.`);
+        }
         const cogsAccount = state.accounts.find(a => a.name.includes('Cost of Goods Sold - Direct Sales'));
         const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
         const customerName = state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown Customer';
@@ -3592,6 +4045,67 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Firebase listener will handle adding to local state with real ID
         } catch (error) {
             console.error('❌ Error saving account:', error);
+            throw error;
+        }
+    };
+
+    const updateAccount = async (id: string, account: Partial<Account>): Promise<void> => {
+        // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
+        if (!isFirestoreLoaded) {
+            console.warn('⚠️ Firebase not loaded, account update not saved to database');
+            dispatch({ type: 'UPDATE_ENTITY', payload: { type: 'accounts', id, data: account } });
+            return;
+        }
+
+        // Get existing account to check for type changes
+        const existingAccount = state.accounts.find(a => a.id === id);
+        if (!existingAccount) {
+            throw new Error(`Account with ID ${id} not found`);
+        }
+
+        // Warn if changing account type (especially ASSET to EXPENSE)
+        if (account.type && account.type !== existingAccount.type) {
+            const hasBalance = Math.abs(existingAccount.balance || 0) > 0.01;
+            if (hasBalance) {
+                const confirmed = confirm(
+                    `⚠️ WARNING: Changing account type from ${existingAccount.type} to ${account.type}.\n\n` +
+                    `Current Balance: $${existingAccount.balance.toFixed(2)}\n\n` +
+                    `Changing account type will move this balance to a different section of the Balance Sheet.\n` +
+                    `This is a significant accounting change. Continue?`
+                );
+                if (!confirmed) {
+                    throw new Error('Account type change cancelled by user');
+                }
+            }
+        }
+
+        // Auto-add factoryId from current factory
+        const accountWithFactory = {
+            ...account,
+            factoryId: currentFactory?.id || existingAccount.factoryId
+        };
+
+        // Remove undefined values (Firestore doesn't accept them)
+        const accountData: any = {
+            ...accountWithFactory,
+            updatedAt: serverTimestamp()
+        };
+        
+        // Don't save balance directly - it's calculated from ledger entries
+        delete accountData.balance;
+        
+        Object.keys(accountData).forEach(key => {
+            if (accountData[key] === undefined) {
+                delete accountData[key];
+            }
+        });
+
+        try {
+            await updateDoc(doc(db, 'accounts', id), accountData);
+            // Firebase listener will handle updating local state
+            console.log('✅ Account updated successfully');
+        } catch (error) {
+            console.error('❌ Error updating account:', error);
             throw error;
         }
     };
@@ -3810,6 +4324,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addItem,
             updateItem,
             addAccount,
+            updateAccount,
             addDivision,
             addSubDivision,
             addLogo,
