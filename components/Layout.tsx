@@ -26,7 +26,7 @@ const SidebarItem = ({ to, icon: Icon, label, badge }: { to: string, icon: any, 
 };
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { state, isFirestoreLoaded, firestoreStatus, firestoreError } = useData();
+    const { state, isFirestoreLoaded, firestoreStatus, firestoreError, loadedCollections, totalCollections } = useData();
     const { currentUser, currentFactory, factories, logout, switchFactory, hasPermission, refreshUser } = useAuth();
     const [showFactorySwitcher, setShowFactorySwitcher] = useState(false);
     const [showHeaderFactorySwitcher, setShowHeaderFactorySwitcher] = useState(false);
@@ -34,6 +34,89 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     
     // Calculate global unread chat messages
     const unreadCount = state.chatMessages.filter(m => !m.readBy.includes(CURRENT_USER.id)).length;
+    
+    // Calculate loading progress
+    const loadingProgress = firestoreStatus === 'loading' 
+        ? Math.min(100, Math.round((loadedCollections.size / totalCollections) * 100))
+        : 100;
+
+    // Full-screen loading overlay
+    const LoadingOverlay = () => {
+        if (firestoreStatus !== 'loading') return null;
+
+        const collectionNames: Record<string, string> = {
+            'partners': 'Partners',
+            'accounts': 'Accounts',
+            'items': 'Items',
+            'categories': 'Categories',
+            'sections': 'Sections',
+            'warehouses': 'Warehouses',
+            'divisions': 'Divisions',
+            'subDivisions': 'Sub Divisions',
+            'logos': 'Logos',
+            'ports': 'Ports',
+            'originalTypes': 'Original Types',
+            'originalProducts': 'Original Products',
+            'employees': 'Employees',
+            'currencies': 'Currencies',
+            'purchases': 'Purchases',
+            'bundlePurchases': 'Bundle Purchases',
+            'ledger': 'Ledger Entries',
+            'productions': 'Productions',
+            'originalOpenings': 'Original Openings',
+            'logisticsEntries': 'Logistics Entries',
+            'salesInvoices': 'Sales Invoices',
+            'ongoingOrders': 'Ongoing Orders',
+            'attendance': 'Attendance'
+        };
+
+        return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center">
+                <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4 border-2 border-blue-200">
+                    <div className="text-center mb-6">
+                        <div className="inline-block animate-spin rounded-full h-16 w-16 border-4 border-blue-600 border-t-transparent mb-4"></div>
+                        <h2 className="text-2xl font-bold text-slate-800 mb-2">Loading Data from Firebase</h2>
+                        <p className="text-slate-600">Please wait while we sync your data...</p>
+                        <p className="text-xs text-slate-500 mt-1">This may take a few moments</p>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="mb-6">
+                        <div className="flex justify-between text-sm text-slate-600 mb-2">
+                            <span>Progress</span>
+                            <span className="font-semibold">{loadingProgress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                            <div 
+                                className="bg-gradient-to-r from-blue-500 to-purple-500 h-full rounded-full transition-all duration-300 ease-out"
+                                style={{ width: `${loadingProgress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+
+                    {/* Loaded Collections */}
+                    <div className="bg-slate-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                        <p className="text-xs font-semibold text-slate-700 mb-2">Loaded Collections ({loadedCollections.size}/{totalCollections}):</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            {Array.from(loadedCollections).map(collection => (
+                                <div key={collection} className="flex items-center gap-2 text-xs">
+                                    <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                                    <span className="text-slate-600">{collectionNames[collection] || collection}</span>
+                                </div>
+                            ))}
+                        </div>
+                        {loadedCollections.size === 0 && (
+                            <p className="text-xs text-slate-400 italic">Connecting to Firebase...</p>
+                        )}
+                    </div>
+
+                    <div className="mt-4 text-center">
+                        <p className="text-xs text-slate-500">Factory: <span className="font-semibold">{currentFactory?.name || 'Loading...'}</span></p>
+                    </div>
+                </div>
+            </div>
+        );
+    };
     
     // Database Status Indicator
     const getStatusIndicator = () => {
@@ -71,6 +154,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
     return (
         <div className="flex h-screen bg-slate-50 overflow-hidden">
+            <LoadingOverlay />
             {/* Mobile Overlay */}
             {sidebarOpen && (
                 <div 

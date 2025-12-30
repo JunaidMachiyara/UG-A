@@ -482,6 +482,8 @@ const dataReducer = (state: AppState, action: Action): AppState => {
 interface DataContextType {
     state: AppState;
     isFirestoreLoaded: boolean;
+    loadedCollections: Set<string>;
+    totalCollections: number;
     firestoreStatus: 'disconnected' | 'loading' | 'loaded' | 'error';
     firestoreError: string | null;
     postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => Promise<void>;
@@ -554,7 +556,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [isFirestoreLoaded, setIsFirestoreLoaded] = useState(false);
     const [firestoreStatus, setFirestoreStatus] = useState<'disconnected' | 'loading' | 'loaded' | 'error'>('disconnected');
     const [firestoreError, setFirestoreError] = useState<string | null>(null);
+    const [loadedCollections, setLoadedCollections] = useState<Set<string>>(new Set());
+    const totalCollections = 20; // Total number of collections to load (constant)
     const isUpdatingFromFirestore = useRef(false);
+    const loadedCollectionsRef = useRef<Set<string>>(new Set());
+    
+    // Helper function to add a collection to loaded set (updates both state and ref)
+    const markCollectionLoaded = useCallback((collectionName: string) => {
+        setLoadedCollections(prev => {
+            const newSet = new Set([...prev, collectionName]);
+            loadedCollectionsRef.current = newSet;
+            return newSet;
+        });
+    }, []);
 
     // 🔥 FIREBASE SYNC: Load partners and accounts from Firestore in real-time
     useEffect(() => {
@@ -565,6 +579,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         console.log(`🔥 Connecting to Firebase Collections for factory: ${currentFactory.name}...`);
         setFirestoreStatus('loading');
+        
+        // Reset loaded collections when factory changes (do this first)
+        setLoadedCollections(new Set());
+        loadedCollectionsRef.current = new Set();
 
         // Listen to Partners collection - FILTERED by factoryId
         const partnersQuery = query(
@@ -591,6 +609,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 console.log(`✅ LOADED ${partners.length} PARTNERS FROM FIREBASE`);
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PARTNERS', payload: partners });
+                markCollectionLoaded('partners');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => {
@@ -616,6 +635,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ACCOUNTS', payload: accounts });
+                markCollectionLoaded('accounts');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => {
@@ -635,6 +655,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ITEMS', payload: items });
+                markCollectionLoaded('items');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading items:', error)
@@ -667,6 +688,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SECTIONS', payload: sections });
+                markCollectionLoaded('sections');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading sections:', error)
@@ -683,6 +705,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_WAREHOUSES', payload: warehouses });
+                markCollectionLoaded('warehouses');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading warehouses:', error)
@@ -699,6 +722,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_DIVISIONS', payload: divisions });
+                markCollectionLoaded('divisions');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading divisions:', error)
@@ -715,6 +739,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SUBDIVISIONS', payload: subDivisions });
+                markCollectionLoaded('subDivisions');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading subDivisions:', error)
@@ -731,6 +756,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LOGOS', payload: logos });
+                markCollectionLoaded('logos');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading logos:', error)
@@ -747,6 +773,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PORTS', payload: ports });
+                markCollectionLoaded('ports');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading ports:', error)
@@ -763,6 +790,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_TYPES', payload: originalTypes });
+                markCollectionLoaded('originalTypes');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading originalTypes:', error)
@@ -779,6 +807,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_PRODUCTS', payload: originalProducts });
+                markCollectionLoaded('originalProducts');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading originalProducts:', error)
@@ -795,6 +824,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_EMPLOYEES', payload: employees });
+                markCollectionLoaded('employees');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading employees:', error)
@@ -810,6 +840,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_CURRENCIES', payload: currencies });
+                markCollectionLoaded('currencies');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading currencies:', error)
@@ -826,6 +857,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PURCHASES', payload: purchases });
+                markCollectionLoaded('purchases');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading purchases:', error)
@@ -842,6 +874,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_BUNDLE_PURCHASES', payload: bundlePurchases });
+                markCollectionLoaded('bundlePurchases');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading bundle purchases:', error)
@@ -858,6 +891,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LEDGER', payload: ledgerEntries });
+                markCollectionLoaded('ledger');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading ledger:', error)
@@ -874,6 +908,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PRODUCTIONS', payload: productions });
+                markCollectionLoaded('productions');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading productions:', error)
@@ -890,6 +925,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_OPENINGS', payload: originalOpenings });
+                markCollectionLoaded('originalOpenings');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading original openings:', error)
@@ -906,6 +942,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LOGISTICS_ENTRIES', payload: logisticsEntries });
+                markCollectionLoaded('logisticsEntries');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading logistics entries:', error)
@@ -922,6 +959,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SALES_INVOICES', payload: salesInvoices });
+                markCollectionLoaded('salesInvoices');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading sales invoices:', error)
@@ -938,6 +976,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ONGOING_ORDERS', payload: ongoingOrders });
+                markCollectionLoaded('ongoingOrders');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading ongoing orders:', error)
@@ -954,19 +993,42 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ATTENDANCE', payload: attendance });
+                markCollectionLoaded('attendance');
                 setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
             },
             (error) => console.error('❌ Error loading attendance:', error)
         );
 
-        // Mark as loaded after initial connection
-        setTimeout(() => {
+        // Mark as loaded after ALL collections are loaded
+        // Wait until ALL collections are loaded (not just 80%)
+        const checkLoadingComplete = setInterval(() => {
+            const currentSize = loadedCollectionsRef.current.size;
+            const progress = (currentSize / totalCollections) * 100;
+            
+            // Only mark as loaded when ALL collections are loaded
+            if (currentSize >= totalCollections) {
+                clearInterval(checkLoadingComplete);
+                setIsFirestoreLoaded(true);
+                setFirestoreStatus('loaded');
+                console.log(`🟢 Firebase sync enabled! All ${totalCollections} collections loaded.`);
+            }
+        }, 500); // Check every 500ms
+        
+        // Fallback: Mark as loaded after 30 seconds regardless (in case some collections are empty or slow)
+        const loadingTimeout = setTimeout(() => {
+            clearInterval(checkLoadingComplete);
+            const finalSize = loadedCollectionsRef.current.size;
             setIsFirestoreLoaded(true);
             setFirestoreStatus('loaded');
-            console.log('🟢 Firebase sync enabled!');
-        }, 1000);
+            console.log(`🟢 Firebase sync enabled! (timeout after 30s) - ${finalSize}/${totalCollections} collections loaded.`);
+        }, 30000); // Increased to 30 seconds to allow all data to load
 
         return () => {
+            // Clean up intervals and timeouts
+            clearInterval(checkLoadingComplete);
+            clearTimeout(loadingTimeout);
+            
+            // Unsubscribe from all Firebase listeners
             unsubscribePartners();
             unsubscribeAccounts();
             unsubscribeItems();
@@ -1026,6 +1088,57 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 
     const postTransaction = async (entries: Omit<LedgerEntry, 'id'>[]) => {
+        // 🛡️ DOUBLE-ENTRY ACCOUNTING VALIDATION: Ensure all transactions are balanced
+        if (entries.length > 0) {
+            // Group entries by transactionId to validate each transaction separately
+            const transactionsByTxId = new Map<string, Omit<LedgerEntry, 'id'>[]>();
+            entries.forEach(entry => {
+                const txId = entry.transactionId || 'UNKNOWN';
+                if (!transactionsByTxId.has(txId)) {
+                    transactionsByTxId.set(txId, []);
+                }
+                transactionsByTxId.get(txId)!.push(entry);
+            });
+
+            // Validate each transaction group
+            for (const [transactionId, txEntries] of transactionsByTxId) {
+                const totalDebits = txEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                const totalCredits = txEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                const imbalance = Math.abs(totalDebits - totalCredits);
+
+                if (imbalance > 0.01) { // Allow small rounding differences (0.01)
+                    const errorMsg = `❌ DOUBLE-ENTRY ACCOUNTING ERROR: Transaction "${transactionId}" is unbalanced!\n\n` +
+                        `Total Debits: $${totalDebits.toFixed(2)}\n` +
+                        `Total Credits: $${totalCredits.toFixed(2)}\n` +
+                        `Imbalance: $${imbalance.toFixed(2)}\n\n` +
+                        `In double-entry accounting, debits MUST equal credits.\n` +
+                        `Transaction will NOT be saved.\n\n` +
+                        `Entries:\n${txEntries.map(e => `  - ${e.accountName}: Debit $${e.debit || 0}, Credit $${e.credit || 0}`).join('\n')}`;
+                    
+                    console.error(errorMsg);
+                    throw new Error(`Unbalanced transaction: ${transactionId}. Debits: $${totalDebits.toFixed(2)}, Credits: $${totalCredits.toFixed(2)}`);
+                }
+
+                // Ensure at least one debit and one credit entry exists
+                const hasDebit = txEntries.some(e => (e.debit || 0) > 0);
+                const hasCredit = txEntries.some(e => (e.credit || 0) > 0);
+
+                if (!hasDebit || !hasCredit) {
+                    const errorMsg = `❌ DOUBLE-ENTRY ACCOUNTING ERROR: Transaction "${transactionId}" is missing required entries!\n\n` +
+                        `Double-entry accounting requires:\n` +
+                        `- At least ONE debit entry\n` +
+                        `- At least ONE credit entry\n\n` +
+                        `Current entries:\n${txEntries.map(e => `  - ${e.accountName}: Debit $${e.debit || 0}, Credit $${e.credit || 0}`).join('\n')}\n\n` +
+                        `Transaction will NOT be saved.`;
+                    
+                    console.error(errorMsg);
+                    throw new Error(`Transaction ${transactionId} missing debit or credit entries`);
+                }
+            }
+
+            console.log(`✅ Double-entry validation passed: All ${transactionsByTxId.size} transaction(s) are balanced`);
+        }
+
         const entriesWithFactory = entries.map(entry => ({
             ...entry,
             factoryId: currentFactory?.id || ''
@@ -1764,17 +1877,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
 
         // Create journal entries for this purchase
+        // 🛡️ DOUBLE-ENTRY RULE: Must have both accounts or throw error
         const buildPurchaseEntries = (): Omit<LedgerEntry, 'id'>[] | null => {
         const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
         const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
 
         if (!inventoryAccount || !apAccount) {
-            console.error('❌ Required accounts not found! Inventory:', inventoryAccount, 'AP:', apAccount);
-            alert(
-                'Warning: Chart of Accounts is incomplete. Please ensure ' +
-                '"Inventory - Raw Materials" and "Accounts Payable" accounts exist.'
-            );
-            return null;
+            const errorMsg = `❌ CRITICAL ERROR: Cannot create purchase entry.\n\n` +
+                `Required accounts not found:\n` +
+                `${!inventoryAccount ? '- Inventory - Raw Materials\n' : ''}` +
+                `${!apAccount ? '- Accounts Payable\n' : ''}` +
+                `\nPlease create these accounts in Setup > Chart of Accounts.\n\n` +
+                `Purchase will NOT be saved.`;
+            console.error(errorMsg);
+            alert(errorMsg);
+            throw new Error(errorMsg);
         }
 
         const inventoryId = inventoryAccount.id;
@@ -2259,51 +2376,64 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
             
             // Create accounting entries for raw material consumption
+            // 🛡️ DOUBLE-ENTRY RULE: Must have both accounts or throw error
             const rawMaterialInvId = state.accounts.find(a => a.name.includes('Raw Material'))?.id;
             const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
             
-            if (rawMaterialInvId && wipId) {
-                const transactionId = `OO-${docRef.id}`;
-                const entries: Omit<LedgerEntry, 'id'>[] = [
-                    // Credit Raw Materials (reduce inventory)
-                    {
-                        date: openingWithFactory.date,
-                        transactionId,
-                        transactionType: TransactionType.ORIGINAL_OPENING,
-                        accountId: rawMaterialInvId,
-                        accountName: 'Inventory - Raw Materials',
-                        currency: 'USD',
-                        exchangeRate: 1,
-                        fcyAmount: openingWithFactory.totalValue,
-                        debit: 0,
-                        credit: openingWithFactory.totalValue,
-                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                        factoryId: openingWithFactory.factoryId
-                    },
-                    // Debit WIP (transfer to work in progress)
-                    {
-                        date: openingWithFactory.date,
-                        transactionId,
-                        transactionType: TransactionType.ORIGINAL_OPENING,
-                        accountId: wipId,
-                        accountName: 'Work in Progress (Inventory)',
-                        currency: 'USD',
-                        exchangeRate: 1,
-                        fcyAmount: openingWithFactory.totalValue,
-                        debit: openingWithFactory.totalValue,
-                        credit: 0,
-                        narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
-                        factoryId: openingWithFactory.factoryId
-                    }
-                ];
-                await postTransaction(entries);
-            } else {
-                console.error('❌ Original Opening accounting failed: Missing accounts', {
-                    rawMaterialInvId,
-                    wipId,
-                    availableAccounts: state.accounts.map(a => a.name)
-                });
+            if (!rawMaterialInvId || !wipId) {
+                const errorMsg = `❌ CRITICAL ERROR: Cannot create original opening entry.\n\n` +
+                    `Required accounts not found:\n` +
+                    `${!rawMaterialInvId ? '- Inventory - Raw Materials\n' : ''}` +
+                    `${!wipId ? '- Work in Progress (Inventory)\n' : ''}` +
+                    `\nPlease create these accounts in Setup > Chart of Accounts.\n\n` +
+                    `Original opening will NOT be saved.`;
+                console.error(errorMsg);
+                console.error('Available accounts:', state.accounts.map(a => a.name));
+                
+                // Delete the opening document we just created since we can't create balanced entries
+                try {
+                    await deleteDoc(docRef);
+                } catch (deleteError) {
+                    console.error('Failed to rollback opening document:', deleteError);
+                }
+                
+                throw new Error(errorMsg);
             }
+
+            const transactionId = `OO-${docRef.id}`;
+            const entries: Omit<LedgerEntry, 'id'>[] = [
+                // Credit Raw Materials (reduce inventory)
+                {
+                    date: openingWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.ORIGINAL_OPENING,
+                    accountId: rawMaterialInvId,
+                    accountName: 'Inventory - Raw Materials',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: openingWithFactory.totalValue,
+                    debit: 0,
+                    credit: openingWithFactory.totalValue,
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                    factoryId: openingWithFactory.factoryId
+                },
+                // Debit WIP (transfer to work in progress)
+                {
+                    date: openingWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.ORIGINAL_OPENING,
+                    accountId: wipId,
+                    accountName: 'Work in Progress (Inventory)',
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: openingWithFactory.totalValue,
+                    debit: openingWithFactory.totalValue,
+                    credit: 0,
+                    narration: `Raw Material Consumption: ${openingWithFactory.originalType} (${openingWithFactory.weightOpened}kg)`,
+                    factoryId: openingWithFactory.factoryId
+                }
+            ];
+            await postTransaction(entries);
             
             // Note: onSnapshot listener will automatically update local state when Firestore document is created
             // No need to dispatch here as it would cause duplicate entries or race conditions
@@ -2416,10 +2546,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         
         // Create accounting entries for production
+        // 🛡️ DOUBLE-ENTRY RULE: Must have required accounts or throw error
         const fgInvId = state.accounts.find(a => a.name.includes('Inventory - Finished Goods'))?.id;
         const wipId = state.accounts.find(a => a.name.includes('Work in Progress'))?.id;
         let productionGainId = state.accounts.find(a => a.name.includes('Production Gain'))?.id;
         
+        // Validate Finished Goods account exists
+        if (!fgInvId) {
+            const errorMsg = `❌ CRITICAL ERROR: Cannot create production entries.\n\n` +
+                `Required account not found: Inventory - Finished Goods\n\n` +
+                `Please create this account in Setup > Chart of Accounts.\n\n` +
+                `Production entries will NOT be saved.`;
+            console.error(errorMsg);
+            throw new Error(errorMsg);
+        }
+
         // If Production Gain account doesn't exist, try to find Capital account as fallback
         if (!productionGainId) {
             productionGainId = state.accounts.find(a => 
@@ -2427,7 +2568,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 a.name.includes('Owner\'s Capital') ||
                 a.code === '301'
             )?.id;
-            console.warn('⚠️ Production Gain account not found, using Capital account as fallback');
+            if (productionGainId) {
+                console.warn('⚠️ Production Gain account not found, using Capital account as fallback');
+            }
         }
         
         if (fgInvId) {
@@ -2668,55 +2811,95 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                     
                     // Credit Capital/Production Gain for the remainder (or full amount if no WIP)
-                    // CRITICAL FIX: Always create credit entry if capitalCredit is non-zero, even if productionGainId is missing
-                    // If productionGainId is missing, we'll use Capital account or create a warning
+                    // CRITICAL FIX: Always create credit entry if capitalCredit is non-zero
+                    // DOUBLE-ENTRY RULE: Must have both debit and credit, or throw error
                     if (capitalCredit !== 0) {
-                        if (productionGainId) {
-                            entries.push({
-                                date: prod.date,
-                                transactionId,
-                                transactionType: TransactionType.PRODUCTION,
-                                accountId: productionGainId,
-                                accountName: state.accounts.find(a => a.id === productionGainId)?.name || 'Production Gain',
-                                currency: 'USD',
-                                exchangeRate: 1,
-                                fcyAmount: Math.abs(capitalCredit),
-                                debit: capitalCredit < 0 ? Math.abs(capitalCredit) : 0,
-                                credit: capitalCredit > 0 ? capitalCredit : 0,
-                                narration: `Production ${capitalCredit > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}${wipValueConsumed > 0 ? ` (WIP: $${wipValueConsumed.toFixed(2)})` : ' (No WIP)'}`,
-                                factoryId: prod.factoryId
-                            });
-                        } else {
-                            // FALLBACK: If no Production Gain or Capital account found, log error but still create entry
-                            // This should never happen if accounts are properly set up, but we'll handle it gracefully
-                            console.error('❌ CRITICAL: No Production Gain or Capital account found! Production entry will be unbalanced.');
-                            console.error('Production:', prod);
-                            console.error('Available accounts:', state.accounts.filter(a => 
-                                a.type === AccountType.EQUITY || 
+                        let targetAccountId = productionGainId;
+                        let targetAccountName = 'Production Gain';
+
+                        // If Production Gain not found, use Capital as fallback
+                        if (!targetAccountId) {
+                            const capitalAccount = state.accounts.find(a => 
                                 a.name.includes('Capital') || 
-                                a.name.includes('Gain')
-                            ));
+                                a.name.includes('Owner\'s Capital') ||
+                                a.code === '301'
+                            );
+                            if (capitalAccount) {
+                                targetAccountId = capitalAccount.id;
+                                targetAccountName = capitalAccount.name;
+                                console.warn(`⚠️ Production Gain account not found, using Capital account (${capitalAccount.name}) as fallback for production credit.`);
+                            } else {
+                                // CRITICAL: No fallback account found - THROW ERROR instead of creating unbalanced entry
+                                const errorMsg = `❌ CRITICAL ERROR: Cannot create production entry for ${prod.itemName}.\n\n` +
+                                    `Required accounts not found:\n` +
+                                    `- Production Gain account\n` +
+                                    `- Capital account (fallback)\n\n` +
+                                    `Please create at least one of these accounts in Setup > Chart of Accounts.\n\n` +
+                                    `Production entry will NOT be saved.`;
+                                console.error(errorMsg);
+                                console.error('Production data:', prod);
+                                console.error('Available Equity accounts:', state.accounts.filter(a => 
+                                    a.type === AccountType.EQUITY || 
+                                    a.name.includes('Capital') || 
+                                    a.name.includes('Gain')
+                                ));
+                                throw new Error(errorMsg);
+                            }
                         }
+
+                        // Create credit entry with found account
+                        entries.push({
+                            date: prod.date,
+                            transactionId,
+                            transactionType: TransactionType.PRODUCTION,
+                            accountId: targetAccountId!,
+                            accountName: targetAccountName,
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: Math.abs(capitalCredit),
+                            debit: capitalCredit < 0 ? Math.abs(capitalCredit) : 0,
+                            credit: capitalCredit > 0 ? capitalCredit : 0,
+                            narration: `Production ${capitalCredit > 0 ? 'Gain' : 'Loss'}: ${prod.itemName}${wipValueConsumed > 0 ? ` (WIP: $${wipValueConsumed.toFixed(2)})` : ' (No WIP)'}`,
+                            factoryId: prod.factoryId
+                        });
                     } else if (finishedGoodsValue > 0 && wipValueConsumed === 0) {
                         // If capitalCredit is 0 but we have finished goods value and no WIP consumed,
                         // we still need a credit entry to balance the debit
                         // This handles edge cases where production value exactly matches WIP (shouldn't happen, but safety check)
-                        if (productionGainId) {
-                            entries.push({
-                                date: prod.date,
-                                transactionId,
-                                transactionType: TransactionType.PRODUCTION,
-                                accountId: productionGainId,
-                                accountName: state.accounts.find(a => a.id === productionGainId)?.name || 'Production Gain',
-                                currency: 'USD',
-                                exchangeRate: 1,
-                                fcyAmount: finishedGoodsValue,
-                                debit: 0,
-                                credit: finishedGoodsValue,
-                                narration: `Production Gain: ${prod.itemName} (Full value, no WIP)`,
-                                factoryId: prod.factoryId
-                            });
+                        let targetAccountId = productionGainId;
+                        let targetAccountName = 'Production Gain';
+
+                        if (!targetAccountId) {
+                            const capitalAccount = state.accounts.find(a => 
+                                a.name.includes('Capital') || 
+                                a.name.includes('Owner\'s Capital') ||
+                                a.code === '301'
+                            );
+                            if (capitalAccount) {
+                                targetAccountId = capitalAccount.id;
+                                targetAccountName = capitalAccount.name;
+                            } else {
+                                const errorMsg = `❌ CRITICAL ERROR: Cannot create production entry for ${prod.itemName}.\n\n` +
+                                    `Required accounts not found for balancing credit entry.\n\n` +
+                                    `Production entry will NOT be saved.`;
+                                throw new Error(errorMsg);
+                            }
                         }
+
+                        entries.push({
+                            date: prod.date,
+                            transactionId,
+                            transactionType: TransactionType.PRODUCTION,
+                            accountId: targetAccountId!,
+                            accountName: targetAccountName,
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: finishedGoodsValue,
+                            debit: 0,
+                            credit: finishedGoodsValue,
+                            narration: `Production Gain: ${prod.itemName} (Full value, no WIP)`,
+                            factoryId: prod.factoryId
+                        });
                     }
                     
                     // Add to batch instead of posting immediately
@@ -3618,6 +3801,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             isFirestoreLoaded,
             firestoreStatus,
             firestoreError,
+            loadedCollections,
+            totalCollections,
             postTransaction,
             deleteTransaction,
             addPartner,

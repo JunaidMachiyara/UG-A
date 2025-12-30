@@ -4,9 +4,10 @@ import { useData } from '../context/DataContext';
 import { TransactionType, AccountType, Currency, PartnerType, LedgerEntry } from '../types';
 import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
-import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale, Printer, ChevronUp, ChevronDown } from 'lucide-react';
+import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale, Printer, ChevronUp, ChevronDown, Upload } from 'lucide-react';
 import { db } from '../services/firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import Papa from 'papaparse';
 
 type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD';
 
@@ -1016,6 +1017,36 @@ export const Accounting: React.FC = () => {
             }
         }
 
+        // 🛡️ DOUBLE-ENTRY VALIDATION: Ensure edited voucher is balanced
+        if (entries.length > 0) {
+            const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+            const imbalance = Math.abs(totalDebits - totalCredits);
+
+            if (imbalance > 0.01) { // Allow small rounding differences (0.01)
+                alert(`❌ DOUBLE-ENTRY ACCOUNTING ERROR: Voucher is unbalanced!\n\n` +
+                    `Total Debits: $${totalDebits.toFixed(2)}\n` +
+                    `Total Credits: $${totalCredits.toFixed(2)}\n` +
+                    `Imbalance: $${imbalance.toFixed(2)}\n\n` +
+                    `In double-entry accounting, debits MUST equal credits.\n` +
+                    `Please correct the voucher entries and try again.`);
+                return;
+            }
+
+            // Ensure at least one debit and one credit entry exists
+            const hasDebit = entries.some(e => (e.debit || 0) > 0);
+            const hasCredit = entries.some(e => (e.credit || 0) > 0);
+
+            if (!hasDebit || !hasCredit) {
+                alert(`❌ DOUBLE-ENTRY ACCOUNTING ERROR: Voucher is missing required entries!\n\n` +
+                    `Double-entry accounting requires:\n` +
+                    `- At least ONE debit entry\n` +
+                    `- At least ONE credit entry\n\n` +
+                    `Please add both debit and credit entries.`);
+                return;
+            }
+        }
+
         // If we're editing, delete the old transaction FIRST (before creating new one)
         // This ensures we don't lose data if save fails
         if (editingTransactionId) {
@@ -1954,6 +1985,155 @@ export const Accounting: React.FC = () => {
                                         <Printer size={18} /> Print/Export
                                     </button>
                                 </div>
+
+                                {/* CSV Upload Section */}
+                                {(() => {
+                                    // CSV Upload Handler for Inventory Adjustment
+                                    const handleInventoryAdjustmentCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+
+                                        Papa.parse(file, {
+                                            header: true,
+                                            skipEmptyLines: true,
+                                            complete: (results) => {
+                                                const errors: string[] = [];
+                                                const newAdjustments: Record<string, ItemAdjustment> = { ...iaItemAdjustments };
+                                                let successCount = 0;
+
+                                                for (let idx = 0; idx < results.data.length; idx++) {
+                                                    const row = results.data[idx] as any;
+                                                    
+                                                    // Validate required columns
+                                                    if (!row['Item Code'] || row['Item Code'].trim() === '') {
+                                                        errors.push(`Row ${idx + 2}: Missing Item Code`);
+                                                        continue;
+                                                    }
+
+                                                    const itemCode = row['Item Code'].trim();
+                                                    
+                                                    // Find item by code
+                                                    const item = state.items.find(i => i.code === itemCode);
+                                                    if (!item) {
+                                                        errors.push(`Row ${idx + 2}: Item with code "${itemCode}" not found`);
+                                                        continue;
+                                                    }
+
+                                                    // Parse Current Stock (quantity)
+                                                    const csvCurrentStock = row['Current Stock'] !== undefined && row['Current Stock'] !== '' 
+                                                        ? parseFloat(String(row['Current Stock']).trim()) 
+                                                        : null;
+                                                    
+                                                    // Parse Current Stock Worth (value)
+                                                    const csvCurrentWorth = row['Current Stock Worth'] !== undefined && row['Current Stock Worth'] !== '' 
+                                                        ? parseFloat(String(row['Current Stock Worth']).trim()) 
+                                                        : null;
+
+                                                    if (csvCurrentStock === null && csvCurrentWorth === null) {
+                                                        errors.push(`Row ${idx + 2}: Both "Current Stock" and "Current Stock Worth" are missing. At least one is required.`);
+                                                        continue;
+                                                    }
+
+                                                    // Get system's current values
+                                                    const systemCurrentStock = item.stockQty || 0;
+                                                    const systemCurrentWorth = (item.stockQty || 0) * (item.avgCost || 0);
+
+                                                    // Calculate adjustments
+                                                    let adjustmentQty: number | '' = '';
+                                                    let adjustmentWorth: number | '' = '';
+
+                                                    if (csvCurrentStock !== null) {
+                                                        // Calculate quantity adjustment
+                                                        adjustmentQty = csvCurrentStock - systemCurrentStock;
+                                                    }
+
+                                                    if (csvCurrentWorth !== null) {
+                                                        // Calculate worth adjustment
+                                                        adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
+                                                    } else if (csvCurrentStock !== null && item.avgCost) {
+                                                        // If only quantity provided, calculate worth adjustment based on current avgCost
+                                                        adjustmentWorth = adjustmentQty * item.avgCost;
+                                                    }
+
+                                                    // Update adjustments
+                                                    newAdjustments[item.id] = {
+                                                        itemId: item.id,
+                                                        adjustmentQty: adjustmentQty !== 0 ? adjustmentQty : '',
+                                                        adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                                                    };
+
+                                                    successCount++;
+                                                }
+
+                                                // Update state with new adjustments
+                                                setIaItemAdjustments(newAdjustments);
+
+                                                // Show results
+                                                if (errors.length > 0) {
+                                                    alert(`CSV Upload Complete:\n\n✅ Successfully processed: ${successCount} item(s)\n❌ Errors: ${errors.length}\n\nErrors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
+                                                } else {
+                                                    alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} item(s).\nAdjustments have been calculated and populated in the table below.`);
+                                                }
+
+                                                // Reset file input
+                                                e.target.value = '';
+                                            },
+                                            error: (error) => {
+                                                alert(`❌ Error parsing CSV: ${error.message}`);
+                                            }
+                                        });
+                                    };
+
+                                    // Download CSV Template
+                                    const downloadInventoryAdjustmentTemplate = () => {
+                                        const template = [
+                                            ['Item Code', 'Current Stock', 'Current Stock Worth'],
+                                            ['ITEM-001', '100', '5000.00'],
+                                            ['ITEM-002', '50', '2500.00']
+                                        ];
+
+                                        const csvContent = template.map(row => row.join(',')).join('\n');
+                                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                        const link = document.createElement('a');
+                                        const url = URL.createObjectURL(blob);
+                                        link.setAttribute('href', url);
+                                        link.setAttribute('download', 'Inventory_Adjustment_Template.csv');
+                                        link.style.visibility = 'hidden';
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                    };
+
+                                    return (
+                                        <div className="bg-white border-2 border-blue-300 rounded-lg p-4 shadow-sm">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h4 className="font-bold text-slate-700 flex items-center gap-2">
+                                                    <Upload size={18} className="text-blue-600" /> Upload CSV for Bulk Adjustment
+                                                </h4>
+                                                <button
+                                                    onClick={downloadInventoryAdjustmentTemplate}
+                                                    className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
+                                                >
+                                                    <FileText size={14} /> Download Template
+                                                </button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <p className="text-xs text-slate-600">
+                                                    Upload a CSV file with columns: <strong>Item Code</strong>, <strong>Current Stock</strong>, <strong>Current Stock Worth</strong>
+                                                </p>
+                                                <p className="text-xs text-slate-500">
+                                                    The system will calculate adjustments by comparing CSV values with current system values.
+                                                </p>
+                                                <input
+                                                    type="file"
+                                                    accept=".csv"
+                                                    onChange={handleInventoryAdjustmentCSVUpload}
+                                                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                                     
                                     {/* Filters */}
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">

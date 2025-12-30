@@ -255,7 +255,7 @@ const YieldWidget = () => {
 }
 
 export const Dashboard: React.FC = () => {
-    const { state } = useData();
+    const { state, isFirestoreLoaded, firestoreStatus } = useData();
     const { currentUser, currentFactory, factories, switchFactory } = useAuth();
     const navigate = useNavigate();
     const [yieldTimeFilter, setYieldTimeFilter] = useState<'today' | 'yesterday' | '7days' | '30days'>('yesterday');
@@ -648,8 +648,16 @@ export const Dashboard: React.FC = () => {
             {/* Desktop Header */}
             <div className="hidden lg:block bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-8 shadow-2xl">
                 <div className="flex justify-between items-center">
-                    <div>
-                        <h1 className="text-3xl font-bold text-white mb-2">Business Intelligence Dashboard</h1>
+                    <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                            <h1 className="text-3xl font-bold text-white">Business Intelligence Dashboard</h1>
+                            {(!isFirestoreLoaded || firestoreStatus === 'loading') && (
+                                <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/30 border border-yellow-400/50 rounded-lg backdrop-blur-sm">
+                                    <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>
+                                    <span className="text-yellow-100 text-xs font-medium">Loading data...</span>
+                                </div>
+                            )}
+                        </div>
                         <p className="text-blue-100">Real-time analytics and performance metrics</p>
                     </div>
                     <div className="bg-white/20 backdrop-blur-lg rounded-xl p-4 text-white">
