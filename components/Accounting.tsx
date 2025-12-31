@@ -288,15 +288,222 @@ export const Accounting: React.FC = () => {
             });
         });
 
-        // Calculate worth
+        // Apply Original Stock Adjustments from ledger entries
+        // Look for INVENTORY_ADJUSTMENT transactions with "Original Stock" in narration
+        const adjustmentEntries = state.ledger.filter(entry => 
+            entry.transactionType === TransactionType.INVENTORY_ADJUSTMENT &&
+            entry.narration && 
+            (entry.narration.includes('Original Stock Increase') || entry.narration.includes('Original Stock Decrease')) &&
+            entry.accountName && 
+            (entry.accountName.includes('Raw Materials') || entry.accountName.includes('Inventory - Raw Materials'))
+        );
+
+        console.log('📊 Original Stock Data - Found adjustment entries:', adjustmentEntries.length);
+
+        // Group adjustments by transaction ID to get the full adjustment details
+        const adjustmentTransactions = new Map<string, { increase: boolean; amount: number; narration: string; weight: number | null }>();
+        adjustmentEntries.forEach(entry => {
+            if (!adjustmentTransactions.has(entry.transactionId)) {
+                const isIncrease = entry.narration?.includes('Original Stock Increase') || false;
+                const amount = isIncrease ? (entry.debit || 0) : (entry.credit || 0);
+                
+                // Parse weight from narration: "Weight: -1 kg" or "Weight: 5 kg" or "Weight: N/A"
+                const weightMatch = entry.narration?.match(/Weight:\s*([-\d.]+|N\/A)\s*kg/i);
+                const weight = weightMatch && weightMatch[1] !== 'N/A' && weightMatch[1] !== 'N/A' ? parseFloat(weightMatch[1]) : null;
+                
+                adjustmentTransactions.set(entry.transactionId, {
+                    increase: isIncrease,
+                    amount: amount,
+                    narration: entry.narration || '',
+                    weight: weight
+                });
+            }
+        });
+
+        console.log('📊 Original Stock Data - Adjustment transactions:', Array.from(adjustmentTransactions.entries()).map(([id, adj]) => ({
+            transactionId: id,
+            increase: adj.increase,
+            amount: adj.amount,
+            weight: adj.weight,
+            narration: adj.narration.substring(0, 100)
+        })));
+
+        // Apply each adjustment to matching stock items
+        adjustmentTransactions.forEach((adjustment, transactionId) => {
+            const narration = adjustment.narration;
+            // Parse narration: "Original Stock Increase/Decrease: {typeName} ({supplierName}) (Weight: {weight} kg, Worth: ${value}) - {reason}"
+            // Example: "Original Stock Decrease: CROATIA (USMAN GLOBAL (ASIF BHAI)) (Weight: -1 kg, Worth: $1.00) - adj"
+            // Note: Supplier name may contain nested parentheses, so we need a more robust parsing approach
+            
+            // First, extract the type name (everything after "Increase/Decrease: " until the first " (")
+            const typeMatch = narration.match(/Original Stock (Increase|Decrease):\s*([^(]+?)\s*\(/);
+            if (!typeMatch) {
+                console.warn('⚠️ Original Stock Data - Could not parse type name from narration:', narration);
+                return;
+            }
+            
+            const isIncrease = typeMatch[1] === 'Increase';
+            const typeName = typeMatch[2].trim();
+            
+            // Extract supplier name - find content between first "(" after type name and the ")" before " (Weight:"
+            // We need to handle nested parentheses, so we'll find the matching ")" before " (Weight:"
+            const weightIndex = narration.indexOf(' (Weight:');
+            if (weightIndex === -1) {
+                console.warn('⚠️ Original Stock Data - Could not find Weight in narration:', narration);
+                return;
+            }
+            
+            // Find the supplier name - it's between the first "(" after type name and the ")" before " (Weight:"
+            // The typeMatch[0] includes everything up to and including the opening paren
+            // Find the position of the opening paren (it's the last character of the match)
+            const typeMatchStart = narration.indexOf(typeMatch[0]);
+            if (typeMatchStart === -1) {
+                console.warn('⚠️ Original Stock Data - Could not find type match in narration:', narration);
+                return;
+            }
+            const firstParenIndex = typeMatchStart + typeMatch[0].length - 1; // The opening paren is the last char of typeMatch[0]
+            
+            // Find the matching closing paren before " (Weight:" by counting parentheses
+            // We need to find the outer closing paren, not the inner one
+            let parenCount = 1; // Start at 1 because we're starting at the opening paren
+            let supplierEndIndex = -1;
+            for (let i = firstParenIndex + 1; i < weightIndex; i++) {
+                if (narration[i] === '(') {
+                    parenCount++;
+                } else if (narration[i] === ')') {
+                    parenCount--;
+                    // When parenCount reaches 0, we've found the matching closing paren for the first opening paren
+                    if (parenCount === 0) {
+                        supplierEndIndex = i;
+                        break;
+                    }
+                }
+            }
+            
+            if (supplierEndIndex === -1) {
+                console.warn('⚠️ Original Stock Data - Could not find matching closing paren for supplier:', narration);
+                return;
+            }
+            
+            const supplierName = narration.substring(firstParenIndex + 1, supplierEndIndex).trim();
+            
+            console.log('📊 Original Stock Data - Supplier name extraction:', {
+                typeMatchStart,
+                typeMatchLength: typeMatch[0].length,
+                firstParenIndex,
+                supplierEndIndex,
+                extracted: supplierName,
+                fullNarration: narration,
+                substring: narration.substring(firstParenIndex, supplierEndIndex + 1),
+                charAtFirstParen: narration[firstParenIndex],
+                charAtSupplierEnd: narration[supplierEndIndex]
+            });
+            
+            // Extract worth from "Worth: $X.XX"
+            const worthMatch = narration.match(/Worth:\s*\$\s*([\d.]+)/);
+            const worthAdjustment = worthMatch ? parseFloat(worthMatch[1]) : adjustment.amount;
+            
+            console.log('📊 Original Stock Data - Parsing adjustment:', {
+                transactionId,
+                narration: narration.substring(0, 150),
+                typeName,
+                supplierName,
+                worthAdjustment,
+                isIncrease
+            });
+            
+            console.log('📊 Original Stock Data - Looking for matches:', {
+                typeName,
+                supplierName,
+                worthAdjustment,
+                availableItems: Array.from(summary.values()).map(item => ({
+                    typeName: item.originalTypeName,
+                    supplierName: item.supplierName,
+                    supplierNameIncludes: item.supplierName.includes(supplierName),
+                    supplierNameEndsWith: item.supplierName.endsWith(supplierName)
+                }))
+            });
+            
+            // Find matching stock items
+            // Try exact match first
+            let matchingItems = Array.from(summary.values()).filter(item => 
+                item.originalTypeName === typeName && 
+                item.supplierName === supplierName
+            );
+            
+            // If no exact match, try partial match (supplier name might be nested)
+            if (matchingItems.length === 0) {
+                matchingItems = Array.from(summary.values()).filter(item => 
+                    item.originalTypeName === typeName && 
+                    (item.supplierName.includes(supplierName) || supplierName.includes(item.supplierName))
+                );
+            }
+            
+            console.log('📊 Original Stock Data - Matching items found:', matchingItems.length, matchingItems.map(item => ({
+                key: item.key,
+                typeName: item.originalTypeName,
+                supplierName: item.supplierName,
+                beforeWeight: item.weightInHand,
+                beforeWorth: item.worth
+            })));
+            
+            if (matchingItems.length > 0) {
+                matchingItems.forEach(item => {
+                    const beforeWeight = item.weightInHand;
+                    const beforeWorth = item.worth;
+                    
+                    if (isIncrease) {
+                        // Increase: add to stock
+                        if (adjustment.weight !== null && !isNaN(adjustment.weight)) {
+                            item.weightInHand += adjustment.weight;
+                        } else if (item.avgCostPerKg > 0) {
+                            const weightAdjustment = worthAdjustment / item.avgCostPerKg;
+                            item.weightInHand += weightAdjustment;
+                        }
+                        item.worth += worthAdjustment;
+                    } else {
+                        // Decrease: subtract from stock
+                        if (adjustment.weight !== null && !isNaN(adjustment.weight)) {
+                            item.weightInHand += adjustment.weight; // weight is already negative for decrease
+                        } else if (item.avgCostPerKg > 0) {
+                            const weightAdjustment = worthAdjustment / item.avgCostPerKg;
+                            item.weightInHand -= weightAdjustment;
+                        }
+                        item.worth -= worthAdjustment;
+                    }
+                    
+                    console.log('📊 Original Stock Data - Applied adjustment:', {
+                        key: item.key,
+                        beforeWeight,
+                        afterWeight: item.weightInHand,
+                        beforeWorth,
+                        afterWorth: item.worth,
+                        adjustmentWeight: adjustment.weight,
+                        adjustmentWorth: worthAdjustment
+                    });
+                });
+            } else {
+                console.warn('⚠️ Original Stock Data - No matching items found for adjustment:', {
+                    typeName,
+                    supplierName
+                });
+            }
+        });
+
+        // Recalculate worth only if not already adjusted (to preserve adjustment worth)
+        // Note: Adjustments already update worth, so we only recalc for items that weren't adjusted
         summary.forEach(item => {
+            // Only recalculate if worth is 0 or seems unadjusted (this is a heuristic)
+            // Actually, let's always recalculate based on weight to ensure consistency
+            // But adjustments should have already updated both weight and worth correctly
             item.worth = item.weightInHand * item.avgCostPerKg;
         });
 
+        // Return all items from summary (they were all purchased at some point)
+        // Don't filter by weight > 0 because adjustments may have reduced weight to 0 or negative
         return Array.from(summary.values())
-            .filter(item => item.weightInHand > 0 || item.avgCostPerKg > 0)
             .sort((a, b) => b.weightInHand - a.weightInHand);
-    }, [state.purchases, state.originalOpenings, state.salesInvoices, state.partners, state.originalTypes, state.originalProducts]);
+    }, [state.purchases, state.originalOpenings, state.salesInvoices, state.partners, state.originalTypes, state.originalProducts, state.ledger]);
 
     const payees = useMemo(() => {
         // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
@@ -665,9 +872,9 @@ export const Accounting: React.FC = () => {
             // Fallback: if no EXPENSE/EQUITY account found, find by name/code only (for backward compatibility)
             if (!adjustmentAccount) {
                 adjustmentAccount = state.accounts.find(a => 
-                    a.name.includes('Inventory Adjustment') || 
-                    a.name.includes('Write-off') ||
-                    a.code === '503'
+                a.name.includes('Inventory Adjustment') || 
+                a.name.includes('Write-off') ||
+                a.code === '503'
                 ) || undefined;
                 
                 if (adjustmentAccount && adjustmentAccount.type === AccountType.ASSET) {
@@ -887,12 +1094,22 @@ export const Accounting: React.FC = () => {
             // Original Stock Adjustment - Table-Based Design
             if (!iaoReason) return alert("Reason is required for original stock adjustment");
             
-            // Get adjustments with values
+            console.log('📊 IAO Voucher - Starting processing:', {
+                iaoReason,
+                totalAdjustments: Object.keys(iaoAdjustments).length,
+                adjustments: iaoAdjustments
+            });
+            
+            // Get adjustments with values - handle both string and number types
             const adjustmentsWithValues = Object.entries(iaoAdjustments).filter(([key, adj]) => {
-                const hasWeight = adj.adjustmentWeight !== '' && adj.adjustmentWeight !== 0;
-                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== 0;
+                const weight = adj.adjustmentWeight;
+                const worth = adj.adjustmentWorth;
+                const hasWeight = (weight !== '' && weight !== null && weight !== undefined && weight !== 0 && !isNaN(Number(weight)));
+                const hasWorth = (worth !== '' && worth !== null && worth !== undefined && worth !== 0 && !isNaN(Number(worth)));
                 return hasWeight || hasWorth;
             });
+            
+            console.log('📊 IAO Voucher - Adjustments with values:', adjustmentsWithValues.length, adjustmentsWithValues);
             
             if (adjustmentsWithValues.length === 0) {
                 return alert("Please enter adjustment weight or worth for at least one original stock item.");
@@ -911,6 +1128,11 @@ export const Accounting: React.FC = () => {
                 a.code === '503'
             );
             
+            console.log('📊 IAO Voucher - Account lookup:', {
+                inventoryAccount: inventoryAccount ? { id: inventoryAccount.id, name: inventoryAccount.name } : null,
+                adjustmentAccount: adjustmentAccount ? { id: adjustmentAccount.id, name: adjustmentAccount.name } : null
+            });
+            
             if (!inventoryAccount || !adjustmentAccount) {
                 const missingAccounts = [];
                 if (!inventoryAccount) missingAccounts.push('Inventory - Raw Materials (104 or 1201)');
@@ -918,29 +1140,87 @@ export const Accounting: React.FC = () => {
                 return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
             }
             
+            let processedCount = 0;
+            let skippedCount = 0;
+            const skippedReasons: string[] = [];
+            
             // Process each adjustment
             for (const [key, adj] of adjustmentsWithValues) {
-                // Parse key: supplierId-subSupplierId-originalTypeId[-productId]
-                const parts = key.split('-');
-                const supplierId = parts[0];
-                const subSupplierId = parts[1] !== 'none' ? parts[1] : undefined;
-                const originalTypeId = parts[2];
-                const originalProductId = parts.length > 3 ? parts[3] : undefined;
+                console.log(`📊 IAO Voucher - Processing key: ${key}`, {
+                    adjustmentWeight: adj.adjustmentWeight,
+                    adjustmentWorth: adj.adjustmentWorth,
+                    adjustmentWeightType: typeof adj.adjustmentWeight,
+                    adjustmentWorthType: typeof adj.adjustmentWorth
+                });
+                
+                // Look up the original stock data item by key to get the actual originalTypeId
+                // This avoids parsing issues when originalTypeId contains hyphens
+                const stockItem = originalStockData.find(item => item.key === key);
+                if (!stockItem) {
+                    const reason = `Original stock item not found for key: ${key}`;
+                    console.error(`❌ ${reason}`);
+                    skippedReasons.push(reason);
+                    skippedCount++;
+                    continue;
+                }
+                
+                // Use the actual data from the stock item instead of parsing the key
+                const supplierId = stockItem.supplierId;
+                const subSupplierId = stockItem.subSupplierId;
+                const originalTypeId = stockItem.originalTypeId;
+                const originalProductId = stockItem.originalProductId;
+                
+                console.log(`📊 IAO Voucher - Parsed key:`, {
+                    key,
+                    supplierId,
+                    subSupplierId,
+                    originalTypeId,
+                    originalProductId
+                });
                 
                 const originalType = state.originalTypes.find(ot => ot.id === originalTypeId);
                 const supplier = state.partners.find(p => p.id === supplierId);
                 const subSupplier = subSupplierId ? state.partners.find(p => p.id === subSupplierId) : undefined;
                 
-                if (!originalType || !supplier) continue;
+                if (!originalType) {
+                    const reason = `Original Type not found for ID: ${originalTypeId} (Key: ${key}). Available types: ${state.originalTypes.map(ot => ot.id).slice(0, 5).join(', ')}`;
+                    console.error(`❌ ${reason}`);
+                    skippedReasons.push(reason);
+                    skippedCount++;
+                    continue;
+                }
                 
-                const adjustmentWeight = adj.adjustmentWeight !== '' ? parseFloat(String(adj.adjustmentWeight)) : 0;
-                const adjustmentWorth = adj.adjustmentWorth !== '' ? parseFloat(String(adj.adjustmentWorth)) : 0;
+                if (!supplier) {
+                    const reason = `Supplier not found for ID: ${supplierId} (Key: ${key}). Available suppliers: ${state.partners.filter(p => p.type === 'SUPPLIER' || p.type === 'VENDOR').map(p => p.id).slice(0, 5).join(', ')}`;
+                    console.error(`❌ ${reason}`);
+                    skippedReasons.push(reason);
+                    skippedCount++;
+                    continue;
+                }
+                
+                const adjustmentWeight = (adj.adjustmentWeight !== '' && adj.adjustmentWeight !== null && adj.adjustmentWeight !== undefined) 
+                    ? parseFloat(String(adj.adjustmentWeight)) 
+                    : 0;
+                const adjustmentWorth = (adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined) 
+                    ? parseFloat(String(adj.adjustmentWorth)) 
+                    : 0;
+                
+                console.log(`📊 IAO Voucher - Parsed values:`, {
+                    key,
+                    rawWeight: adj.adjustmentWeight,
+                    rawWorth: adj.adjustmentWorth,
+                    parsedWeight: adjustmentWeight,
+                    parsedWorth: adjustmentWorth,
+                    weightIsNaN: isNaN(adjustmentWeight),
+                    worthIsNaN: isNaN(adjustmentWorth)
+                });
                 
                 // Determine adjustment value: use worth if provided, otherwise calculate from weight * avgCost
                 let adjustmentValue = 0;
-                if (adjustmentWorth !== 0) {
+                if (adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
                     adjustmentValue = Math.abs(adjustmentWorth);
-                } else if (adjustmentWeight !== 0) {
+                    console.log(`📊 IAO Voucher - Using worth: ${adjustmentWorth} -> ${adjustmentValue}`);
+                } else if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
                     // Calculate average cost from purchases for this original type
                     const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
                     let totalWeight = 0;
@@ -965,8 +1245,22 @@ export const Accounting: React.FC = () => {
                     
                     const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
                     adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
+                    console.log(`📊 IAO Voucher - Calculated from weight: ${adjustmentWeight} * ${avgCostPerKg} = ${adjustmentValue}`);
                 } else {
+                    const reason = `Both weight and worth are 0 or invalid for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth})`;
+                    console.error(`❌ ${reason}`);
+                    skippedReasons.push(reason);
+                    skippedCount++;
                     continue; // Skip if both are 0
+                }
+                
+                // Validate adjustmentValue
+                if (adjustmentValue === 0 || isNaN(adjustmentValue)) {
+                    const reason = `Invalid adjustment value (${adjustmentValue}) for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth})`;
+                    console.error(`❌ ${reason}`);
+                    skippedReasons.push(reason);
+                    skippedCount++;
+                    continue;
                 }
                 
                 // Determine if increase or decrease based on sign
@@ -977,6 +1271,16 @@ export const Accounting: React.FC = () => {
                     : originalType.name;
                 const supplierName = subSupplier ? `${supplier.name} / ${subSupplier.name}` : supplier.name;
                 
+                console.log(`📊 IAO Voucher - Processing adjustment:`, {
+                    key,
+                    displayName,
+                    supplierName,
+                    adjustmentWeight,
+                    adjustmentWorth,
+                    adjustmentValue,
+                    isIncrease
+                });
+                
                 if (isIncrease) {
                     entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                     entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
@@ -984,7 +1288,45 @@ export const Accounting: React.FC = () => {
                     entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                     entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                 }
+                
+                processedCount++;
             }
+            
+            console.log('📊 IAO Voucher - Processing complete:', {
+                processedCount,
+                skippedCount,
+                skippedReasons: skippedReasons,
+                totalEntries: entries.length,
+                allAdjustmentsWithValues: adjustmentsWithValues.map(([key, adj]) => ({
+                    key,
+                    adjustmentWeight: adj.adjustmentWeight,
+                    adjustmentWorth: adj.adjustmentWorth
+                }))
+            });
+            
+            if (entries.length === 0) {
+                const errorMsg = skippedReasons.length > 0 
+                    ? `No valid adjustments to process.\n\nSkipped reasons:\n${skippedReasons.join('\n')}`
+                    : 'No valid adjustments to process. Please check your adjustment values.';
+                console.error('❌ IAO Voucher - No entries created:', errorMsg);
+                alert(errorMsg);
+                return;
+            }
+            
+            // Log entries before posting
+            console.log('📊 IAO Voucher - Entries to post:', {
+                count: entries.length,
+                entries: entries.map(e => ({
+                    accountId: e.accountId,
+                    accountName: e.accountName,
+                    debit: e.debit,
+                    credit: e.credit,
+                    transactionId: e.transactionId,
+                    narration: e.narration
+                })),
+                totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
+                totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
+            });
         } else if (vType === 'RTS') {
             // Return to Supplier
             if (!rtsSupplierId || !rtsItemId || !rtsQty || parseFloat(rtsQty) <= 0) return alert("Select supplier, item and enter valid quantity");
@@ -1149,7 +1491,23 @@ export const Accounting: React.FC = () => {
             }
         }
         
+        // Log before posting
+        console.log('📊 About to post transaction:', {
+            vType,
+            entriesCount: entries.length,
+            voucherNo,
+            totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
+            totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
+        });
+        
+        try {
         await postTransaction(entries);
+            console.log('✅ Transaction posted successfully:', voucherNo);
+        } catch (error: any) {
+            console.error('❌ Error posting transaction:', error);
+            alert(`Failed to post transaction: ${error?.message || error}`);
+            return;
+        }
         
         // Update item stocks in Firestore if this was an IA voucher
         if (pendingItemUpdates) {
@@ -1161,8 +1519,14 @@ export const Accounting: React.FC = () => {
         // For IA vouchers, add reminder about Balance Sheet
         if (vType === 'IA') {
             alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}\n\n✅ Ledger entries created.\n✅ Item stock and costs updated.\n\n💡 Please refresh the Balance Sheet page to see the changes.`);
+        } else if (vType === 'IAO') {
+            console.log(`✅ IAO Voucher ${voucherNo} posted successfully with ${entries.length} ledger entries`);
+            alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}\n\n✅ Ledger entries created for Original Stock Adjustment.\n\n💡 Please refresh the Balance Sheet page to see the changes.`);
+            // Clear IAO adjustments after successful posting
+            setIaoAdjustments({});
+            setIaoReason('');
         } else {
-            alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
+        alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
         }
         
         // Clear edit state if it was set (should already be cleared, but just in case)
@@ -1819,6 +2183,7 @@ export const Accounting: React.FC = () => {
                         {/* New Transaction Type Forms */}
                         {vType === 'IA' && (() => {
                             // Filter finished goods items
+                            // Note: Using regular filter/sort instead of useMemo to avoid hooks in conditional
                             let filteredItems = state.items.filter(item => {
                                 const matchesCode = !iaFilterCode || item.code === iaFilterCode;
                                 const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
@@ -1826,18 +2191,6 @@ export const Accounting: React.FC = () => {
                                 const matchesName = !iaFilterItemName || item.name === iaFilterItemName;
                                 return matchesCode && matchesCategory && matchesName;
                             });
-                            
-                            // Handle column sorting
-                            const handleSort = (column: string) => {
-                                if (iaSortColumn === column) {
-                                    // Toggle direction if same column
-                                    setIaSortDirection(iaSortDirection === 'asc' ? 'desc' : 'asc');
-                                } else {
-                                    // New column, default to ascending
-                                    setIaSortColumn(column);
-                                    setIaSortDirection('asc');
-                                }
-                            };
                             
                             // Apply sorting
                             if (iaSortColumn) {
@@ -1887,6 +2240,19 @@ export const Accounting: React.FC = () => {
                                 });
                             }
 
+                            // Handle column sorting
+                            const handleSort = (column: string) => {
+                                if (iaSortColumn === column) {
+                                    // Toggle direction if same column
+                                    setIaSortDirection(iaSortDirection === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                    // New column, default to ascending
+                                    setIaSortColumn(column);
+                                    setIaSortDirection('asc');
+                                }
+                            };
+                            
+                            // Update item adjustment function
                             const updateItemAdjustment = (itemId: string, field: 'adjustmentQty' | 'adjustmentWorth', value: string) => {
                                 try {
                                     // Clean the value - remove any invalid characters
@@ -2473,6 +2839,7 @@ export const Accounting: React.FC = () => {
 
                         {vType === 'IAO' && (() => {
                             // Filter original stock data based on filters
+                            // Note: Using regular filter instead of useMemo to avoid hooks in conditional
                             const filteredOriginalStockData = originalStockData.filter(item => {
                                 const matchesCode = !iaoFilterCode || item.originalTypeName.toLowerCase().includes(iaoFilterCode.toLowerCase());
                                 const matchesType = !iaoFilterOriginalType || item.originalTypeName.toLowerCase().includes(iaoFilterOriginalType.toLowerCase());
@@ -2480,6 +2847,7 @@ export const Accounting: React.FC = () => {
                                 return matchesCode && matchesType && matchesSupplier;
                             });
 
+                            // Update original adjustment function
                             const updateOriginalAdjustment = (key: string, field: 'adjustmentWeight' | 'adjustmentWorth', value: string) => {
                                 setIaoAdjustments(prev => ({
                                     ...prev,
@@ -2496,6 +2864,184 @@ export const Accounting: React.FC = () => {
                                     <h3 className="text-lg font-bold text-purple-900 flex items-center gap-2">
                                         <ShoppingBag size={20} /> Original Stock Adjustment
                                     </h3>
+                                    
+                                    {/* CSV Upload Section */}
+                                    {(() => {
+                                        // CSV Upload Handler for Original Stock Adjustment
+                                        const handleOriginalStockAdjustmentCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+
+                                            Papa.parse(file, {
+                                                header: true,
+                                                skipEmptyLines: true,
+                                                complete: (results) => {
+                                                    const errors: string[] = [];
+                                                    const newAdjustments: Record<string, { key: string; adjustmentWeight: number | ''; adjustmentWorth: number | '' }> = { ...iaoAdjustments };
+                                                    let successCount = 0;
+                                                    const warnings: string[] = [];
+
+                                                    for (let idx = 0; idx < results.data.length; idx++) {
+                                                        const row = results.data[idx] as any;
+                                                        
+                                                        // Validate required columns
+                                                        if (!row['Code'] || row['Code'].trim() === '') {
+                                                            errors.push(`Row ${idx + 2}: Missing Code`);
+                                                            continue;
+                                                        }
+
+                                                        const code = row['Code'].trim();
+                                                        
+                                                        // Find matching entries by originalTypeId (Code)
+                                                        const matchingItems = originalStockData.filter(item => item.originalTypeId === code);
+                                                        
+                                                        if (matchingItems.length === 0) {
+                                                            errors.push(`Row ${idx + 2}: No original stock entry found with Code "${code}"`);
+                                                            continue;
+                                                        }
+
+                                                        if (matchingItems.length > 1) {
+                                                            warnings.push(`Row ${idx + 2}: Code "${code}" matches ${matchingItems.length} entries. All will be updated.`);
+                                                        }
+
+                                                        // Parse Current Weight (Kg)
+                                                        const csvCurrentWeight = row['Kg'] !== undefined && row['Kg'] !== '' 
+                                                            ? parseFloat(String(row['Kg']).trim()) 
+                                                            : null;
+                                                        
+                                                        // Parse Current Worth (value)
+                                                        const csvCurrentWorth = row['Worth'] !== undefined && row['Worth'] !== '' 
+                                                            ? parseFloat(String(row['Worth']).trim()) 
+                                                            : null;
+
+                                                        if (csvCurrentWeight === null && csvCurrentWorth === null) {
+                                                            errors.push(`Row ${idx + 2}: Both "Kg" and "Worth" are missing. At least one is required.`);
+                                                            continue;
+                                                        }
+
+                                                        // Update all matching entries
+                                                        matchingItems.forEach(item => {
+                                                            // Get system's current values
+                                                            const systemCurrentWeight = item.weightInHand || 0;
+                                                            const systemCurrentWorth = item.worth || 0;
+
+                                                            // Calculate adjustments
+                                                            let adjustmentWeight: number | '' = '';
+                                                            let adjustmentWorth: number | '' = '';
+
+                                                            if (csvCurrentWeight !== null) {
+                                                                // Calculate weight adjustment
+                                                                adjustmentWeight = csvCurrentWeight - systemCurrentWeight;
+                                                            }
+
+                                                            if (csvCurrentWorth !== null) {
+                                                                // Calculate worth adjustment
+                                                                adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
+                                                            } else if (csvCurrentWeight !== null && item.avgCostPerKg) {
+                                                                // If only weight provided, calculate worth adjustment based on current avgCostPerKg
+                                                                adjustmentWorth = adjustmentWeight * item.avgCostPerKg;
+                                                            }
+
+                                                            // Update adjustments
+                                                            newAdjustments[item.key] = {
+                                                                key: item.key,
+                                                                adjustmentWeight: adjustmentWeight !== 0 ? adjustmentWeight : '',
+                                                                adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                                                            };
+                                                        });
+
+                                                        successCount++;
+                                                    }
+
+                                                    // Update state with new adjustments
+                                                    setIaoAdjustments(newAdjustments);
+
+                                                    // Show results
+                                                    let message = '';
+                                                    if (successCount > 0) {
+                                                        message += `✅ Successfully processed: ${successCount} row(s)\n`;
+                                                    }
+                                                    if (warnings.length > 0) {
+                                                        message += `\n⚠️ Warnings: ${warnings.length}\n${warnings.slice(0, 5).join('\n')}${warnings.length > 5 ? `\n... and ${warnings.length - 5} more` : ''}\n`;
+                                                    }
+                                                    if (errors.length > 0) {
+                                                        message += `\n❌ Errors: ${errors.length}\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`;
+                                                    }
+
+                                                    if (errors.length > 0 || warnings.length > 0) {
+                                                        alert(`CSV Upload Complete:\n\n${message}`);
+                                                    } else {
+                                                        alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} row(s).\nAdjustments have been calculated and populated in the table below.`);
+                                                    }
+
+                                                    // Reset file input
+                                                    e.target.value = '';
+                                                },
+                                                error: (error) => {
+                                                    alert(`❌ Error parsing CSV: ${error.message}`);
+                                                }
+                                            });
+                                        };
+
+                                        // Download CSV Template for Original Stock Adjustment
+                                        const downloadOriginalStockAdjustmentTemplate = () => {
+                                            // Get unique codes from originalStockData
+                                            const uniqueCodes = Array.from(new Set(originalStockData.map(item => item.originalTypeId))).slice(0, 5);
+                                            
+                                            const template = [
+                                                ['Code', 'Kg', 'Worth'],
+                                                ...uniqueCodes.map(code => {
+                                                    const sampleItem = originalStockData.find(item => item.originalTypeId === code);
+                                                    return [
+                                                        code,
+                                                        sampleItem ? (sampleItem.weightInHand || 0).toFixed(2) : '0.00',
+                                                        sampleItem ? (sampleItem.worth || 0).toFixed(2) : '0.00'
+                                                    ];
+                                                })
+                                            ];
+
+                                            const csvContent = template.map(row => row.join(',')).join('\n');
+                                            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                            const link = document.createElement('a');
+                                            const url = URL.createObjectURL(blob);
+                                            link.setAttribute('href', url);
+                                            link.setAttribute('download', 'Original_Stock_Adjustment_Template.csv');
+                                            link.style.visibility = 'hidden';
+                                            document.body.appendChild(link);
+                                            link.click();
+                                            document.body.removeChild(link);
+                                        };
+
+                                        return (
+                                            <div className="bg-white border-2 border-purple-300 rounded-lg p-4 shadow-sm">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <h4 className="font-bold text-slate-700 flex items-center gap-2">
+                                                        <Upload size={18} className="text-purple-600" /> Upload CSV for Bulk Adjustment
+                                                    </h4>
+                                                    <button
+                                                        onClick={downloadOriginalStockAdjustmentTemplate}
+                                                        className="text-xs text-purple-600 hover:text-purple-800 font-semibold flex items-center gap-1"
+                                                    >
+                                                        <FileText size={14} /> Download Template
+                                                    </button>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <p className="text-xs text-slate-600">
+                                                        Upload a CSV file with columns: <strong>Code</strong>, <strong>Kg</strong>, <strong>Worth</strong>
+                                                    </p>
+                                                    <p className="text-xs text-slate-500">
+                                                        The system will calculate adjustments by comparing CSV values with current system values. If a Code matches multiple entries (different suppliers), all matching entries will be updated.
+                                                    </p>
+                                                    <input
+                                                        type="file"
+                                                        accept=".csv"
+                                                        onChange={handleOriginalStockAdjustmentCSVUpload}
+                                                        className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                                    />
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                     
                                     {/* Filters */}
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg border border-slate-200">
@@ -2563,6 +3109,14 @@ export const Accounting: React.FC = () => {
                                                     {filteredOriginalStockData.map(item => {
                                                         const adjustment = iaoAdjustments[item.key] || { key: item.key, adjustmentWeight: '', adjustmentWorth: '' };
                                                         
+                                                        // Ensure values are always strings for controlled inputs
+                                                        const adjustmentWeightValue = adjustment.adjustmentWeight !== '' && adjustment.adjustmentWeight !== null && adjustment.adjustmentWeight !== undefined 
+                                                            ? String(adjustment.adjustmentWeight) 
+                                                            : '';
+                                                        const adjustmentWorthValue = adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined 
+                                                            ? String(adjustment.adjustmentWorth) 
+                                                            : '';
+                                                        
                                                         return (
                                                             <tr key={item.key} className="hover:bg-slate-50">
                                                                 <td className="px-4 py-3 font-mono text-slate-700">{item.originalTypeId}</td>
@@ -2579,7 +3133,7 @@ export const Accounting: React.FC = () => {
                                                                         type="number" 
                                                                         step="0.01"
                                                                         className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                        value={adjustment.adjustmentWeight} 
+                                                                        value={adjustmentWeightValue} 
                                                                         onChange={e => updateOriginalAdjustment(item.key, 'adjustmentWeight', e.target.value)}
                                                                         placeholder="0.00"
                                                                     />
@@ -2589,7 +3143,7 @@ export const Accounting: React.FC = () => {
                                                                         type="number" 
                                                                         step="0.01"
                                                                         className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                        value={adjustment.adjustmentWorth} 
+                                                                        value={adjustmentWorthValue} 
                                                                         onChange={e => updateOriginalAdjustment(item.key, 'adjustmentWorth', e.target.value)}
                                                                         placeholder="0.00"
                                                                     />
@@ -2702,6 +3256,312 @@ export const Accounting: React.FC = () => {
                                 <h3 className="text-lg font-bold text-teal-900 flex items-center gap-2">
                                     <Scale size={20} /> Balancing Discrepancy
                                 </h3>
+                                
+                                {/* CSV Upload Section */}
+                                {(() => {
+                                    // CSV Upload Handler for Balance Discrepancy
+                                    const handleBalanceDiscrepancyCSVUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+
+                                        // Check for discrepancy account first
+                                        const discrepancyAccount = state.accounts.find(a => 
+                                            a.name.includes('Discrepancy') || 
+                                            a.name.includes('Suspense') ||
+                                            a.name.includes('Balancing Discrepancy') ||
+                                            a.code === '505'
+                                        );
+                                        
+                                        if (!discrepancyAccount) {
+                                            alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: LIABILITY\n- Opening Balance: 0');
+                                            e.target.value = '';
+                                            return;
+                                        }
+
+                                        Papa.parse(file, {
+                                            header: true,
+                                            skipEmptyLines: true,
+                                            complete: async (results) => {
+                                                const errors: string[] = [];
+                                                const warnings: string[] = [];
+                                                let successCount = 0;
+                                                let processedCount = 0;
+                                                const totalRows = results.data.length;
+
+                                                // Process each row and create transactions
+                                                for (let idx = 0; idx < results.data.length; idx++) {
+                                                    const row = results.data[idx] as any;
+                                                    
+                                                    // Validate required columns
+                                                    if (!row['Code'] || row['Code'].trim() === '') {
+                                                        errors.push(`Row ${idx + 2}: Missing Code`);
+                                                        continue;
+                                                    }
+
+                                                    const code = row['Code'].trim();
+                                                    
+                                                    // Parse Current Balance
+                                                    if (row['Current Balance'] === undefined || row['Current Balance'] === '' || row['Current Balance'] === null) {
+                                                        errors.push(`Row ${idx + 2}: Missing Current Balance for Code "${code}"`);
+                                                        continue;
+                                                    }
+
+                                                    const csvCurrentBalance = parseFloat(String(row['Current Balance']).trim());
+                                                    if (isNaN(csvCurrentBalance)) {
+                                                        errors.push(`Row ${idx + 2}: Invalid Current Balance for Code "${code}"`);
+                                                        continue;
+                                                    }
+
+                                                    // Find account or partner by code
+                                                    const account = state.accounts.find(a => a.code === code);
+                                                    const partner = state.partners.find(p => p.code === code);
+                                                    
+                                                    if (!account && !partner) {
+                                                        errors.push(`Row ${idx + 2}: No account or partner found with Code "${code}"`);
+                                                        continue;
+                                                    }
+
+                                                    const entityId = account ? account.id : partner!.id;
+                                                    const entityName = account ? account.name : partner!.name;
+                                                    
+                                                    // Calculate current system balance
+                                                    const accountEntries = state.ledger.filter((e: any) => e.accountId === entityId);
+                                                    const debitSum = accountEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                                    const creditSum = accountEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                                    
+                                                    let systemBalance = 0;
+                                                    
+                                                    if (account) {
+                                                        // Account balance calculation
+                                                        if ([AccountType.ASSET, AccountType.EXPENSE].includes(account.type)) {
+                                                            systemBalance = debitSum - creditSum;
+                                                        } else {
+                                                            systemBalance = creditSum - debitSum;
+                                                        }
+                                                    } else if (partner) {
+                                                        // Partner balance calculation
+                                                        if (partner.type === PartnerType.CUSTOMER) {
+                                                            // Customers: debit increases balance (they owe us) - positive
+                                                            systemBalance = debitSum - creditSum;
+                                                        } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                                            // Suppliers/agents: credit increases liability (we owe them) - negative
+                                                            systemBalance = creditSum - debitSum;
+                                                        } else {
+                                                            systemBalance = debitSum - creditSum;
+                                                        }
+                                                    }
+
+                                                    // Calculate adjustment needed
+                                                    const adjustmentNeeded = csvCurrentBalance - systemBalance;
+                                                    
+                                                    // Skip if no adjustment needed (within 0.01 tolerance)
+                                                    if (Math.abs(adjustmentNeeded) < 0.01) {
+                                                        warnings.push(`Row ${idx + 2}: Code "${code}" already at target balance (${csvCurrentBalance.toFixed(2)})`);
+                                                        continue;
+                                                    }
+
+                                                    // Determine adjustment type
+                                                    const isIncrease = adjustmentNeeded > 0;
+                                                    const adjustmentAmount = Math.abs(adjustmentNeeded);
+                                                    
+                                                    // Generate voucher number
+                                                    const bdDate = new Date().toISOString().split('T')[0];
+                                                    const timestamp = Date.now();
+                                                    const randomSuffix = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+                                                    const voucherNo = `BD-${bdDate.replace(/-/g, '')}-${timestamp}-${randomSuffix}`;
+                                                    
+                                                    // Create balanced entries
+                                                    const entries: Omit<LedgerEntry, 'id'>[] = [];
+                                                    const currency: Currency = 'USD';
+                                                    const exchangeRate = 1;
+                                                    const fcyAmount = adjustmentAmount;
+                                                    const baseAmount = adjustmentAmount;
+                                                    const reason = `CSV Bulk Adjustment: Target Balance ${csvCurrentBalance.toFixed(2)}, System Balance ${systemBalance.toFixed(2)}`;
+
+                                                    if (isIncrease) {
+                                                        // Increase: Debit account/partner, Credit discrepancy account
+                                                        entries.push({ 
+                                                            date: bdDate, 
+                                                            transactionId: voucherNo, 
+                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                            accountId: entityId, 
+                                                            accountName: entityName, 
+                                                            currency, 
+                                                            exchangeRate, 
+                                                            fcyAmount, 
+                                                            debit: baseAmount, 
+                                                            credit: 0, 
+                                                            narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                            factoryId: state.currentFactory?.id || '' 
+                                                        });
+                                                        entries.push({ 
+                                                            date: bdDate, 
+                                                            transactionId: voucherNo, 
+                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                            accountId: discrepancyAccount.id, 
+                                                            accountName: discrepancyAccount.name, 
+                                                            currency, 
+                                                            exchangeRate, 
+                                                            fcyAmount, 
+                                                            debit: 0, 
+                                                            credit: baseAmount, 
+                                                            narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                            factoryId: state.currentFactory?.id || '' 
+                                                        });
+                                                    } else {
+                                                        // Decrease: Credit account/partner, Debit discrepancy account
+                                                        entries.push({ 
+                                                            date: bdDate, 
+                                                            transactionId: voucherNo, 
+                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                            accountId: entityId, 
+                                                            accountName: entityName, 
+                                                            currency, 
+                                                            exchangeRate, 
+                                                            fcyAmount, 
+                                                            debit: 0, 
+                                                            credit: baseAmount, 
+                                                            narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                            factoryId: state.currentFactory?.id || '' 
+                                                        });
+                                                        entries.push({ 
+                                                            date: bdDate, 
+                                                            transactionId: voucherNo, 
+                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                            accountId: discrepancyAccount.id, 
+                                                            accountName: discrepancyAccount.name, 
+                                                            currency, 
+                                                            exchangeRate, 
+                                                            fcyAmount, 
+                                                            debit: baseAmount, 
+                                                            credit: 0, 
+                                                            narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                            factoryId: state.currentFactory?.id || '' 
+                                                        });
+                                                    }
+
+                                                    // Post transaction
+                                                    try {
+                                                        await postTransaction(entries);
+                                                        successCount++;
+                                                        processedCount++;
+                                                        
+                                                        // Show progress for large files
+                                                        if (totalRows > 10 && processedCount % 10 === 0) {
+                                                            console.log(`Processed ${processedCount}/${totalRows} rows...`);
+                                                        }
+                                                    } catch (error: any) {
+                                                        errors.push(`Row ${idx + 2}: Failed to post adjustment for Code "${code}": ${error.message || 'Unknown error'}`);
+                                                    }
+                                                }
+
+                                                // Show results
+                                                let message = '';
+                                                if (successCount > 0) {
+                                                    message += `✅ Successfully processed: ${successCount} account(s)\n`;
+                                                }
+                                                if (warnings.length > 0) {
+                                                    message += `\n⚠️ Warnings: ${warnings.length}\n${warnings.slice(0, 5).join('\n')}${warnings.length > 5 ? `\n... and ${warnings.length - 5} more` : ''}\n`;
+                                                }
+                                                if (errors.length > 0) {
+                                                    message += `\n❌ Errors: ${errors.length}\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`;
+                                                }
+
+                                                if (errors.length > 0 || warnings.length > 0) {
+                                                    alert(`CSV Upload Complete:\n\n${message}`);
+                                                } else {
+                                                    alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} account(s).\nAll balance adjustments have been posted to the ledger.`);
+                                                }
+
+                                                // Reset file input
+                                                e.target.value = '';
+                                            },
+                                            error: (error) => {
+                                                alert(`❌ Error parsing CSV: ${error.message}`);
+                                                e.target.value = '';
+                                            }
+                                        });
+                                    };
+
+                                    // Download CSV Template for Balance Discrepancy
+                                    const downloadBalanceDiscrepancyTemplate = () => {
+                                        // Get sample accounts and partners
+                                        const sampleAccounts = state.accounts.slice(0, 5).map(acc => {
+                                            const accountEntries = state.ledger.filter((e: any) => e.accountId === acc.id);
+                                            const debitSum = accountEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                            const creditSum = accountEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                            let balance = 0;
+                                            if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                                                balance = debitSum - creditSum;
+                                            } else {
+                                                balance = creditSum - debitSum;
+                                            }
+                                            return [acc.code || '', balance.toFixed(2)];
+                                        });
+                                        
+                                        const samplePartners = state.partners.slice(0, 3).map(partner => {
+                                            const accountEntries = state.ledger.filter((e: any) => e.accountId === partner.id);
+                                            const debitSum = accountEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                            const creditSum = accountEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                            let balance = 0;
+                                            if (partner.type === PartnerType.CUSTOMER) {
+                                                balance = debitSum - creditSum;
+                                            } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                                balance = creditSum - debitSum;
+                                            } else {
+                                                balance = debitSum - creditSum;
+                                            }
+                                            return [partner.code || '', balance.toFixed(2)];
+                                        });
+
+                                        const template = [
+                                            ['Code', 'Current Balance'],
+                                            ...sampleAccounts,
+                                            ...samplePartners
+                                        ];
+
+                                        const csvContent = template.map(row => row.join(',')).join('\n');
+                                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                        const link = document.createElement('a');
+                                        const url = URL.createObjectURL(blob);
+                                        link.setAttribute('href', url);
+                                        link.setAttribute('download', 'Balance_Discrepancy_Template.csv');
+                                        link.style.visibility = 'hidden';
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                    };
+
+                                    return (
+                                        <div className="bg-white border-2 border-teal-300 rounded-lg p-4 shadow-sm">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h4 className="font-bold text-slate-700 flex items-center gap-2">
+                                                    <Upload size={18} className="text-teal-600" /> Upload CSV for Bulk Balance Adjustment
+                                                </h4>
+                                                <button
+                                                    onClick={downloadBalanceDiscrepancyTemplate}
+                                                    className="text-xs text-teal-600 hover:text-teal-800 font-semibold flex items-center gap-1"
+                                                >
+                                                    <FileText size={14} /> Download Template
+                                                </button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <p className="text-xs text-slate-600">
+                                                    Upload a CSV file with columns: <strong>Code</strong>, <strong>Current Balance</strong>
+                                                </p>
+                                                <p className="text-xs text-slate-500">
+                                                    The system will calculate adjustments by comparing CSV "Current Balance" with system balance and create proper debit/credit entries to balance the Balance Sheet. Each row will be posted as a separate transaction.
+                                                </p>
+                                                <input
+                                                    type="file"
+                                                    accept=".csv"
+                                                    onChange={handleBalanceDiscrepancyCSVUpload}
+                                                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                                 
                                 {/* Account/Partner Balance Display */}
                                 {(() => {
