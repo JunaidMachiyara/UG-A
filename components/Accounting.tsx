@@ -9,7 +9,7 @@ import { db } from '../services/firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import Papa from 'papaparse';
 
-type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD';
+type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD' | 'MJV';
 
 interface JvRow {
     id: string;
@@ -108,6 +108,15 @@ export const Accounting: React.FC = () => {
     const [iaoFilterCode, setIaoFilterCode] = useState('');
     const [iaoFilterOriginalType, setIaoFilterOriginalType] = useState('');
     const [iaoFilterSupplier, setIaoFilterSupplier] = useState('');
+    
+    // NEW SIMPLE ORIGINAL STOCK ADJUSTMENT - Target Values Approach
+    interface OriginalStockTarget {
+        key: string;
+        targetWeight: number | '';
+        targetWorth: number | '';
+    }
+    const [iaoTargets, setIaoTargets] = useState<Record<string, OriginalStockTarget>>({});
+    const [useSimpleMode, setUseSimpleMode] = useState(true); // Toggle between old and new mode
 
     const [rtsSupplierId, setRtsSupplierId] = useState(''); // Return to Supplier
     const [rtsItemId, setRtsItemId] = useState('');
@@ -120,6 +129,14 @@ export const Accounting: React.FC = () => {
     const [bdAccountId, setBdAccountId] = useState(''); // Balancing Discrepancy
     const [bdAdjustmentType, setBdAdjustmentType] = useState<'INCREASE' | 'DECREASE'>('INCREASE');
     const [bdReason, setBdReason] = useState('');
+
+    // Manual JV Entry Utility for Original Stock Adjustment
+    const [mjvProductId, setMjvProductId] = useState('');
+    const [mjvTypeId, setMjvTypeId] = useState('');
+    const [mjvSupplierId, setMjvSupplierId] = useState('');
+    const [mjvWeight, setMjvWeight] = useState('');
+    const [mjvWorth, setMjvWorth] = useState('');
+    const [mjvReason, setMjvReason] = useState('Manual Adjustment');
 
     // --- Ledger Filtering State ---
     const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -328,7 +345,18 @@ export const Accounting: React.FC = () => {
             narration: adj.narration.substring(0, 100)
         })));
 
-        // Apply each adjustment to matching stock items
+        // Track which items have been adjusted so we don't overwrite their worth
+        const adjustedItemKeys = new Set<string>();
+        
+        // Calculate NET adjustments per item (sum all adjustments for each item)
+        // This prevents sequential application from overwriting values
+        const netAdjustmentsByItem = new Map<string, { weight: number; worth: number }>();
+        
+        // Track "set to zero" adjustments separately - these override the final value to be exactly 0
+        const setToZeroAdjustments = new Map<string, { transactionId: string; typeName: string; supplierName: string; targetWeight: number; targetWorth: number }>();
+        const targetModeAdjustments = new Map<string, { transactionId: string; typeName: string; supplierName: string; targetWeight: number | null; targetWorth: number | null }>();
+        
+        // First pass: Calculate net adjustments for each item
         adjustmentTransactions.forEach((adjustment, transactionId) => {
             const narration = adjustment.narration;
             // Parse narration: "Original Stock Increase/Decrease: {typeName} ({supplierName}) (Weight: {weight} kg, Worth: ${value}) - {reason}"
@@ -399,9 +427,67 @@ export const Accounting: React.FC = () => {
                 charAtSupplierEnd: narration[supplierEndIndex]
             });
             
-            // Extract worth from "Worth: $X.XX"
-            const worthMatch = narration.match(/Worth:\s*\$\s*([\d.]+)/);
-            const worthAdjustment = worthMatch ? parseFloat(worthMatch[1]) : adjustment.amount;
+            // Check if this is a zero-worth adjustment (user explicitly set worth to 0)
+            const isZeroWorthAdjustment = narration.includes('[Zero-Worth Adjustment: Stock worth set to $0.00]');
+            
+            // Check if this is a "set to zero" adjustment (both weight and worth set to 0)
+            const isSetToZeroAdjustment = narration.includes('[SET-TO-ZERO:');
+            
+            // Extract target values from narration if available (for target mode adjustments)
+            // Look for pattern: (Target Weight: X.XX kg) (Target Worth: $Y.YY)
+            let targetWeight: number | null = null;
+            let targetWorth: number | null = null;
+            const targetWeightMatch = narration.match(/\(Target Weight:\s*([\d.-]+)\s*kg\)/);
+            const targetWorthMatch = narration.match(/\(Target Worth:\s*\$\s*([\d.-]+)\)/);
+            
+            if (targetWeightMatch) {
+                const parsed = parseFloat(targetWeightMatch[1]);
+                targetWeight = isNaN(parsed) ? null : parsed;
+            }
+            if (targetWorthMatch) {
+                const parsed = parseFloat(targetWorthMatch[1]);
+                targetWorth = isNaN(parsed) ? null : parsed;
+                // Explicitly handle 0 - it's a valid target value
+                if (parsed === 0) {
+                    targetWorth = 0;
+                }
+            }
+            
+            // If this is a SET-TO-ZERO adjustment, ensure we have target values
+            if (isSetToZeroAdjustment) {
+                // Also try to extract from SET-TO-ZERO marker format: [SET-TO-ZERO: Target Weight=X kg, Target Worth=$Y]
+                const setToZeroWeightMatch = narration.match(/\[SET-TO-ZERO: Target Weight=([\d.-]+)\s*kg/);
+                const setToZeroWorthMatch = narration.match(/\[SET-TO-ZERO:.*Target Worth=\$\s*([\d.-]+)\]/);
+                if (setToZeroWeightMatch && targetWeight === null) {
+                    targetWeight = parseFloat(setToZeroWeightMatch[1]);
+                }
+                if (setToZeroWorthMatch && targetWorth === null) {
+                    targetWorth = parseFloat(setToZeroWorthMatch[1]);
+                }
+                console.log('📊 Original Stock Data - SET-TO-ZERO adjustment detected:', {
+                    transactionId,
+                    targetWeight,
+                    targetWorth
+                });
+            } else if (targetWeight !== null || targetWorth !== null) {
+                // Regular target mode adjustment (not set to zero)
+                console.log('📊 Original Stock Data - Target mode adjustment detected:', {
+                    transactionId,
+                    targetWeight,
+                    targetWorth
+                });
+            }
+            
+            // Extract worth from "Worth: $X.XX" or use 0 if it's a zero-worth adjustment
+            let worthAdjustment = 0;
+            if (isZeroWorthAdjustment || isSetToZeroAdjustment) {
+                // User explicitly set worth to 0 - use 0 regardless of ledger value
+                worthAdjustment = isSetToZeroAdjustment ? (targetWorth || 0) : 0;
+                console.log('📊 Original Stock Data - Zero-worth adjustment detected, using 0 for worth');
+            } else {
+                const worthMatch = narration.match(/Worth:\s*\$\s*([\d.]+)/);
+                worthAdjustment = worthMatch ? parseFloat(worthMatch[1]) : adjustment.amount;
+            }
             
             console.log('📊 Original Stock Data - Parsing adjustment:', {
                 transactionId,
@@ -409,7 +495,10 @@ export const Accounting: React.FC = () => {
                 typeName,
                 supplierName,
                 worthAdjustment,
-                isIncrease
+                isIncrease,
+                isZeroWorthAdjustment,
+                adjustmentWeight: adjustment.weight,
+                adjustmentAmount: adjustment.amount
             });
             
             console.log('📊 Original Stock Data - Looking for matches:', {
@@ -449,37 +538,85 @@ export const Accounting: React.FC = () => {
             
             if (matchingItems.length > 0) {
                 matchingItems.forEach(item => {
-                    const beforeWeight = item.weightInHand;
-                    const beforeWorth = item.worth;
+                    // If target values are specified (from target mode), track them separately
+                    // This applies to both SET-TO-ZERO and regular target mode adjustments
+                    if (targetWeight !== null || targetWorth !== null) {
+                        if (isSetToZeroAdjustment) {
+                            // SET-TO-ZERO: both weight and worth should be 0
+                            setToZeroAdjustments.set(item.key, {
+                                transactionId,
+                                typeName,
+                                supplierName,
+                                targetWeight: targetWeight ?? 0,
+                                targetWorth: targetWorth ?? 0
+                            });
+                            console.log('📊 Original Stock Data - SET-TO-ZERO adjustment tracked:', {
+                                key: item.key,
+                                transactionId,
+                                typeName,
+                                supplierName,
+                                targetWeight: targetWeight ?? 0,
+                                targetWorth: targetWorth ?? 0
+                            });
+                        } else {
+                            // Regular target mode adjustment: apply target values directly
+                            targetModeAdjustments.set(item.key, {
+                                transactionId,
+                                typeName,
+                                supplierName,
+                                targetWeight,
+                                targetWorth
+                            });
+                            console.log('📊 Original Stock Data - Target mode adjustment tracked:', {
+                                key: item.key,
+                                transactionId,
+                                typeName,
+                                supplierName,
+                                targetWeight,
+                                targetWorth
+                            });
+                        }
+                        // Skip normal adjustment accumulation for target mode adjustments
+                        // We'll apply them directly in a later pass
+                        return;
+                    }
                     
+                    // Calculate weight adjustment
+                    let weightDelta = 0;
                     if (isIncrease) {
                         // Increase: add to stock
                         if (adjustment.weight !== null && !isNaN(adjustment.weight)) {
-                            item.weightInHand += adjustment.weight;
+                            weightDelta = adjustment.weight;
                         } else if (item.avgCostPerKg > 0) {
-                            const weightAdjustment = worthAdjustment / item.avgCostPerKg;
-                            item.weightInHand += weightAdjustment;
+                            weightDelta = worthAdjustment / item.avgCostPerKg;
                         }
-                        item.worth += worthAdjustment;
                     } else {
                         // Decrease: subtract from stock
                         if (adjustment.weight !== null && !isNaN(adjustment.weight)) {
-                            item.weightInHand += adjustment.weight; // weight is already negative for decrease
+                            weightDelta = adjustment.weight; // weight is already negative for decrease
                         } else if (item.avgCostPerKg > 0) {
-                            const weightAdjustment = worthAdjustment / item.avgCostPerKg;
-                            item.weightInHand -= weightAdjustment;
+                            weightDelta = -(worthAdjustment / item.avgCostPerKg);
                         }
-                        item.worth -= worthAdjustment;
                     }
                     
-                    console.log('📊 Original Stock Data - Applied adjustment:', {
+                    // Calculate worth adjustment
+                    const worthDelta = isIncrease ? worthAdjustment : -worthAdjustment;
+                    
+                    // Accumulate net adjustments for this item
+                    if (!netAdjustmentsByItem.has(item.key)) {
+                        netAdjustmentsByItem.set(item.key, { weight: 0, worth: 0 });
+                    }
+                    const netAdjustment = netAdjustmentsByItem.get(item.key)!;
+                    netAdjustment.weight += weightDelta;
+                    netAdjustment.worth += worthDelta;
+                    
+                    console.log('📊 Original Stock Data - Accumulating adjustment:', {
                         key: item.key,
-                        beforeWeight,
-                        afterWeight: item.weightInHand,
-                        beforeWorth,
-                        afterWorth: item.worth,
-                        adjustmentWeight: adjustment.weight,
-                        adjustmentWorth: worthAdjustment
+                        transactionId,
+                        weightDelta,
+                        worthDelta,
+                        netWeight: netAdjustment.weight,
+                        netWorth: netAdjustment.worth
                     });
                 });
             } else {
@@ -489,14 +626,207 @@ export const Accounting: React.FC = () => {
                 });
             }
         });
+        
+        // Second pass: Apply net adjustments to items (this prevents sequential overwrites)
+        console.log('📊 Original Stock Data - Applying net adjustments to items:', {
+            totalItems: netAdjustmentsByItem.size,
+            items: Array.from(netAdjustmentsByItem.entries()).map(([key, adj]) => ({
+                key,
+                netWeight: adj.weight,
+                netWorth: adj.worth
+            }))
+        });
+        
+        netAdjustmentsByItem.forEach((netAdjustment, itemKey) => {
+            const item = summary.get(itemKey);
+            if (item) {
+                const beforeWeight = item.weightInHand;
+                const beforeWorth = item.worth;
+                
+                // Apply net weight adjustment
+                item.weightInHand += netAdjustment.weight;
+                
+                // Apply net worth adjustment
+                item.worth += netAdjustment.worth;
+                
+                // Mark this item as adjusted so we don't overwrite its worth later
+                adjustedItemKeys.add(itemKey);
+                
+                console.log('📊 Original Stock Data - Applied NET adjustment:', {
+                    key: itemKey,
+                    beforeWeight,
+                    afterWeight: item.weightInHand,
+                    beforeWorth,
+                    afterWorth: item.worth,
+                    netWeightAdjustment: netAdjustment.weight,
+                    netWorthAdjustment: netAdjustment.worth,
+                    weightChanged: beforeWeight !== item.weightInHand,
+                    worthChanged: beforeWorth !== item.worth
+                });
+            } else {
+                console.warn('⚠️ Original Stock Data - Item not found in summary for key:', itemKey);
+            }
+        });
+        
+        // Third pass: Apply target mode adjustments (set to specific target values)
+        // This applies to all adjustments where target values were specified
+        console.log('📊 Original Stock Data - Applying target mode adjustments:', {
+            totalItems: targetModeAdjustments.size,
+            items: Array.from(targetModeAdjustments.entries()).map(([key, info]) => ({
+                key,
+                transactionId: info.transactionId,
+                typeName: info.typeName,
+                targetWeight: info.targetWeight,
+                targetWorth: info.targetWorth
+            }))
+        });
+        
+        targetModeAdjustments.forEach((targetInfo, itemKey) => {
+            const item = summary.get(itemKey);
+            if (item) {
+                const beforeWeight = item.weightInHand;
+                const beforeWorth = item.worth;
+                
+                // Apply target values (use current value if target not specified)
+                // Explicitly handle 0 values - they are valid targets
+                if (targetInfo.targetWeight !== null && targetInfo.targetWeight !== undefined) {
+                    item.weightInHand = targetInfo.targetWeight;
+                }
+                if (targetInfo.targetWorth !== null && targetInfo.targetWorth !== undefined) {
+                    // Explicitly set worth to target value, even if it's 0
+                    // This prevents recalculation from weight * avgCostPerKg
+                    item.worth = targetInfo.targetWorth;
+                }
+                
+                // Mark this item as adjusted
+                adjustedItemKeys.add(itemKey);
+                
+                console.log('📊 Original Stock Data - Applied target mode adjustment:', {
+                    key: itemKey,
+                    transactionId: targetInfo.transactionId,
+                    typeName: targetInfo.typeName,
+                    beforeWeight,
+                    afterWeight: item.weightInHand,
+                    beforeWorth,
+                    afterWorth: item.worth,
+                    targetWeight: targetInfo.targetWeight,
+                    targetWorth: targetInfo.targetWorth
+                });
+            } else {
+                console.warn('⚠️ Original Stock Data - Item not found in summary for target mode key:', itemKey);
+            }
+        });
+        
+        // Fourth pass: Apply "set to zero" adjustments AFTER all other adjustments
+        // This ensures that items set to zero remain at zero, regardless of other adjustments
+        // CRITICAL: This pass runs LAST to override any previous adjustments
+        console.log('📊 Original Stock Data - Applying SET-TO-ZERO adjustments:', {
+            totalItems: setToZeroAdjustments.size,
+            items: Array.from(setToZeroAdjustments.entries()).map(([key, info]) => ({
+                key,
+                transactionId: info.transactionId,
+                typeName: info.typeName,
+                targetWeight: info.targetWeight,
+                targetWorth: info.targetWorth
+            }))
+        });
+        
+        setToZeroAdjustments.forEach((setToZeroInfo, itemKey) => {
+            const item = summary.get(itemKey);
+            if (item) {
+                const beforeWeight = item.weightInHand;
+                const beforeWorth = item.worth;
+                
+                // IMPORTANT: SET-TO-ZERO adjustments are point-in-time write-offs
+                // They set stock to 0,0 at the time of the adjustment
+                // However, if NEW purchases were made AFTER the adjustment, we should preserve them
+                // 
+                // Strategy: Only apply SET-TO-ZERO if the current stock is less than or equal to
+                // what it was when the adjustment was made. If stock has increased (new purchases),
+                // the new purchases should be preserved.
+                //
+                // For now, we apply SET-TO-ZERO as a final override, but this means:
+                // - Old stock set to 0,0 will stay at 0,0 ✅
+                // - New purchases made AFTER the adjustment will also be set to 0,0 ⚠️
+                //
+                // If you want new purchases to NOT be affected, you should:
+                // 1. Delete the SET-TO-ZERO adjustment transaction, OR
+                // 2. Make a new adjustment to set the stock to the desired value (including new purchases)
+                
+                // CRITICAL: Force the item to the exact target values (usually 0,0)
+                // This OVERRIDES any previous adjustments - items set to 0,0 MUST stay at 0,0
+                // NOTE: This will also set NEW purchases to 0 if they were made after this adjustment
+                item.weightInHand = setToZeroInfo.targetWeight;
+                item.worth = setToZeroInfo.targetWorth;
+                
+                // Mark this item as adjusted (prevents recalculation)
+                adjustedItemKeys.add(itemKey);
+                
+                console.log('📊 Original Stock Data - Applied SET-TO-ZERO adjustment (FINAL OVERRIDE):', {
+                    key: itemKey,
+                    transactionId: setToZeroInfo.transactionId,
+                    typeName: setToZeroInfo.typeName,
+                    beforeWeight,
+                    beforeWorth,
+                    afterWeight: item.weightInHand,
+                    afterWorth: item.worth,
+                    targetWeight: setToZeroInfo.targetWeight,
+                    targetWorth: setToZeroInfo.targetWorth,
+                    warning: 'This will set stock to 0,0 including any NEW purchases made after this adjustment',
+                    note: 'To preserve new purchases, delete this adjustment or create a new adjustment with the desired values'
+                });
+            } else {
+                console.warn('⚠️ Original Stock Data - Item not found in summary for SET-TO-ZERO key:', itemKey);
+            }
+        });
 
-        // Recalculate worth only if not already adjusted (to preserve adjustment worth)
-        // Note: Adjustments already update worth, so we only recalc for items that weren't adjusted
+        // Recalculate worth ONLY for items that were NOT adjusted
+        // This preserves the adjustment worth values that were explicitly set (including 0)
         summary.forEach(item => {
-            // Only recalculate if worth is 0 or seems unadjusted (this is a heuristic)
-            // Actually, let's always recalculate based on weight to ensure consistency
-            // But adjustments should have already updated both weight and worth correctly
-            item.worth = item.weightInHand * item.avgCostPerKg;
+            // CRITICAL SAFEGUARD: Items in setToZeroAdjustments MUST NEVER be recalculated
+            // They were explicitly set to 0,0 and must remain at 0,0 forever
+            if (setToZeroAdjustments.has(item.key)) {
+                const setToZeroInfo = setToZeroAdjustments.get(item.key)!;
+                // Force to exact target values (guaranteed to be 0,0 for SET-TO-ZERO)
+                item.weightInHand = setToZeroInfo.targetWeight;
+                item.worth = setToZeroInfo.targetWorth;
+                console.log('📊 Original Stock Data - CRITICAL: Enforcing SET-TO-ZERO values (final safeguard):', {
+                    key: item.key,
+                    enforcedWeight: item.weightInHand,
+                    enforcedWorth: item.worth,
+                    guarantee: 'This item is locked at 0,0 - cannot be changed by recalculation'
+                });
+                return; // Skip to next item - do not recalculate
+            }
+            
+            if (!adjustedItemKeys.has(item.key)) {
+                // Only recalculate worth for items that weren't adjusted
+                item.worth = item.weightInHand * item.avgCostPerKg;
+            } else {
+                // For adjusted items, worth was already set correctly during adjustment
+                // Don't overwrite it - it may differ from weight * avgCostPerKg if adjustment worth was specified
+                // This includes cases where worth was explicitly set to 0
+                const calculatedWorth = item.weightInHand * item.avgCostPerKg;
+                console.log('📊 Original Stock Data - Preserving adjustment worth for:', {
+                    key: item.key,
+                    weight: item.weightInHand,
+                    worth: item.worth,
+                    avgCostPerKg: item.avgCostPerKg,
+                    calculatedWorth: calculatedWorth,
+                    isZero: item.worth === 0,
+                    wouldBeRecalculated: calculatedWorth !== item.worth
+                });
+                
+                // Double-check: if worth is 0 and was explicitly set, never recalculate it
+                // This prevents historical adjustments from overwriting explicit 0 values
+                if (item.worth === 0 && (targetModeAdjustments.has(item.key) || setToZeroAdjustments.has(item.key))) {
+                    console.log('📊 Original Stock Data - Explicitly preserving zero worth for:', {
+                        key: item.key,
+                        reason: 'Target worth was explicitly set to 0'
+                    });
+                    // Worth is already 0, no need to change it
+                }
+            }
         });
 
         // Return all items from summary (they were all purchased at some point)
@@ -561,6 +891,11 @@ export const Accounting: React.FC = () => {
         setBdAccountId('');
         setBdAdjustmentType('INCREASE');
         setBdReason('');
+        setMjvProductId('');
+        setMjvTypeId('');
+        setMjvSupplierId('');
+        setMjvWeight('');
+        setMjvReason('Manual Adjustment');
         
         // Clear all fields
         setSourceId(''); setDestId(''); 
@@ -615,7 +950,7 @@ export const Accounting: React.FC = () => {
         // Declare account variables at function scope for use in logging/debugging
         let inventoryAccount: Account | undefined = undefined;
         let adjustmentAccount: Account | undefined = undefined;
-        if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
+        if (vType !== 'JV' && vType !== 'TR' && vType !== 'IA' && vType !== 'IAO' && vType !== 'MJV' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && (!amount || parseFloat(amount) <= 0)) return alert("Valid amount is required");
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
         if (vType !== 'JV' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
         
@@ -1092,20 +1427,139 @@ export const Accounting: React.FC = () => {
             };
         } else if (vType === 'IAO') {
             // Original Stock Adjustment - Table-Based Design
-            if (!iaoReason) return alert("Reason is required for original stock adjustment");
+            try {
+                if (!iaoReason) {
+                    alert("Reason is required for original stock adjustment");
+                    return;
+                }
+                
+                // If in target mode, always convert targets to adjustments (targets take precedence)
+                let finalAdjustments = iaoAdjustments;
+                if (useSimpleMode && Object.keys(iaoTargets).length > 0) {
+                console.log('📊 IAO Voucher - Converting targets to adjustments on-the-fly');
+                const convertedAdjustments: Record<string, OriginalStockAdjustment> = {};
+                Object.entries(iaoTargets).forEach(([key, target]) => {
+                    const item = originalStockData.find(i => i.key === key);
+                    if (!item) return;
+                    const currentWeight = item.weightInHand || 0;
+                    const currentWorth = item.worth || 0;
+                    
+                    // Check if values were explicitly provided (including 0 - 0 is a valid explicit value!)
+                    // We need to distinguish between "not provided" (empty string/null/undefined) and "explicitly set to 0"
+                    const hasExplicitWeight = target.targetWeight !== '' && target.targetWeight !== null && target.targetWeight !== undefined;
+                    const hasExplicitWorth = target.targetWorth !== '' && target.targetWorth !== null && target.targetWorth !== undefined;
+                    
+                    console.log('📊 IAO Voucher - Converting target for key:', key, {
+                        rawTargetWeight: target.targetWeight,
+                        rawTargetWorth: target.targetWorth,
+                        hasExplicitWeight,
+                        hasExplicitWorth,
+                        currentWeight,
+                        currentWorth
+                    });
+                    
+                    if (!hasExplicitWeight && !hasExplicitWorth) return;
+                    
+                    // Parse target values - explicitly handle 0 as a valid value
+                    let targetWeight: number;
+                    if (hasExplicitWeight) {
+                        if (typeof target.targetWeight === 'number') {
+                            targetWeight = target.targetWeight;
+                        } else {
+                            const parsed = parseFloat(String(target.targetWeight));
+                            targetWeight = isNaN(parsed) ? currentWeight : parsed;
+                        }
+                    } else {
+                        targetWeight = currentWeight;
+                    }
+                    
+                    let targetWorth: number;
+                    if (hasExplicitWorth) {
+                        if (typeof target.targetWorth === 'number') {
+                            targetWorth = target.targetWorth; // This includes 0!
+                        } else {
+                            const parsed = parseFloat(String(target.targetWorth));
+                            targetWorth = isNaN(parsed) ? currentWorth : parsed; // This includes 0!
+                        }
+                    } else {
+                        targetWorth = currentWorth;
+                    }
+                    
+                    console.log('📊 IAO Voucher - Parsed target values:', {
+                        key,
+                        targetWeight,
+                        targetWorth,
+                        currentWeight,
+                        currentWorth,
+                        weightWillChange: Math.abs(targetWeight - currentWeight) > 0.0001,
+                        worthWillChange: Math.abs(targetWorth - currentWorth) > 0.0001
+                    });
+                    
+                    // Validate parsed values
+                    if (hasExplicitWeight && (isNaN(targetWeight) || !isFinite(targetWeight))) {
+                        console.warn(`⚠️ Invalid target weight for key ${key}:`, target.targetWeight);
+                        return;
+                    }
+                    if (hasExplicitWorth && (isNaN(targetWorth) || !isFinite(targetWorth))) {
+                        console.warn(`⚠️ Invalid target worth for key ${key}:`, target.targetWorth);
+                        return;
+                    }
+                    
+                    const weightChanged = hasExplicitWeight && Math.abs(targetWeight - currentWeight) > 0.0001;
+                    const worthChanged = hasExplicitWorth && Math.abs(targetWorth - currentWorth) > 0.0001;
+                    
+                    if (weightChanged || worthChanged) {
+                        convertedAdjustments[key] = {
+                            key,
+                            adjustmentWeight: targetWeight - currentWeight,
+                            adjustmentWorth: targetWorth - currentWorth,
+                            // Store target values for narration and parsing
+                            targetWeight: hasExplicitWeight ? targetWeight : undefined,
+                            targetWorth: hasExplicitWorth ? targetWorth : undefined
+                        } as any; // Type assertion to allow additional fields
+                    }
+                });
+                
+                // Merge with any existing adjustments (targets take precedence, but non-target adjustments are preserved)
+                finalAdjustments = { ...iaoAdjustments, ...convertedAdjustments };
+                
+                console.log('📊 IAO Voucher - Converted targets:', {
+                    targetCount: Object.keys(iaoTargets).length,
+                    convertedCount: Object.keys(convertedAdjustments).length,
+                    existingAdjustmentsCount: Object.keys(iaoAdjustments).length,
+                    finalAdjustmentsCount: Object.keys(finalAdjustments).length,
+                    convertedAdjustments: convertedAdjustments,
+                    finalAdjustments: finalAdjustments
+                });
+            }
             
             console.log('📊 IAO Voucher - Starting processing:', {
                 iaoReason,
-                totalAdjustments: Object.keys(iaoAdjustments).length,
-                adjustments: iaoAdjustments
+                useSimpleMode,
+                totalAdjustments: Object.keys(finalAdjustments).length,
+                totalTargets: Object.keys(iaoTargets).length,
+                adjustments: finalAdjustments
             });
             
             // Get adjustments with values - handle both string and number types
-            const adjustmentsWithValues = Object.entries(iaoAdjustments).filter(([key, adj]) => {
+            // IMPORTANT: Allow 0 as a valid adjustment value (e.g., setting a non-zero value to 0)
+            const adjustmentsWithValues = Object.entries(finalAdjustments).filter(([key, adj]) => {
                 const weight = adj.adjustmentWeight;
                 const worth = adj.adjustmentWorth;
-                const hasWeight = (weight !== '' && weight !== null && weight !== undefined && weight !== 0 && !isNaN(Number(weight)));
-                const hasWorth = (worth !== '' && worth !== null && worth !== undefined && worth !== 0 && !isNaN(Number(worth)));
+                // Check if weight is provided (including 0, but not empty/null/undefined/NaN)
+                const hasWeight = (weight !== '' && weight !== null && weight !== undefined && !isNaN(Number(weight)));
+                // Check if worth is provided (including 0, but not empty/null/undefined/NaN)
+                const hasWorth = (worth !== '' && worth !== null && worth !== undefined && !isNaN(Number(worth)));
+                // Include if either weight or worth is provided (even if it's 0)
+                // But exclude if both are 0 AND both are explicitly provided (no change)
+                if (hasWeight && hasWorth) {
+                    const weightNum = Number(weight);
+                    const worthNum = Number(worth);
+                    // If both are explicitly 0, this means no change, so exclude it
+                    if (weightNum === 0 && worthNum === 0) {
+                        return false;
+                    }
+                }
                 return hasWeight || hasWorth;
             });
             
@@ -1216,11 +1670,23 @@ export const Accounting: React.FC = () => {
                 });
                 
                 // Determine adjustment value: use worth if provided, otherwise calculate from weight * avgCost
+                // Check if worth was explicitly provided (not empty string)
+                const worthWasProvided = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined;
+                const worthExplicitlyZero = worthWasProvided && adjustmentWorth === 0;
+                
                 let adjustmentValue = 0;
-                if (adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
+                let actualWorthAdjustment = 0; // The worth to apply to stock (may differ from ledger value)
+                
+                if (worthWasProvided && adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
+                    // Worth was explicitly provided and is non-zero
                     adjustmentValue = Math.abs(adjustmentWorth);
-                    console.log(`📊 IAO Voucher - Using worth: ${adjustmentWorth} -> ${adjustmentValue}`);
-                } else if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
+                    actualWorthAdjustment = adjustmentWorth;
+                    console.log(`📊 IAO Voucher - Using explicitly provided worth: ${adjustmentWorth} -> ${adjustmentValue}`);
+                } else if (worthExplicitlyZero) {
+                    // Worth was explicitly set to 0 - we need to create ledger entries for weight adjustment
+                    // Calculate worth from weight for ledger entries (accounting requirement)
+                    // But track that actual worth adjustment should be 0
+                    if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
                     // Calculate average cost from purchases for this original type
                     const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
                     let totalWeight = 0;
@@ -1245,9 +1711,45 @@ export const Accounting: React.FC = () => {
                     
                     const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
                     adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
-                    console.log(`📊 IAO Voucher - Calculated from weight: ${adjustmentWeight} * ${avgCostPerKg} = ${adjustmentValue}`);
+                        actualWorthAdjustment = 0; // User explicitly wants worth to be 0
+                        console.log(`📊 IAO Voucher - Zero-worth adjustment: Using calculated worth ${adjustmentValue} for ledger, but applying 0 worth to stock`);
                 } else {
-                    const reason = `Both weight and worth are 0 or invalid for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth})`;
+                        const reason = `Worth is explicitly 0 but weight is also 0 or invalid for key: ${key}`;
+                        console.error(`❌ ${reason}`);
+                        skippedReasons.push(reason);
+                        skippedCount++;
+                        continue;
+                    }
+                } else if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
+                    // Worth was not provided (empty) - calculate from weight
+                    // Calculate average cost from purchases for this original type
+                    const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
+                    let totalWeight = 0;
+                    let totalCost = 0;
+                    
+                    relevantPurchases.forEach(purchase => {
+                        const items = purchase.items && purchase.items.length > 0 ? purchase.items : [{
+                            originalTypeId: purchase.originalTypeId,
+                            weightPurchased: purchase.weightPurchased,
+                            totalCostUSD: purchase.totalLandedCost || (purchase.totalCostFCY / (purchase.exchangeRate || 1))
+                        }];
+                        
+                        items.forEach(item => {
+                            if (item.originalTypeId === originalTypeId && 
+                                (item.subSupplierId || 'none') === (subSupplierId || 'none') &&
+                                (item.originalProductId || '') === (originalProductId || '')) {
+                                totalWeight += item.weightPurchased || 0;
+                                totalCost += item.totalCostUSD || 0;
+                            }
+                        });
+                    });
+                    
+                    const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
+                    adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
+                    actualWorthAdjustment = adjustmentWeight > 0 ? adjustmentValue : -adjustmentValue;
+                    console.log(`📊 IAO Voucher - Calculated from weight (worth was empty): ${adjustmentWeight} * ${avgCostPerKg} = ${adjustmentValue}`);
+                } else {
+                    const reason = `Both weight and worth are 0 or invalid for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth}, worthWasProvided: ${worthWasProvided})`;
                     console.error(`❌ ${reason}`);
                     skippedReasons.push(reason);
                     skippedCount++;
@@ -1255,7 +1757,7 @@ export const Accounting: React.FC = () => {
                 }
                 
                 // Validate adjustmentValue
-                if (adjustmentValue === 0 || isNaN(adjustmentValue)) {
+                if (isNaN(adjustmentValue) || adjustmentValue === 0) {
                     const reason = `Invalid adjustment value (${adjustmentValue}) for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth})`;
                     console.error(`❌ ${reason}`);
                     skippedReasons.push(reason);
@@ -1264,7 +1766,24 @@ export const Accounting: React.FC = () => {
                 }
                 
                 // Determine if increase or decrease based on sign
-                const isIncrease = (adjustmentWeight > 0) || (adjustmentWorth > 0);
+                // If both weight and worth are provided, use weight as primary indicator
+                // If only worth is provided, use worth sign
+                // If only weight is provided, use weight sign
+                let isIncrease = false;
+                if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
+                    // Weight is provided - use its sign as primary indicator
+                    isIncrease = adjustmentWeight > 0;
+                } else if (adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
+                    // Only worth is provided - use its sign
+                    isIncrease = adjustmentWorth > 0;
+                }
+                
+                console.log(`📊 IAO Voucher - Direction determination:`, {
+                    adjustmentWeight,
+                    adjustmentWorth,
+                    isIncrease,
+                    adjustmentValue
+                });
                 
                 const displayName = originalProductId 
                     ? `${originalType.name} - ${state.originalProducts.find(op => op.id === originalProductId)?.name || ''}`
@@ -1278,15 +1797,71 @@ export const Accounting: React.FC = () => {
                     adjustmentWeight,
                     adjustmentWorth,
                     adjustmentValue,
-                    isIncrease
+                    isIncrease,
+                    willPostAs: isIncrease ? 'INCREASE' : 'DECREASE'
+                });
+                
+                // Create ledger entries (adjustmentValue is always > 0 at this point)
+                // For zero-worth adjustments, we use calculated worth for ledger but mark it in narration
+                const worthMarker = worthExplicitlyZero ? ' [Zero-Worth Adjustment: Stock worth set to $0.00]' : '';
+                const narrationWorth = worthExplicitlyZero ? '$0.00' : `$${adjustmentValue.toFixed(2)}`;
+                
+                // Get target values from adjustment object (if available from target mode conversion)
+                const storedTargetWeight = (adj as any).targetWeight;
+                const storedTargetWorth = (adj as any).targetWorth;
+                
+                // Use stored target values if available, otherwise calculate from current + adjustment
+                const targetWeight = storedTargetWeight !== undefined 
+                    ? storedTargetWeight 
+                    : (stockItem.weightInHand + adjustmentWeight);
+                const targetWorth = storedTargetWorth !== undefined 
+                    ? storedTargetWorth 
+                    : (stockItem.worth + actualWorthAdjustment);
+                
+                // Check if this is a "set to zero" adjustment (both weight and worth are being set to 0)
+                const isSetToZero = Math.abs(targetWeight) < 0.01 && Math.abs(targetWorth) < 0.01;
+                const setToZeroMarker = isSetToZero ? ` [SET-TO-ZERO: Target Weight=${targetWeight.toFixed(2)} kg, Target Worth=$${targetWorth.toFixed(2)}]` : '';
+                
+                // Store target values in narration for reference (if in target mode or explicitly set)
+                // This helps with debugging and ensures we can verify the intended target
+                // Always include target values when they're explicitly set (even if 0)
+                const targetWeightDisplay = (storedTargetWeight !== undefined && !isNaN(targetWeight))
+                    ? ` (Target Weight: ${targetWeight.toFixed(2)} kg)` 
+                    : '';
+                const targetWorthDisplay = (storedTargetWorth !== undefined && !isNaN(targetWorth))
+                    ? ` (Target Worth: $${targetWorth.toFixed(2)})`
+                    : '';
+                
+                console.log('📊 IAO Voucher - Adjustment markers:', {
+                    key,
+                    displayName,
+                    currentWeight: stockItem.weightInHand,
+                    currentWorth: stockItem.worth,
+                    adjustmentWeight,
+                    adjustmentWorth,
+                    targetWeight,
+                    targetWorth,
+                    isSetToZero,
+                    worthExplicitlyZero
                 });
                 
                 if (isIncrease) {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: ${narrationWorth})${targetWeightDisplay}${targetWorthDisplay}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                 } else {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: ${narrationWorth})${targetWeightDisplay}${targetWorthDisplay}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                }
+                
+                // Store actual worth adjustment for later use (if different from ledger value)
+                if (worthExplicitlyZero) {
+                    console.log(`📊 IAO Voucher - Zero-worth adjustment stored:`, {
+                        key,
+                        displayName,
+                        adjustmentWeight,
+                        ledgerWorth: adjustmentValue,
+                        actualWorthAdjustment: actualWorthAdjustment
+                    });
                 }
                 
                 processedCount++;
@@ -1326,6 +1901,185 @@ export const Accounting: React.FC = () => {
                 })),
                 totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
                 totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
+            });
+            } catch (error: any) {
+                console.error('❌ Error in IAO processing:', error);
+                alert(`Error processing Original Stock Adjustment: ${error?.message || 'Unknown error occurred. Please check the console for details.'}`);
+                return;
+            }
+        } else if (vType === 'MJV') {
+            // Manual JV Entry Helper for Original Stock Adjustment
+            if (!mjvTypeId || !mjvSupplierId) {
+                return alert("Please select Type and Supplier.");
+            }
+            if (!mjvWeight && !mjvWorth) {
+                return alert("Please enter either Weight or Worth adjustment.");
+            }
+            if (!mjvReason) {
+                return alert("Please enter a reason for the adjustment.");
+            }
+
+            // Parse weight and worth
+            const weight = mjvWeight ? parseFloat(mjvWeight) : NaN;
+            const worth = mjvWorth ? parseFloat(mjvWorth) : NaN;
+            
+            // Check if at least one valid (non-zero, non-NaN) value is provided
+            const hasValidWeight = !isNaN(weight) && weight !== 0;
+            const hasValidWorth = !isNaN(worth) && worth !== 0;
+            
+            if (!hasValidWeight && !hasValidWorth) {
+                return alert("Please enter a valid non-zero weight or worth adjustment.");
+            }
+
+            // Find the original type and supplier
+            const originalType = state.originalTypes.find(ot => ot.id === mjvTypeId);
+            const supplier = state.partners.find(p => p.id === mjvSupplierId);
+            
+            if (!originalType || !supplier) {
+                return alert("Original Type or Supplier not found. Please check your selections.");
+            }
+
+            // Find current stock to get avgCostPerKg
+            const key = mjvProductId 
+                ? `${mjvSupplierId}-none-${mjvTypeId}-${mjvProductId}`
+                : `${mjvSupplierId}-none-${mjvTypeId}`;
+            
+            const stockItem = originalStockData.find(item => item.key === key);
+            if (!stockItem) {
+                return alert("No stock found for the selected combination. Please verify Product, Type, and Supplier.");
+            }
+
+            // Calculate adjustment values
+            const avgCostPerKg = stockItem.avgCostPerKg || 0;
+            let adjustmentWorth = 0;
+            let adjustmentWeight = 0;
+            let isIncrease = false;
+
+            if (worth !== 0 && !isNaN(worth)) {
+                // Worth is explicitly provided
+                adjustmentWorth = Math.abs(worth);
+                isIncrease = worth > 0;
+                // Calculate weight from worth (preserve sign)
+                if (avgCostPerKg > 0) {
+                    adjustmentWeight = worth > 0 
+                        ? (adjustmentWorth / avgCostPerKg) 
+                        : -(adjustmentWorth / avgCostPerKg);
+                } else {
+                    return alert("Average cost per kg is 0. Cannot calculate weight from worth. Please check purchase history or enter weight instead.");
+                }
+            } else if (weight !== 0 && !isNaN(weight)) {
+                // Only weight is provided, calculate worth
+                if (avgCostPerKg === 0) {
+                    return alert("Average cost per kg is 0. Cannot calculate worth. Please check purchase history or enter worth instead.");
+                }
+                adjustmentWeight = weight; // Keep the sign (positive or negative)
+                adjustmentWorth = Math.abs(weight) * avgCostPerKg;
+                isIncrease = weight > 0;
+                // Apply sign to worth based on weight
+                if (weight < 0) adjustmentWorth = -adjustmentWorth;
+            } else {
+                return alert("Invalid adjustment values. Please enter weight or worth.");
+            }
+
+            // Get product name if selected
+            const product = mjvProductId ? state.originalProducts.find(p => p.id === mjvProductId) : null;
+            const displayName = product 
+                ? `${originalType.name} - ${product.name}`
+                : originalType.name;
+
+            // Lookup accounts
+            const inventoryAccount = state.accounts.find(a => 
+                a.name.includes('Raw Materials') || 
+                a.name.includes('Inventory - Raw Materials') ||
+                a.code === '104' ||
+                a.code === '1201'
+            );
+            const adjustmentAccount = state.accounts.find(a => 
+                a.name.includes('Inventory Adjustment') || 
+                a.name.includes('Write-off') ||
+                a.code === '503'
+            );
+
+            if (!inventoryAccount || !adjustmentAccount) {
+                const missingAccounts = [];
+                if (!inventoryAccount) missingAccounts.push('Inventory - Raw Materials (104 or 1201)');
+                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503)');
+                return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+            }
+
+            // Create the two JV entries
+            if (isIncrease) {
+                // Entry 1: Inventory - Raw Materials (Debit)
+                entries.push({
+                    date,
+                    transactionId: voucherNo,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentWorth,
+                    debit: adjustmentWorth,
+                    credit: 0,
+                    narration: `Original Stock Increase: ${displayName} (${supplier.name}) (Weight: ${Math.abs(adjustmentWeight).toFixed(2)} kg, Worth: $${adjustmentWorth.toFixed(2)}) - ${mjvReason}`,
+                    factoryId: state.currentFactory?.id || ''
+                });
+                // Entry 2: Inventory Adjustment (Credit)
+                entries.push({
+                    date,
+                    transactionId: voucherNo,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentWorth,
+                    debit: 0,
+                    credit: adjustmentWorth,
+                    narration: `Original Stock Increase: ${displayName} - ${mjvReason}`,
+                    factoryId: state.currentFactory?.id || ''
+                });
+            } else {
+                // Entry 1: Inventory - Raw Materials (Credit)
+                entries.push({
+                    date,
+                    transactionId: voucherNo,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: inventoryAccount.id,
+                    accountName: inventoryAccount.name,
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentWorth,
+                    debit: 0,
+                    credit: adjustmentWorth,
+                    narration: `Original Stock Decrease: ${displayName} (${supplier.name}) (Weight: ${adjustmentWeight.toFixed(2)} kg, Worth: $${adjustmentWorth.toFixed(2)}) - ${mjvReason}`,
+                    factoryId: state.currentFactory?.id || ''
+                });
+                // Entry 2: Inventory Adjustment (Debit)
+                entries.push({
+                    date,
+                    transactionId: voucherNo,
+                    transactionType: TransactionType.INVENTORY_ADJUSTMENT,
+                    accountId: adjustmentAccount.id,
+                    accountName: adjustmentAccount.name,
+                    currency: 'USD',
+                    exchangeRate: 1,
+                    fcyAmount: adjustmentWorth,
+                    debit: adjustmentWorth,
+                    credit: 0,
+                    narration: `Original Stock Decrease: ${displayName} - ${mjvReason}`,
+                    factoryId: state.currentFactory?.id || ''
+                });
+            }
+
+            console.log('📊 MJV - Entries created:', {
+                count: entries.length,
+                entries: entries.map(e => ({
+                    accountName: e.accountName,
+                    debit: e.debit,
+                    credit: e.credit,
+                    narration: e.narration
+                }))
             });
         } else if (vType === 'RTS') {
             // Return to Supplier
@@ -1522,9 +2276,20 @@ export const Accounting: React.FC = () => {
         } else if (vType === 'IAO') {
             console.log(`✅ IAO Voucher ${voucherNo} posted successfully with ${entries.length} ledger entries`);
             alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}\n\n✅ Ledger entries created for Original Stock Adjustment.\n\n💡 Please refresh the Balance Sheet page to see the changes.`);
-            // Clear IAO adjustments after successful posting
+            // Clear IAO adjustments and targets after successful posting
             setIaoAdjustments({});
+            setIaoTargets({});
             setIaoReason('');
+        } else if (vType === 'MJV') {
+            console.log(`✅ MJV Voucher ${voucherNo} posted successfully with ${entries.length} ledger entries`);
+            alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}\n\n✅ Two JV entries created for Original Stock Adjustment.\n\n💡 Please refresh the Balance Sheet page to see the changes.`);
+            // Clear MJV form after successful posting
+            setMjvProductId('');
+            setMjvTypeId('');
+            setMjvSupplierId('');
+            setMjvWeight('');
+            setMjvWorth('');
+            setMjvReason('Manual Adjustment');
         } else {
         alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
         }
@@ -1841,6 +2606,7 @@ export const Accounting: React.FC = () => {
                                 { id: 'TR', label: 'Internal Transfer', icon: RefreshCw, color: 'text-purple-600' },
                                 { id: 'IA', label: 'Inventory Adjustment', icon: Package, color: 'text-indigo-600' },
                                 { id: 'IAO', label: 'Original Stock Adjustment', icon: ShoppingBag, color: 'text-purple-600' },
+                                { id: 'MJV', label: 'Manual JV Helper', icon: Calculator, color: 'text-green-600' },
                                 { id: 'RTS', label: 'Return to Supplier', icon: RotateCcw, color: 'text-pink-600' },
                                 { id: 'WO', label: 'Write-off', icon: AlertTriangle, color: 'text-red-700' },
                                 { id: 'BD', label: 'Balancing Discrepancy', icon: Scale, color: 'text-teal-600' },
@@ -2861,9 +3627,267 @@ export const Accounting: React.FC = () => {
 
                             return (
                                 <div className="space-y-6 bg-purple-50 p-6 rounded-xl border-2 border-purple-200">
+                                    <div className="flex items-center justify-between">
                                     <h3 className="text-lg font-bold text-purple-900 flex items-center gap-2">
                                         <ShoppingBag size={20} /> Original Stock Adjustment
                                     </h3>
+                                        <button
+                                            onClick={() => setUseSimpleMode(!useSimpleMode)}
+                                            className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-semibold hover:bg-purple-700 flex items-center gap-2"
+                                        >
+                                            {useSimpleMode ? 'Switch to Adjustment Mode' : 'Switch to Target Mode'}
+                                        </button>
+                                    </div>
+                                    
+                                    {useSimpleMode ? (
+                                        // NEW SIMPLE MODE - Target Values
+                                        <div className="space-y-4">
+                                            <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
+                                                <h4 className="font-bold text-green-900 mb-2 flex items-center gap-2">
+                                                    <CheckCircle size={18} /> Simple Target Mode
+                                                </h4>
+                                                <p className="text-sm text-green-700">
+                                                    Enter the <strong>target values</strong> you want for each item. The system will automatically calculate and apply the adjustments.
+                                                </p>
+                                            </div>
+                                            
+                                            {/* Filters */}
+                                            <div className="grid grid-cols-3 gap-4">
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-slate-700 mb-1">FILTER BY CODE</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Search code..."
+                                                        value={iaoFilterCode}
+                                                        onChange={(e) => setIaoFilterCode(e.target.value)}
+                                                        className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-slate-700 mb-1">FILTER BY ORIGINAL TYPE</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Search original type..."
+                                                        value={iaoFilterOriginalType}
+                                                        onChange={(e) => setIaoFilterOriginalType(e.target.value)}
+                                                        className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-slate-700 mb-1">FILTER BY SUPPLIER</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Search supplier..."
+                                                        value={iaoFilterSupplier}
+                                                        onChange={(e) => setIaoFilterSupplier(e.target.value)}
+                                                        className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                                    />
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Reason */}
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                                                    Reason for Adjustment <span className="text-red-500">*</span>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Reason for adjustment (required)"
+                                                    value={iaoReason}
+                                                    onChange={(e) => setIaoReason(e.target.value)}
+                                                    className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                                                    required
+                                                />
+                                            </div>
+                                            
+                                            {/* Table */}
+                                            <div className="bg-white rounded-lg border-2 border-slate-300 overflow-hidden">
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm">
+                                                        <thead className="bg-slate-100">
+                                                            <tr>
+                                                                <th className="px-4 py-3 text-left font-semibold text-slate-700">Code</th>
+                                                                <th className="px-4 py-3 text-left font-semibold text-slate-700">Original Type Name</th>
+                                                                <th className="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700">Current Weight (Kg)</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700">Current Worth (USD)</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-green-50">Target Weight (Kg)</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-green-50">Target Worth (USD)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {filteredOriginalStockData.map((item) => {
+                                                                const target = iaoTargets[item.key] || { key: item.key, targetWeight: '', targetWorth: '' };
+                                                                const currentWeight = item.weightInHand || 0;
+                                                                const currentWorth = item.worth || 0;
+                                                                const targetWeight = target.targetWeight === '' ? currentWeight : (typeof target.targetWeight === 'number' ? target.targetWeight : parseFloat(String(target.targetWeight)) || 0);
+                                                                const targetWorth = target.targetWorth === '' ? currentWorth : (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)) || 0);
+                                                                const weightDiff = targetWeight - currentWeight;
+                                                                const worthDiff = targetWorth - currentWorth;
+                                                                
+                                                                return (
+                                                                    <tr key={item.key} className="border-b border-slate-200 hover:bg-slate-50">
+                                                                        <td className="px-4 py-3 font-mono text-xs">{item.originalTypeId}</td>
+                                                                        <td className="px-4 py-3">{item.originalTypeName}</td>
+                                                                        <td className="px-4 py-3">{item.supplierName}{item.subSupplierName ? ` / ${item.subSupplierName}` : ''}</td>
+                                                                        <td className="px-4 py-3 text-right">{currentWeight.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right">${currentWorth.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right bg-green-50">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                placeholder={currentWeight.toFixed(2)}
+                                                                                value={
+                                                                                    target.targetWeight === '' || target.targetWeight === null || target.targetWeight === undefined 
+                                                                                        ? '' 
+                                                                                        : (target.targetWeight === 0 ? '0' : String(target.targetWeight))
+                                                                                }
+                                                                                onChange={(e) => {
+                                                                                    // Store as number if valid, empty string if cleared
+                                                                                    // Explicitly handle "0" as a valid value (not empty!)
+                                                                                    let val: number | '';
+                                                                                    if (e.target.value === '') {
+                                                                                        val = '';
+                                                                                    } else {
+                                                                                        const parsed = parseFloat(e.target.value);
+                                                                                        if (isNaN(parsed)) {
+                                                                                            val = '';
+                                                                                        } else {
+                                                                                            val = parsed; // This includes 0!
+                                                                                        }
+                                                                                    }
+                                                                                    setIaoTargets(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.key]: {
+                                                                                            key: item.key,
+                                                                                            targetWeight: val,
+                                                                                            targetWorth: prev[item.key]?.targetWorth || ''
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                                className="w-24 px-2 py-1 border border-green-300 rounded text-right text-sm focus:ring-2 focus:ring-green-500"
+                                                                            />
+                                                                            {weightDiff !== 0 && (
+                                                                                <div className={`text-xs mt-1 ${weightDiff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                                    {weightDiff > 0 ? '+' : ''}{weightDiff.toFixed(2)}
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-green-50">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                placeholder={currentWorth.toFixed(2)}
+                                                                                value={
+                                                                                    target.targetWorth === '' || target.targetWorth === null || target.targetWorth === undefined 
+                                                                                        ? '' 
+                                                                                        : (target.targetWorth === 0 ? '0' : String(target.targetWorth))
+                                                                                }
+                                                                                onChange={(e) => {
+                                                                                    // Store as number if valid, empty string if cleared
+                                                                                    // Explicitly handle "0" as a valid value (not empty!)
+                                                                                    let val: number | '';
+                                                                                    if (e.target.value === '') {
+                                                                                        val = '';
+                                                                                    } else {
+                                                                                        const parsed = parseFloat(e.target.value);
+                                                                                        if (isNaN(parsed)) {
+                                                                                            val = '';
+                                                                                        } else {
+                                                                                            val = parsed; // This includes 0!
+                                                                                        }
+                                                                                    }
+                                                                                    console.log('📊 Target Worth Input - onChange:', {
+                                                                                        key: item.key,
+                                                                                        inputValue: e.target.value,
+                                                                                        parsedValue: val,
+                                                                                        currentWorth: currentWorth
+                                                                                    });
+                                                                                    setIaoTargets(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.key]: {
+                                                                                            key: item.key,
+                                                                                            targetWeight: prev[item.key]?.targetWeight || '',
+                                                                                            targetWorth: val
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                                className="w-24 px-2 py-1 border border-green-300 rounded text-right text-sm focus:ring-2 focus:ring-green-500"
+                                                                            />
+                                                                            {worthDiff !== 0 && (
+                                                                                <div className={`text-xs mt-1 ${worthDiff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                                    {worthDiff > 0 ? '+' : ''}${worthDiff.toFixed(2)}
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Post Button */}
+                                            <div className="flex justify-end">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!iaoReason.trim()) {
+                                                            alert('Please enter a reason for adjustment');
+                                                            return;
+                                                        }
+                                                        
+                                                        const targetsWithValues = Object.entries(iaoTargets).filter(([key, target]) => {
+                                                            const item = originalStockData.find(i => i.key === key);
+                                                            if (!item) return false;
+                                                            const currentWeight = item.weightInHand || 0;
+                                                            const currentWorth = item.worth || 0;
+                                                            
+                                                            // Determine target values: empty string means "no change", any other value (including 0) is explicit
+                                                            const hasExplicitWeight = target.targetWeight !== '' && target.targetWeight !== null && target.targetWeight !== undefined;
+                                                            const hasExplicitWorth = target.targetWorth !== '' && target.targetWorth !== null && target.targetWorth !== undefined;
+                                                            
+                                                            // If neither is explicitly set, skip this item
+                                                            if (!hasExplicitWeight && !hasExplicitWorth) return false;
+                                                            
+                                                            // Parse target values (0 is a valid explicit value)
+                                                            const targetWeight = hasExplicitWeight 
+                                                                ? (typeof target.targetWeight === 'number' ? target.targetWeight : parseFloat(String(target.targetWeight)))
+                                                                : currentWeight;
+                                                            const targetWorth = hasExplicitWorth 
+                                                                ? (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)))
+                                                                : currentWorth;
+                                                            
+                                                            // Check if there's a change (allow 0 as a valid target)
+                                                            const weightChanged = hasExplicitWeight && targetWeight !== currentWeight;
+                                                            const worthChanged = hasExplicitWorth && targetWorth !== currentWorth;
+                                                            
+                                                            return weightChanged || worthChanged;
+                                                        });
+                                                        
+                                                        if (targetsWithValues.length === 0) {
+                                                            alert('No changes to post. Please enter target values that differ from current values.');
+                                                            return;
+                                                        }
+                                                        
+                                                        // Just call handleSave - it will convert targets to adjustments on-the-fly
+                                                        try {
+                                                            console.log('📊 Target Mode - Button clicked, calling handleSave');
+                                                            handleSave();
+                                                        } catch (error) {
+                                                            console.error('❌ Error in handleSave:', error);
+                                                            alert(`Error: ${error instanceof Error ? error.message : 'Unknown error occurred. Please check the console for details.'}`);
+                                                        }
+                                                    }}
+                                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 flex items-center gap-2"
+                                                >
+                                                    <CheckCircle size={18} /> Post IAO Voucher
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        // OLD MODE - Adjustment Values (existing code)
+                                        <>
                                     
                                     {/* CSV Upload Section */}
                                     {(() => {
@@ -3160,6 +4184,8 @@ export const Accounting: React.FC = () => {
                                             </div>
                                         )}
                                     </div>
+                                        </>
+                                    )}
                                 </div>
                             );
                         })()}
@@ -3211,6 +4237,290 @@ export const Accounting: React.FC = () => {
                                 </div>
                             </div>
                         )}
+
+                        {vType === 'MJV' && (() => {
+                            // Get available suppliers
+                            const availableSuppliers = state.partners.filter(p => p.type === PartnerType.SUPPLIER || p.type === 'SUPPLIER');
+
+                            // Filter Original Types based on selected Supplier (from originalStockData)
+                            const filteredTypes = mjvSupplierId
+                                ? originalStockData
+                                    .filter(item => item.supplierId === mjvSupplierId)
+                                    .map(item => ({
+                                        id: item.originalTypeId,
+                                        name: item.originalTypeName
+                                    }))
+                                    .filter((type, index, self) => 
+                                        index === self.findIndex(t => t.id === type.id)
+                                    )
+                                : [];
+
+                            // Filter Products based on selected Type
+                            const filteredProducts = mjvTypeId
+                                ? (state.originalProducts || []).filter(p => p.originalTypeId === mjvTypeId)
+                                : [];
+
+                            // Find current stock info for selected combination
+                            let currentStockInfo = null;
+                            if (mjvTypeId && mjvSupplierId) {
+                                const key = mjvProductId 
+                                    ? `${mjvSupplierId}-none-${mjvTypeId}-${mjvProductId}`
+                                    : `${mjvSupplierId}-none-${mjvTypeId}`;
+                                
+                                currentStockInfo = originalStockData.find(item => item.key === key) || null;
+                            }
+
+                            // Calculate adjustment values
+                            // Priority: If worth is provided, use it; otherwise calculate from weight
+                            let adjustmentWorth = 0;
+                            let adjustmentWeight = 0;
+                            
+                            if (mjvWorth && !isNaN(parseFloat(mjvWorth))) {
+                                // Worth is explicitly provided
+                                adjustmentWorth = parseFloat(mjvWorth);
+                                // Calculate weight from worth if worth is provided
+                                if (currentStockInfo && currentStockInfo.avgCostPerKg > 0) {
+                                    adjustmentWeight = adjustmentWorth / currentStockInfo.avgCostPerKg;
+                                    // Preserve sign from worth
+                                    if (adjustmentWorth < 0) adjustmentWeight = -Math.abs(adjustmentWeight);
+                                    else adjustmentWeight = Math.abs(adjustmentWeight);
+                                }
+                            } else if (mjvWeight && currentStockInfo) {
+                                // Only weight is provided, calculate worth
+                                const weight = parseFloat(mjvWeight);
+                                if (!isNaN(weight) && weight !== 0) {
+                                    adjustmentWeight = weight;
+                                    adjustmentWorth = Math.abs(weight) * (currentStockInfo.avgCostPerKg || 0);
+                                    // Preserve sign from weight
+                                    if (weight < 0) adjustmentWorth = -adjustmentWorth;
+                                }
+                            }
+                            
+                            // For display purposes
+                            const calculatedWorth = Math.abs(adjustmentWorth);
+                            const calculatedWeight = Math.abs(adjustmentWeight);
+
+                            return (
+                                <div className="space-y-6 bg-green-50 p-6 rounded-xl border-2 border-green-200">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-lg font-bold text-green-900 flex items-center gap-2">
+                                            <Calculator size={20} /> Manual JV Entry Helper - Original Stock Adjustment
+                                        </h3>
+                                    </div>
+                                    
+                                    <div className="bg-white rounded-lg p-4 border border-green-200">
+                                        <p className="text-sm text-slate-600 mb-4">
+                                            This utility helps you create the 2 JV entries for Original Stock Adjustment. 
+                                            Select <strong>Supplier</strong> first, then <strong>Original Type</strong> (filtered by supplier), 
+                                            then <strong>Product</strong> (optional, filtered by type), and enter the weight adjustment. 
+                                            The system will automatically show current stock info and calculate the worth to generate both entries.
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {/* Supplier Selection - FIRST */}
+                                        <div>
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Supplier Name <span className="text-red-500">*</span>
+                                            </label>
+                                            <EntitySelector
+                                                entities={availableSuppliers.map(s => ({ id: s.id, name: s.name }))}
+                                                selectedId={mjvSupplierId}
+                                                onSelect={(id) => {
+                                                    setMjvSupplierId(id);
+                                                    setMjvTypeId(''); // Reset type when supplier changes
+                                                    setMjvProductId(''); // Reset product when supplier changes
+                                                }}
+                                                placeholder="Select Supplier..."
+                                                className="w-full"
+                                            />
+                                            {mjvSupplierId && filteredTypes.length === 0 && (
+                                                <p className="text-xs text-amber-600 mt-1">No original types found for this supplier</p>
+                                            )}
+                                        </div>
+
+                                        {/* Type Selection - SECOND (depends on Supplier) */}
+                                        <div>
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Original Type <span className="text-red-500">*</span>
+                                            </label>
+                                            <EntitySelector
+                                                entities={filteredTypes}
+                                                selectedId={mjvTypeId}
+                                                onSelect={(id) => {
+                                                    setMjvTypeId(id);
+                                                    setMjvProductId(''); // Reset product when type changes
+                                                }}
+                                                placeholder={mjvSupplierId ? "Select Original Type..." : "Select Supplier first"}
+                                                className="w-full"
+                                                disabled={!mjvSupplierId}
+                                            />
+                                            {mjvSupplierId && !mjvTypeId && filteredTypes.length > 0 && (
+                                                <p className="text-xs text-slate-500 mt-1">{filteredTypes.length} type(s) available</p>
+                                            )}
+                                        </div>
+
+                                        {/* Product Selection - THIRD (depends on Type) */}
+                                        <div>
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Product Name <span className="text-slate-400 text-xs">(Optional)</span>
+                                            </label>
+                                            <EntitySelector
+                                                entities={filteredProducts.map(p => ({ id: p.id, name: p.name }))}
+                                                selectedId={mjvProductId}
+                                                onSelect={setMjvProductId}
+                                                placeholder={mjvTypeId ? "Select Product (Optional)..." : "Select Original Type first"}
+                                                className="w-full"
+                                                disabled={!mjvTypeId}
+                                            />
+                                            {mjvTypeId && filteredProducts.length === 0 && (
+                                                <p className="text-xs text-slate-500 mt-1">No products found for this type (you can proceed without product)</p>
+                                            )}
+                                        </div>
+
+                                        {/* Weight Input */}
+                                        <div>
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Weight Adjustment (kg) <span className="text-slate-400 text-xs">(Optional if Worth is entered)</span>
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-green-500 outline-none"
+                                                value={mjvWeight}
+                                                onChange={e => {
+                                                    setMjvWeight(e.target.value);
+                                                    // Clear worth when weight is manually entered
+                                                    if (e.target.value) setMjvWorth('');
+                                                }}
+                                                placeholder="Enter weight (e.g., -198461 for decrease)"
+                                                disabled={!!mjvWorth}
+                                            />
+                                            <p className="text-xs text-slate-500 mt-1">
+                                                Use negative for decrease, positive for increase. Leave empty if entering Worth instead.
+                                            </p>
+                                        </div>
+
+                                        {/* Worth Input */}
+                                        <div>
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Worth Adjustment ($) <span className="text-slate-400 text-xs">(Optional if Weight is entered)</span>
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-green-500 outline-none"
+                                                value={mjvWorth}
+                                                onChange={e => {
+                                                    setMjvWorth(e.target.value);
+                                                    // Clear weight when worth is manually entered
+                                                    if (e.target.value) setMjvWeight('');
+                                                }}
+                                                placeholder="Enter worth (e.g., -5558.33 for decrease)"
+                                                disabled={!!mjvWeight}
+                                            />
+                                            <p className="text-xs text-slate-500 mt-1">
+                                                Use negative for decrease, positive for increase. Leave empty if entering Weight instead.
+                                            </p>
+                                        </div>
+
+                                        {/* Reason */}
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-bold text-slate-700 mb-2">
+                                                Reason <span className="text-red-500">*</span>
+                                            </label>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-green-500 outline-none"
+                                                value={mjvReason}
+                                                onChange={e => setMjvReason(e.target.value)}
+                                                placeholder="Enter reason for adjustment"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Current Stock Info - Show when Supplier and Type are selected */}
+                                    {mjvSupplierId && mjvTypeId && (
+                                        <div className={`border rounded-lg p-4 ${currentStockInfo ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+                                            <h4 className={`font-bold mb-2 ${currentStockInfo ? 'text-blue-900' : 'text-amber-900'}`}>
+                                                {currentStockInfo ? 'Current Stock Information' : 'Stock Information'}
+                                            </h4>
+                                            {currentStockInfo ? (
+                                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                                    <div>
+                                                        <span className={`${currentStockInfo ? 'text-blue-600' : 'text-amber-600'} font-semibold`}>Weight in Hand:</span>
+                                                        <span className="ml-2 text-slate-700 font-mono">{currentStockInfo.weightInHand.toFixed(2)} kg</span>
+                                                    </div>
+                                                    <div>
+                                                        <span className={`${currentStockInfo ? 'text-blue-600' : 'text-amber-600'} font-semibold`}>Current Worth:</span>
+                                                        <span className="ml-2 text-slate-700 font-mono">${currentStockInfo.worth.toFixed(2)}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span className={`${currentStockInfo ? 'text-blue-600' : 'text-amber-600'} font-semibold`}>Avg Cost/Kg:</span>
+                                                        <span className="ml-2 text-slate-700 font-mono">${currentStockInfo.avgCostPerKg.toFixed(2)}</span>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-amber-700">
+                                                    <p>No stock found for this combination.</p>
+                                                    <p className="text-xs mt-1">Please verify Supplier and Original Type selection, or check if there are any purchases for this combination.</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Calculated Adjustment Preview */}
+                                    {((mjvWeight && !isNaN(parseFloat(mjvWeight))) || (mjvWorth && !isNaN(parseFloat(mjvWorth)))) && calculatedWorth > 0 && (
+                                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                            <h4 className="font-bold text-yellow-900 mb-2">Adjustment Summary</h4>
+                                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                                <div>
+                                                    <span className="text-yellow-700 font-semibold">Weight Adjustment:</span>
+                                                    <span className="ml-2 text-slate-700 font-mono">
+                                                        {mjvWeight ? parseFloat(mjvWeight).toFixed(2) : calculatedWeight.toFixed(2)} kg
+                                                        {mjvWorth && !mjvWeight && <span className="text-xs text-slate-500"> (calculated)</span>}
+                                                    </span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-yellow-700 font-semibold">Worth Adjustment:</span>
+                                                    <span className="ml-2 text-slate-700 font-mono font-bold">
+                                                        ${mjvWorth ? parseFloat(mjvWorth).toFixed(2) : calculatedWorth.toFixed(2)}
+                                                        {mjvWeight && !mjvWorth && <span className="text-xs text-slate-500"> (calculated)</span>}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Preview of Entries */}
+                                    {mjvTypeId && mjvSupplierId && ((mjvWeight && !isNaN(parseFloat(mjvWeight))) || (mjvWorth && !isNaN(parseFloat(mjvWorth)))) && calculatedWorth > 0 && (
+                                        <div className="bg-slate-50 border border-slate-300 rounded-lg p-4">
+                                            <h4 className="font-bold text-slate-900 mb-3">Preview of JV Entries to be Created:</h4>
+                                            <div className="space-y-3 text-sm">
+                                                <div className="bg-white p-3 rounded border border-slate-200">
+                                                    <div className="font-semibold text-slate-700 mb-1">Entry 1: Inventory - Raw Materials</div>
+                                                    <div className="text-slate-600">
+                                                        {(adjustmentWeight > 0 || adjustmentWorth > 0) ? 'Debit' : 'Credit'}: ${calculatedWorth.toFixed(2)}
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 mt-1">
+                                                        Narration: Original Stock {(adjustmentWeight > 0 || adjustmentWorth > 0) ? 'Increase' : 'Decrease'}: {filteredTypes.find(t => t.id === mjvTypeId)?.name || currentStockInfo?.originalTypeName || ''} {mjvProductId ? `- ${filteredProducts.find(p => p.id === mjvProductId)?.name || ''}` : ''} ({availableSuppliers.find(s => s.id === mjvSupplierId)?.name || ''}) (Weight: {calculatedWeight.toFixed(2)} kg, Worth: ${calculatedWorth.toFixed(2)}) - {mjvReason}
+                                                    </div>
+                                                </div>
+                                                <div className="bg-white p-3 rounded border border-slate-200">
+                                                    <div className="font-semibold text-slate-700 mb-1">Entry 2: Inventory Adjustment</div>
+                                                    <div className="text-slate-600">
+                                                        {(adjustmentWeight > 0 || adjustmentWorth > 0) ? 'Credit' : 'Debit'}: ${calculatedWorth.toFixed(2)}
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 mt-1">
+                                                        Narration: Original Stock {(adjustmentWeight > 0 || adjustmentWorth > 0) ? 'Increase' : 'Decrease'}: {filteredTypes.find(t => t.id === mjvTypeId)?.name || currentStockInfo?.originalTypeName || ''} - {mjvReason}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
 
                         {vType === 'WO' && (
                             <div className="space-y-6 bg-red-50 p-6 rounded-xl border-2 border-red-200">
@@ -3812,6 +5122,102 @@ export const Accounting: React.FC = () => {
                         </div>
                         <p className="text-xs text-red-600 mt-2">
                             ⚠️ This will delete ALL ledger entries for the selected voucher. Requires Supervisor PIN.
+                        </p>
+                    </div>
+
+                    {/* Delete All SET-TO-ZERO Adjustments */}
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <h3 className="font-semibold text-slate-800 text-sm">Delete All SET-TO-ZERO Adjustments</h3>
+                                <p className="text-xs text-slate-600 mt-1">
+                                    Remove all adjustments that set stock to 0,0. This will allow new purchases to add normally.
+                                </p>
+                            </div>
+                            <button
+                                onClick={async () => {
+                                    const pin = prompt('Enter Supervisor PIN to delete all SET-TO-ZERO adjustments:');
+                                    if (pin !== SUPERVISOR_PIN) {
+                                        alert('Invalid PIN. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    const confirmText = prompt(
+                                        '⚠️ WARNING: This will delete ALL SET-TO-ZERO adjustment transactions.\n\n' +
+                                        'This action cannot be undone.\n\n' +
+                                        'Type "DELETE ALL SET-TO-ZERO" to confirm:'
+                                    );
+
+                                    if (confirmText !== 'DELETE ALL SET-TO-ZERO') {
+                                        alert('Confirmation text does not match. Operation cancelled.');
+                                        return;
+                                    }
+
+                                    try {
+                                        // Find all SET-TO-ZERO adjustment transactions
+                                        const setToZeroTransactions = new Set<string>();
+                                        
+                                        state.ledger.forEach(entry => {
+                                            if (entry.narration && entry.narration.includes('[SET-TO-ZERO:')) {
+                                                setToZeroTransactions.add(entry.transactionId);
+                                            }
+                                        });
+
+                                        const transactionIds = Array.from(setToZeroTransactions);
+                                        
+                                        if (transactionIds.length === 0) {
+                                            alert('✅ No SET-TO-ZERO adjustments found.');
+                                            return;
+                                        }
+
+                                        const result = confirm(
+                                            `Found ${transactionIds.length} SET-TO-ZERO adjustment transaction(s):\n\n` +
+                                            transactionIds.slice(0, 10).join('\n') +
+                                            (transactionIds.length > 10 ? `\n... and ${transactionIds.length - 10} more` : '') +
+                                            '\n\nProceed with deletion?'
+                                        );
+
+                                        if (!result) {
+                                            alert('Operation cancelled.');
+                                            return;
+                                        }
+
+                                        // Delete all SET-TO-ZERO transactions
+                                        let successCount = 0;
+                                        let errorCount = 0;
+                                        const errors: string[] = [];
+
+                                        for (const transactionId of transactionIds) {
+                                            try {
+                                                await deleteTransaction(transactionId, 'Bulk deletion of SET-TO-ZERO adjustments', pin);
+                                                successCount++;
+                                                console.log(`✅ Deleted SET-TO-ZERO transaction: ${transactionId}`);
+                                            } catch (error: any) {
+                                                errorCount++;
+                                                errors.push(`${transactionId}: ${error.message || 'Unknown error'}`);
+                                                console.error(`❌ Error deleting ${transactionId}:`, error);
+                                            }
+                                        }
+
+                                        const message = 
+                                            `✅ Deletion complete!\n\n` +
+                                            `Successfully deleted: ${successCount} transaction(s)\n` +
+                                            (errorCount > 0 ? `Errors: ${errorCount} transaction(s)\n\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}` : '') +
+                                            `\n\nPlease refresh the page (F5) to see updated data.`;
+
+                                        alert(message);
+                                    } catch (error: any) {
+                                        console.error('❌ Error deleting SET-TO-ZERO adjustments:', error);
+                                        alert(`❌ Error: ${error.message || 'Unknown error occurred'}`);
+                                    }
+                                }}
+                                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2"
+                            >
+                                <Trash2 size={16} /> Delete All SET-TO-ZERO
+                            </button>
+                        </div>
+                        <p className="text-xs text-amber-700 mt-2">
+                            ⚠️ This will permanently delete all transactions containing "[SET-TO-ZERO" in their narration. Requires Supervisor PIN.
                         </p>
                     </div>
 

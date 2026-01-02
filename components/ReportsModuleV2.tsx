@@ -621,16 +621,16 @@ const InventoryIntelligence: React.FC = () => {
                         {(() => {
                             // Calculate category data with value and percentage
                             const categoryData = fgItems.reduce((acc: any[], item) => {
-                                const catName = state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized';
+                                            const catName = state.categories.find(c => c.id === item.category)?.name || item.category || 'Uncategorized';
                                 const stockValue = (item.stockQty || 0) * (item.avgCost || 0);
-                                const existing = acc.find((x: any) => x.name === catName);
+                                            const existing = acc.find((x: any) => x.name === catName);
                                 if (existing) {
                                     existing.value += stockValue;
                                     existing.qty += (item.stockQty || 0);
                                 } else {
                                     acc.push({ name: catName, value: stockValue, qty: (item.stockQty || 0) });
                                 }
-                                return acc;
+                                            return acc;
                             }, []);
                             
                             const totalValue = categoryData.reduce((sum, cat) => sum + cat.value, 0);
@@ -665,13 +665,13 @@ const InventoryIntelligence: React.FC = () => {
                                                 ))}
                                             </Bar>
                                         </BarChart>
-                                    </ResponsiveContainer>
+                            </ResponsiveContainer>
                                     <div className="mt-4 text-xs text-slate-600 space-y-1">
                                         {categoryDataWithPct.map((cat, idx) => (
                                             <div key={idx} className="flex justify-between">
                                                 <span>{cat.name}</span>
                                                 <span className="font-mono">${cat.value.toLocaleString(undefined, {minimumFractionDigits: 2})} ({cat.percentage.toFixed(1)}%)</span>
-                                            </div>
+                        </div>
                                         ))}
                                     </div>
                                 </div>

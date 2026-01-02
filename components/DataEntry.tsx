@@ -1533,8 +1533,30 @@ export const DataEntry: React.FC = () => {
         // Only show batches with stock > 0.01 kg (strict by purchase ID)
         return state.purchases.filter(p => {
             if (p.supplierId !== dsSupplier) return false;
+            
+            // Helper to check if an opening matches this purchase
+            const openingMatchesPurchase = (o: any) => {
+                if (o.batchNumber !== p.batchNumber || o.supplierId !== dsSupplier) return false;
+                
+                // For multi-item purchases, check if opening's originalType matches any item's originalTypeId
+                if (p.items && p.items.length > 0) {
+                    return p.items.some(item => {
+                        const itemTypeId = item.originalTypeId || item.originalType;
+                        // Compare opening's originalType with item's originalTypeId (handle both ID and name formats)
+                        return o.originalType === itemTypeId || 
+                               o.originalType === item.originalType ||
+                               (state.originalTypes.find(t => t.id === itemTypeId)?.name === o.originalType);
+                    });
+                } else {
+                    // For legacy single-item purchases, check against purchase's originalTypeId
+                    const purchaseTypeId = p.originalTypeId || p.originalType;
+                    return o.originalType === purchaseTypeId ||
+                           (state.originalTypes.find(t => t.id === purchaseTypeId)?.name === o.originalType);
+                }
+            };
+            
             // Calculate opened and sold for this purchase
-            const opened = state.originalOpenings.filter(o => o.batchNumber === p.batchNumber && o.supplierId === dsSupplier && o.originalType === p.originalTypeId).reduce((sum, o) => sum + o.weightOpened, 0);
+            const opened = state.originalOpenings.filter(openingMatchesPurchase).reduce((sum, o) => sum + o.weightOpened, 0);
             const sold = state.salesInvoices.filter(inv => inv.status === 'Posted').reduce((sum, inv) => {
                 return sum + inv.items.filter(i => i.originalPurchaseId === p.id).reduce((is, item) => is + item.totalKg, 0);
             }, 0);
@@ -1543,7 +1565,28 @@ export const DataEntry: React.FC = () => {
             const remaining = p.weightPurchased - opened - sold - directSold;
             return remaining > 0.01;
         }).map(p => {
-            const opened = state.originalOpenings.filter(o => o.batchNumber === p.batchNumber && o.supplierId === dsSupplier && o.originalType === p.originalTypeId).reduce((sum, o) => sum + o.weightOpened, 0);
+            // Helper to check if an opening matches this purchase (same logic as above)
+            const openingMatchesPurchase = (o: any) => {
+                if (o.batchNumber !== p.batchNumber || o.supplierId !== dsSupplier) return false;
+                
+                // For multi-item purchases, check if opening's originalType matches any item's originalTypeId
+                if (p.items && p.items.length > 0) {
+                    return p.items.some(item => {
+                        const itemTypeId = item.originalTypeId || item.originalType;
+                        // Compare opening's originalType with item's originalTypeId (handle both ID and name formats)
+                        return o.originalType === itemTypeId || 
+                               o.originalType === item.originalType ||
+                               (state.originalTypes.find(t => t.id === itemTypeId)?.name === o.originalType);
+                    });
+                } else {
+                    // For legacy single-item purchases, check against purchase's originalTypeId
+                    const purchaseTypeId = p.originalTypeId || p.originalType;
+                    return o.originalType === purchaseTypeId ||
+                           (state.originalTypes.find(t => t.id === purchaseTypeId)?.name === o.originalType);
+                }
+            };
+            
+            const opened = state.originalOpenings.filter(openingMatchesPurchase).reduce((sum, o) => sum + o.weightOpened, 0);
             const sold = state.salesInvoices.filter(inv => inv.status === 'Posted').reduce((sum, inv) => {
                 return sum + inv.items.filter(i => i.originalPurchaseId === p.id).reduce((is, item) => is + item.totalKg, 0);
             }, 0);
@@ -1551,7 +1594,7 @@ export const DataEntry: React.FC = () => {
             const remaining = p.weightPurchased - opened - sold - directSold;
             return { id: p.id, name: `Batch #${p.batchNumber} (${remaining.toLocaleString()} Kg)`, remaining, landedCostPerKg: p.landedCostPerKg, purchase: p };
         });
-    }, [dsSupplier, state.purchases, state.originalOpenings, state.salesInvoices]);
+    }, [dsSupplier, state.purchases, state.originalOpenings, state.salesInvoices, state.originalTypes, state.directSales]);
 
     const dsSelectedBatch = useMemo(() => dsBatches.find(b => b.id === dsPurchaseId), [dsPurchaseId, dsBatches]);
 
