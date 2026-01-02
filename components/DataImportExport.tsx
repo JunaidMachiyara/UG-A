@@ -294,63 +294,84 @@ export const DataImportExport: React.FC = () => {
                 // Process in batches with delays to avoid rate limiting
                 console.log(`≡ƒôª Starting batch processing: ${validItems.length} items in ${Math.ceil(validItems.length / BATCH_SIZE)} batch(es)`);
                 
-                // First, check for existing items with same (factoryId, code) to prevent overwrites
+                // First, check for existing items with same (factoryId, code) to UPDATE them instead of creating duplicates
                 const itemsCollection = collection(db, 'items');
                 const existingItemsQuery = query(itemsCollection, where('factoryId', '==', currentFactory?.id || ''));
                 const existingItemsSnapshot = await getDocs(existingItemsQuery);
-                const existingCodes = new Set<string>();
+                const existingItemsMap = new Map<string, { docId: string; existingData: any }>(); // Map: code -> {docId, existingData}
                 existingItemsSnapshot.forEach((doc) => {
                     const data = doc.data();
                     if (data.code) {
-                        existingCodes.add(data.code);
+                        existingItemsMap.set(data.code, { docId: doc.id, existingData: data });
                     }
                 });
 
-                // Filter out items that already exist with same code for this factory
-                const itemsToImport = validItems.filter(item => {
-                    if (existingCodes.has(item.code)) {
-                        console.warn(`⚠️ Skipping item ${item.name} (code: ${item.code}) - already exists for factory ${currentFactory?.name}`);
-                        return false;
+                // Separate items into new and existing
+                const itemsToCreate: any[] = [];
+                const itemsToUpdate: Array<{ item: any; docId: string }> = [];
+                
+                validItems.forEach(item => {
+                    const existing = existingItemsMap.get(item.code);
+                    if (existing) {
+                        itemsToUpdate.push({ item, docId: existing.docId });
+                        console.log(`🔄 Will UPDATE item ${item.name} (code: ${item.code}) - existing document ID: ${existing.docId}`);
+                    } else {
+                        itemsToCreate.push(item);
+                        console.log(`➕ Will CREATE new item ${item.name} (code: ${item.code})`);
                     }
-                    return true;
                 });
 
-                if (itemsToImport.length === 0) {
-                    alert('All items already exist for this factory. No items imported.');
+                if (itemsToCreate.length === 0 && itemsToUpdate.length === 0) {
+                    alert('No items to import.');
                     setImporting(false);
                     return;
                 }
 
-                if (itemsToImport.length < validItems.length) {
-                    alert(`${validItems.length - itemsToImport.length} item(s) skipped (already exist). ${itemsToImport.length} new item(s) will be imported.`);
+                if (itemsToUpdate.length > 0) {
+                    console.log(`📝 ${itemsToUpdate.length} item(s) will be updated, ${itemsToCreate.length} item(s) will be created.`);
                 }
 
                 // Process in batches with delays to avoid rate limiting
-                for (let i = 0; i < itemsToImport.length; i += BATCH_SIZE) {
+                const allItems = [...itemsToCreate, ...itemsToUpdate.map(u => u.item)];
+                for (let i = 0; i < allItems.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
-                    const batchItems = itemsToImport.slice(i, i + BATCH_SIZE);
+                    const batchItems = allItems.slice(i, i + BATCH_SIZE);
                     const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
                     
                     console.log(`≡ƒôª Batch ${batchNumber}: Preparing ${batchItems.length} items for Firebase write`);
                     const itemsInBatch: string[] = [];
                     
                     for (const item of batchItems) {
-                        // Use CSV 'id' as 'code', let Firestore auto-generate document ID
+                        const existing = existingItemsMap.get(item.code);
                         const { id: csvId, ...itemData } = item;
-                        // Create auto-generated document ID (Firestore will assign it)
-                        const itemRef = doc(collection(db, 'items'));
                         
-                        // Store CSV id as code field, ensure code is set
-                        const itemDataForSave = {
-                            ...itemData,
-                            code: csvId || item.code || `ITEM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Use CSV id as code, fallback if missing
-                            createdAt: serverTimestamp()
-                        };
-                        
-                        console.log(`  ≡ƒô¥ Adding to batch: ${item.name} (code: ${itemDataForSave.code}, Firestore ID: ${itemRef.id})`);
-                        itemsInBatch.push(`${item.name} (${itemDataForSave.code})`);
-                        
-                        batch.set(itemRef, itemDataForSave);
+                        if (existing) {
+                            // UPDATE existing item
+                            const itemRef = doc(db, 'items', existing.docId);
+                            const itemDataForUpdate = {
+                                ...itemData,
+                                code: csvId || item.code, // Preserve code
+                                updatedAt: serverTimestamp()
+                            };
+                            
+                            console.log(`  🔄 Updating in batch: ${item.name} (code: ${itemDataForUpdate.code}, Firestore ID: ${existing.docId})`);
+                            itemsInBatch.push(`${item.name} (${itemDataForUpdate.code}) [UPDATED]`);
+                            
+                            batch.update(itemRef, itemDataForUpdate);
+                        } else {
+                            // CREATE new item
+                            const itemRef = doc(collection(db, 'items'));
+                            const itemDataForSave = {
+                                ...itemData,
+                                code: csvId || item.code || `ITEM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                                createdAt: serverTimestamp()
+                            };
+                            
+                            console.log(`  ➕ Creating in batch: ${item.name} (code: ${itemDataForSave.code}, Firestore ID: ${itemRef.id})`);
+                            itemsInBatch.push(`${item.name} (${itemDataForSave.code}) [NEW]`);
+                            
+                            batch.set(itemRef, itemDataForSave);
+                        }
                     }
                     
                     // Commit batch with error handling
@@ -397,11 +418,14 @@ export const DataImportExport: React.FC = () => {
                                     const prevYear = new Date().getFullYear() - 1;
                                     const date = `${prevYear}-12-31`;
                                     const stockValue = openingStock * avgCost;
+                                    // Generate unique transactionId with timestamp to allow separate deletion of each upload
+                                    const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+                                    const transactionId = `OB-STK-${item.code || item.id}-${uniqueId}`;
                                     
                                     const entries = [
                                         {
                                             date,
-                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionId: transactionId,
                                             transactionType: TransactionType.OPENING_BALANCE,
                                             accountId: finishedGoodsId,
                                             accountName: finishedGoodsAccount.name,
@@ -415,7 +439,7 @@ export const DataImportExport: React.FC = () => {
                                         },
                                         {
                                             date,
-                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionId: transactionId,
                                             transactionType: TransactionType.OPENING_BALANCE,
                                             accountId: capitalId,
                                             accountName: capitalAccount.name,
@@ -1502,21 +1526,73 @@ export const DataImportExport: React.FC = () => {
                     return; // Wait for user to review and confirm
                 }
                 
+                // First, check for existing items with same (factoryId, code) to UPDATE them instead of creating duplicates
+                const itemsCollection = collection(db, 'items');
+                const existingItemsQuery = query(itemsCollection, where('factoryId', '==', currentFactory?.id || ''));
+                const existingItemsSnapshot = await getDocs(existingItemsQuery);
+                const existingItemsMap = new Map<string, { docId: string; existingData: any }>(); // Map: code -> {docId, existingData}
+                existingItemsSnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (data.code) {
+                        existingItemsMap.set(data.code, { docId: doc.id, existingData: data });
+                    }
+                });
+
+                // Separate items into new and existing
+                const itemsToCreate: any[] = [];
+                const itemsToUpdate: Array<{ item: any; docId: string }> = [];
+                
+                validItems.forEach(item => {
+                    const existing = existingItemsMap.get(item.code);
+                    if (existing) {
+                        itemsToUpdate.push({ item, docId: existing.docId });
+                        console.log(`🔄 Will UPDATE item ${item.name} (code: ${item.code}) - existing document ID: ${existing.docId}`);
+                    } else {
+                        itemsToCreate.push(item);
+                        console.log(`➕ Will CREATE new item ${item.name} (code: ${item.code})`);
+                    }
+                });
+
+                if (itemsToCreate.length === 0 && itemsToUpdate.length === 0) {
+                    alert('No items to import.');
+                    setImporting(false);
+                    return;
+                }
+
+                if (itemsToUpdate.length > 0) {
+                    console.log(`📝 ${itemsToUpdate.length} item(s) will be updated, ${itemsToCreate.length} item(s) will be created.`);
+                }
+
                 // Process in batches with delays to avoid rate limiting
-                for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+                const allItems = [...itemsToCreate, ...itemsToUpdate.map(u => u.item)];
+                for (let i = 0; i < allItems.length; i += BATCH_SIZE) {
                     const batch = writeBatch(db);
-                    const batchItems = validItems.slice(i, i + BATCH_SIZE);
+                    const batchItems = allItems.slice(i, i + BATCH_SIZE);
                     
                     for (const item of batchItems) {
-                        // Prepare for batch write - use item's ID as document ID if provided
+                        const existing = existingItemsMap.get(item.code);
                         const { id, ...itemData } = item;
-                        const itemRef = id 
-                            ? doc(db, 'items', id)  // Use item's ID as document ID
-                            : doc(collection(db, 'items'));  // Auto-generate if no ID
-                        batch.set(itemRef, {
-                            ...itemData,
-                            createdAt: serverTimestamp()
-                        });
+                        
+                        if (existing) {
+                            // UPDATE existing item
+                            const itemRef = doc(db, 'items', existing.docId);
+                            batch.update(itemRef, {
+                                ...itemData,
+                                code: item.code, // Preserve code
+                                updatedAt: serverTimestamp()
+                            });
+                            console.log(`🔄 Updating item ${item.name} (code: ${item.code})`);
+                        } else {
+                            // CREATE new item
+                            const itemRef = id 
+                                ? doc(db, 'items', id)  // Use item's ID as document ID if provided
+                                : doc(collection(db, 'items'));  // Auto-generate if no ID
+                            batch.set(itemRef, {
+                                ...itemData,
+                                createdAt: serverTimestamp()
+                            });
+                            console.log(`➕ Creating new item ${item.name} (code: ${item.code})`);
+                        }
                     }
                     
                     // Commit batch with error handling
@@ -1561,11 +1637,14 @@ export const DataImportExport: React.FC = () => {
                                     const prevYear = new Date().getFullYear() - 1;
                                     const date = `${prevYear}-12-31`;
                                     const stockValue = openingStock * avgCost;
+                                    // Generate unique transactionId with timestamp to allow separate deletion of each upload
+                                    const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+                                    const transactionId = `OB-STK-${item.code || item.id}-${uniqueId}`;
                                     
                                     const entries = [
                                         {
                                             date,
-                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionId: transactionId,
                                             transactionType: TransactionType.OPENING_BALANCE,
                                             accountId: finishedGoodsId,
                                             accountName: finishedGoodsAccount.name,
@@ -1579,7 +1658,7 @@ export const DataImportExport: React.FC = () => {
                                         },
                                         {
                                             date,
-                                            transactionId: `OB-STK-${item.id || item.code}`,
+                                            transactionId: transactionId,
                                             transactionType: TransactionType.OPENING_BALANCE,
                                             accountId: capitalId,
                                             accountName: capitalAccount.name,

@@ -2326,10 +2326,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Use centralized account mapping
             const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
             const capitalId = getAccountId('301'); // Capital
+            // Generate unique transactionId with timestamp to allow separate deletion of each entry
+            const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+            const transactionId = `OB-STK-${item.code || item.id}-${uniqueId}`;
             const entries = [
                 {
                     date,
-                    transactionId: `OB-STK-${item.id}`,
+                    transactionId: transactionId,
                     transactionType: TransactionType.OPENING_BALANCE,
                     accountId: finishedGoodsId,
                     accountName: 'Inventory - Finished Goods',
@@ -2343,7 +2346,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 },
                 {
                     date,
-                    transactionId: `OB-STK-${item.id}`,
+                    transactionId: transactionId,
                     transactionType: TransactionType.OPENING_BALANCE,
                     accountId: capitalId,
                     accountName: 'Capital',

@@ -13,6 +13,7 @@ import { CSVValidator } from './CSVValidator';
 import { DataImportExport } from './DataImportExport';
 import { FactoryManagement } from './FactoryManagement';
 import { UserManagement } from './UserManagement';
+import { CentralItemDatabase } from './CentralItemDatabase';
 
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
@@ -97,7 +98,7 @@ export const AdminModule: React.FC = () => {
     const [itemsWithInvalidSalePrice, setItemsWithInvalidSalePrice] = useState<Array<{ id: string; code: string; name: string; category: string; avgCost: number; salePrice: any; issue: string }>>([]);
     const [fixingInvalidSalePrices, setFixingInvalidSalePrices] = useState(false);
     const [invalidSalePriceFixResult, setInvalidSalePriceFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
-    const [activeTab, setActiveTab] = useState<'admin' | 'csv-validator' | 'import-export'>('admin');
+    const [activeTab, setActiveTab] = useState<'admin' | 'csv-validator' | 'import-export' | 'central-items'>('admin');
     const [scanningLedger, setScanningLedger] = useState(false);
     const [ledgerScanResult, setLedgerScanResult] = useState<{
         duplicates: { transactionId: string; count: number; invoiceNo: string; entryCounts: number[] }[];
@@ -501,6 +502,17 @@ export const AdminModule: React.FC = () => {
                     <Upload size={16} />
                     <span>Import/Export</span>
                 </button>
+                <button
+                    onClick={() => setActiveTab('central-items')}
+                    className={`flex-1 min-w-[120px] px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                        activeTab === 'central-items'
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                >
+                    <Database size={16} />
+                    <span>Central Items</span>
+                </button>
             </div>
 
             {/* Tab Content */}
@@ -525,6 +537,12 @@ export const AdminModule: React.FC = () => {
             {activeTab === 'import-export' && (
                 <div className="bg-white rounded-lg border border-slate-200 p-6">
                     <DataImportExport />
+                </div>
+            )}
+
+            {activeTab === 'central-items' && (
+                <div className="bg-white rounded-lg border border-slate-200 p-6">
+                    <CentralItemDatabase />
                 </div>
             )}
 
