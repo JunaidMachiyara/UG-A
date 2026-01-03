@@ -235,21 +235,112 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             });
             
             // Recalculate partner balances from ledger entries
+            // NOTE: For customers, opening balance entries use partner ID directly as accountId
+            // For suppliers, opening balance entries use AP account ID, so we need to check both
             const updatedPartners = state.partners.map(partner => {
-                const mappedAccountId = getAccountId(partner.id);
-                const partnerDebitSum = action.payload.filter(e => e.accountId === mappedAccountId).reduce((sum, e) => sum + (e.debit || 0), 0);
-                const partnerCreditSum = action.payload.filter(e => e.accountId === mappedAccountId).reduce((sum, e) => sum + (e.credit || 0), 0);
+                const partnerId = partner.id;
+                
                 let newPartnerBalance = 0;
+                
                 if (partner.type === PartnerType.CUSTOMER) {
                     // Customers: debit increases balance (they owe us) - positive
-                    newPartnerBalance = partnerDebitSum - partnerCreditSum;
+                    // Opening balance entries use partner ID as accountId
+                    // So we can simply filter by accountId === partnerId
+                    const customerEntries = action.payload.filter(e => e.accountId === partnerId);
+                    const customerDebitSum = customerEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                    const customerCreditSum = customerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                    newPartnerBalance = customerDebitSum - customerCreditSum;
                 } else if ([PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
                     // Suppliers/agents: credit increases liability, so balance becomes more negative
-                    newPartnerBalance = partnerCreditSum - partnerDebitSum;
+                    // Opening balance entries use AP account ID, not partner ID
+                    // Regular entries (purchases, payments) might use partner ID
+                    
+                    // Step 1: Get opening balance from opening balance entries (by transactionId)
+                    const openingBalanceEntries = action.payload.filter(e => 
+                        e.transactionId === `OB-${partnerId}` && e.transactionType === TransactionType.OPENING_BALANCE
+                    );
+                    
+                    let openingBalance = 0;
+                    if (openingBalanceEntries.length > 0) {
+                        // Find the AP account entry in opening balance entries
+                        const apEntry = openingBalanceEntries.find(e => 
+                            e.accountName?.includes('Accounts Payable') || 
+                            e.accountName?.includes('Payable')
+                        );
+                        if (apEntry) {
+                            // If AP account is credited, we owe them (negative balance)
+                            // If AP account is debited, we paid them (positive balance)
+                            openingBalance = apEntry.credit > 0 ? -apEntry.credit : apEntry.debit;
+                        } else {
+                            // Fallback: calculate from all opening balance entries
+                            const obDebitSum = openingBalanceEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                            const obCreditSum = openingBalanceEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                            openingBalance = obCreditSum - obDebitSum;
+                        }
+                    }
+                    
+                    // Step 2: Get regular entries (purchases, payments) where accountId === partnerId
+                    const regularEntries = action.payload.filter(e => 
+                        e.accountId === partnerId && 
+                        e.transactionId !== `OB-${partnerId}` // Exclude opening balance entries
+                    );
+                    const regularDebitSum = regularEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                    const regularCreditSum = regularEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                    const regularBalance = regularCreditSum - regularDebitSum;
+                    
+                    // Step 3: Combine opening balance with regular balance
+                    newPartnerBalance = openingBalance + regularBalance;
                 } else {
                     // Other partners: default logic
+                    const partnerEntries = action.payload.filter(e => e.accountId === partnerId);
+                    const partnerDebitSum = partnerEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                    const partnerCreditSum = partnerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
                     newPartnerBalance = partnerDebitSum - partnerCreditSum;
                 }
+                
+                // Fallback: If no entries found and partner has existing balance, preserve it
+                // This prevents overwriting explicitly set balances when ledger is empty
+                if (newPartnerBalance === 0 && partner.balance !== undefined && partner.balance !== 0) {
+                    // Check if there are actually any entries for this partner
+                    const hasAnyEntries = action.payload.some(e => 
+                        e.accountId === partnerId || 
+                        e.transactionId === `OB-${partnerId}`
+                    );
+                    if (!hasAnyEntries) {
+                        // No entries found, preserve existing balance from Firebase
+                        newPartnerBalance = partner.balance;
+                    }
+                }
+                
+                // CRITICAL FIX: For opening balances, the saved balance is the source of truth
+                // If there's a mismatch and we have opening balance entries, trust the saved balance
+                // This prevents incorrect recalculation from overriding explicitly set opening balances
+                if (partner.balance !== undefined && partner.balance !== 0 && newPartnerBalance !== partner.balance) {
+                    const hasOpeningBalanceEntries = action.payload.some(e => 
+                        e.transactionId === `OB-${partnerId}` && e.transactionType === TransactionType.OPENING_BALANCE
+                    );
+                    const difference = Math.abs(newPartnerBalance - partner.balance);
+                    
+                    if (hasOpeningBalanceEntries && difference > 0.01) {
+                        // Opening balance entries exist and there's a mismatch
+                        // Use the saved balance as source of truth (it was explicitly set by user)
+                        console.warn(`⚠️ Partner ${partnerId} (${partner.name}) balance mismatch detected. Using saved balance as source of truth:`, {
+                            saved: partner.balance,
+                            calculated: newPartnerBalance,
+                            difference: difference,
+                            action: 'Using saved balance'
+                        });
+                        newPartnerBalance = partner.balance;
+                    } else if (difference > 0.01) {
+                        // No opening balance entries but there's a mismatch - log for investigation
+                        console.warn(`⚠️ Partner ${partnerId} (${partner.name}) balance mismatch (no OB entries):`, {
+                            saved: partner.balance,
+                            calculated: newPartnerBalance,
+                            difference: difference
+                        });
+                    }
+                }
+                
                 return { ...partner, balance: newPartnerBalance };
             });
             
@@ -2149,9 +2240,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatedAt: serverTimestamp()
         };
         
-        // Don't save balance directly - it's calculated from ledger entries
-        // But we'll handle opening balance creation if balance is being set
-        delete partnerData.balance;
+        // Save balance field if it's being updated
+        // It will be recalculated from ledger entries on reload, but we save it for immediate Balance Sheet updates
+        // If balance is not being changed, preserve existing balance from partner document
+        if (partner.balance === undefined) {
+            // If balance not in update, preserve existing balance (don't delete it)
+            // This ensures balance persists after reload
+        } else {
+            // Balance is being updated - save it
+            partnerData.balance = partner.balance;
+        }
         
         Object.keys(partnerData).forEach(key => {
             if (partnerData[key] === undefined) {
@@ -2176,9 +2274,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     try {
                         await deleteTransaction(`OB-${id}`, 'Opening balance updated');
                         console.log('✅ Old opening balance entries deleted');
+                        
+                        // Wait for Firebase to process the deletion
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+                        // Verify deletion by querying Firebase directly (not local state)
+                        const ledgerQuery = query(
+                            collection(db, 'ledger'), 
+                            where('transactionId', '==', `OB-${id}`),
+                            where('factoryId', '==', currentFactory?.id || '')
+                        );
+                        const verifySnapshot = await getDocs(ledgerQuery);
+                        
+                        if (verifySnapshot.size > 0) {
+                            console.warn(`⚠️ Warning: ${verifySnapshot.size} opening balance entries still exist in Firebase after deletion. Retrying deletion...`);
+                            // Retry deletion
+                            await deleteTransaction(`OB-${id}`, 'Opening balance updated - retry');
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            // Verify again
+                            const retrySnapshot = await getDocs(ledgerQuery);
+                            if (retrySnapshot.size > 0) {
+                                throw new Error(`Failed to delete ${retrySnapshot.size} old opening balance entries. Cannot create new entries.`);
+                            }
+                        }
+                        console.log('✅ Verified: All old opening balance entries deleted from Firebase');
                     } catch (error: any) {
                         console.error('⚠️ Error deleting old opening balance entries:', error);
-                        // Continue anyway
+                        throw error; // Don't continue - we can't have duplicate entries
                     }
                 }
                 
@@ -2189,7 +2312,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 
                 // Create new opening balance entries
-                console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
+                    console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
                     const prevYear = new Date().getFullYear() - 1;
                     const date = `${prevYear}-12-31`;
                     const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
@@ -2208,33 +2331,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         
                         if (newBalance >= 0) {
                             // Positive balance: Customer owes us
-                            entries = [
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: id,
-                                    accountName: existingPartner.name,
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingPartner.name,
                                     debit: absBalance,
-                                    credit: 0,
-                                    narration: `Opening Balance - ${existingPartner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                },
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: openingEquityId,
-                                    accountName: 'Opening Equity',
-                                    debit: 0,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: 0,
                                     credit: absBalance,
-                                    narration: `Opening Balance - ${existingPartner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                }
-                            ];
-                        } else {
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
                             // Negative balance: Credit balance (we owe them or they overpaid)
                             entries = [
                                 {
@@ -2307,6 +2430,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                     await postTransaction(entries);
                     console.log('✅ Opening balance entries created');
+                    
+                    // Wait a moment for Firebase to sync the new entries
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Update partner document with the balance we set
+                    // This ensures the Balance Sheet reflects the correct balance immediately
+                    try {
+                        await updateDoc(doc(db, 'partners', id), {
+                            balance: newBalance,
+                            updatedAt: serverTimestamp()
+                        });
+                        console.log(`✅ Partner balance updated in Firebase: ${newBalance}`);
+                        
+                        // Update local state immediately so Balance Sheet updates
+                        dispatch({ 
+                            type: 'UPDATE_ENTITY', 
+                            payload: { 
+                                type: 'partners', 
+                                id, 
+                                data: { balance: newBalance } 
+                            } 
+                        });
+                    } catch (balanceError) {
+                        console.error('⚠️ Error updating partner balance:', balanceError);
+                        // Continue - balance will be recalculated when ledger reloads
+                }
             }
             
             // Firebase listener will handle updating local state
