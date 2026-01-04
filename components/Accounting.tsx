@@ -78,6 +78,15 @@ export const Accounting: React.FC = () => {
     // Table sorting state for IA
     const [iaSortColumn, setIaSortColumn] = useState<string>('');
     const [iaSortDirection, setIaSortDirection] = useState<'asc' | 'desc'>('asc');
+    
+    // Target Mode for Inventory Adjustment (similar to IAO)
+    interface ItemTarget {
+        itemId: string;
+        targetQty: number | '';
+        targetWorth: number | '';
+    }
+    const [iaTargets, setIaTargets] = useState<Record<string, ItemTarget>>({});
+    const [iaUseTargetMode, setIaUseTargetMode] = useState(false); // Default to Adjustment Mode for backward compatibility
 
     // Computed filter options for IA
     const iaFilterOptions = useMemo(() => {
@@ -116,7 +125,7 @@ export const Accounting: React.FC = () => {
         targetWorth: number | '';
     }
     const [iaoTargets, setIaoTargets] = useState<Record<string, OriginalStockTarget>>({});
-    const [useSimpleMode, setUseSimpleMode] = useState(true); // Toggle between old and new mode
+    const [useSimpleMode, setUseSimpleMode] = useState(true); // Default to Target Mode (true = Target Mode, false = Adjustment Mode)
 
     const [rtsSupplierId, setRtsSupplierId] = useState(''); // Return to Supplier
     const [rtsItemId, setRtsItemId] = useState('');
@@ -303,6 +312,14 @@ export const Accounting: React.FC = () => {
                     }
                 }
             });
+        });
+
+        // Calculate worth for all items BEFORE processing adjustments
+        // This ensures current worth is available when converting targets to adjustments
+        summary.forEach((item) => {
+            if (item.weightInHand > 0 && item.avgCostPerKg > 0) {
+                item.worth = item.weightInHand * item.avgCostPerKg;
+            }
         });
 
         // Apply Original Stock Adjustments from ledger entries
@@ -799,8 +816,10 @@ export const Accounting: React.FC = () => {
                 return; // Skip to next item - do not recalculate
             }
             
+            // Calculate worth for all items (weight * avgCostPerKg)
+            // This ensures worth is always correct, even if no adjustments exist
             if (!adjustedItemKeys.has(item.key)) {
-                // Only recalculate worth for items that weren't adjusted
+                // For non-adjusted items, calculate worth from weight and cost
                 item.worth = item.weightInHand * item.avgCostPerKg;
             } else {
                 // For adjusted items, worth was already set correctly during adjustment
@@ -826,6 +845,14 @@ export const Accounting: React.FC = () => {
                     });
                     // Worth is already 0, no need to change it
                 }
+            }
+        });
+
+        // Final pass: Ensure worth is calculated for all items that weren't explicitly adjusted
+        summary.forEach((item, key) => {
+            if (!adjustedItemKeys.has(key)) {
+                // For non-adjusted items, calculate worth from weight and cost
+                item.worth = item.weightInHand * item.avgCostPerKg;
             }
         });
 
@@ -873,11 +900,15 @@ export const Accounting: React.FC = () => {
         setVoucherNo(generateVoucherId(type));
         // Reset new transaction type states
         setIaItemAdjustments({});
+        setIaTargets({});
+        setIaUseTargetMode(false);
         setIaReason('');
         setIaFilterCode('');
         setIaFilterCategory('');
         setIaFilterItemName('');
         setIaoAdjustments({});
+        setIaoTargets({});
+        setUseSimpleMode(true); // Reset to Target Mode
         setIaoReason('');
         setIaoFilterCode('');
         setIaoFilterOriginalType('');
@@ -1163,24 +1194,75 @@ export const Accounting: React.FC = () => {
             // Inventory Adjustment - New Table-Based Design
             if (!iaReason) return alert("Reason is required for inventory adjustment");
             
+            // If in target mode, convert targets to adjustments
+            let finalAdjustments = iaItemAdjustments;
+            if (iaUseTargetMode && Object.keys(iaTargets).length > 0) {
+                console.log('📊 IA Voucher - Converting targets to adjustments on-the-fly');
+                const convertedAdjustments: Record<string, ItemAdjustment> = {};
+                Object.entries(iaTargets).forEach(([itemId, target]: [string, ItemTarget]) => {
+                    const item = state.items.find(i => i.id === itemId);
+                    if (!item) return;
+                    const currentQty = item.stockQty || 0;
+                    const currentWorth = currentQty * (item.avgCost || 0);
+                    
+                    // Check if values were explicitly provided (including 0)
+                    const hasExplicitQty = target.targetQty !== '' && target.targetQty !== null && target.targetQty !== undefined;
+                    const hasExplicitWorth = target.targetWorth !== '' && target.targetWorth !== null && target.targetWorth !== undefined;
+                    
+                    if (!hasExplicitQty && !hasExplicitWorth) return;
+                    
+                    // Parse target values
+                    const targetQty = hasExplicitQty 
+                        ? (typeof target.targetQty === 'number' ? target.targetQty : parseFloat(String(target.targetQty)))
+                        : currentQty;
+                    const targetWorth = hasExplicitWorth 
+                        ? (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)))
+                        : currentWorth;
+                    
+                    // Calculate adjustments
+                    const adjustmentQty = targetQty - currentQty;
+                    const adjustmentWorth = targetWorth - currentWorth;
+                    
+                    // Only add if there's a change
+                    if (adjustmentQty !== 0 || adjustmentWorth !== 0) {
+                        convertedAdjustments[itemId] = {
+                            itemId,
+                            adjustmentQty: adjustmentQty !== 0 ? adjustmentQty : '',
+                            adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                        };
+                    }
+                });
+                
+                finalAdjustments = { ...iaItemAdjustments, ...convertedAdjustments };
+                console.log('📊 IA Voucher - Converted targets:', {
+                    targetCount: Object.keys(iaTargets).length,
+                    convertedCount: Object.keys(convertedAdjustments).length,
+                    finalAdjustmentsCount: Object.keys(finalAdjustments).length
+                });
+            }
+            
             // Get items with adjustments (either qty or worth has value)
-            const itemsWithAdjustments = Object.entries(iaItemAdjustments).filter(([itemId, adj]) => {
-                const hasQty = adj.adjustmentQty !== '' && adj.adjustmentQty !== null && adj.adjustmentQty !== undefined && adj.adjustmentQty !== 0;
-                const hasWorth = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined && adj.adjustmentWorth !== 0;
+            const itemsWithAdjustments: Array<[string, ItemAdjustment]> = Object.entries(finalAdjustments).filter(([itemId, adj]) => {
+                const adjustment = adj as ItemAdjustment;
+                const hasQty = adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0;
+                const hasWorth = adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0;
                 return hasQty || hasWorth;
-            });
+            }) as Array<[string, ItemAdjustment]>;
             
             console.log('🔍 Inventory Adjustment Debug:', {
                 totalItemsInState: Object.keys(iaItemAdjustments).length,
                 itemsWithAdjustments: itemsWithAdjustments.length,
-                adjustments: Object.entries(iaItemAdjustments).map(([itemId, adj]) => ({
-                    itemId,
-                    itemCode: state.items.find(i => i.id === itemId)?.code || 'NOT FOUND',
-                    adjustmentQty: adj.adjustmentQty,
-                    adjustmentWorth: adj.adjustmentWorth,
-                    hasQty: adj.adjustmentQty !== '' && adj.adjustmentQty !== null && adj.adjustmentQty !== undefined && adj.adjustmentQty !== 0,
-                    hasWorth: adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined && adj.adjustmentWorth !== 0
-                }))
+                adjustments: Object.entries(finalAdjustments).map(([itemId, adj]) => {
+                    const adjustment = adj as ItemAdjustment;
+                    return {
+                        itemId,
+                        itemCode: state.items.find(i => i.id === itemId)?.code || 'NOT FOUND',
+                        adjustmentQty: adjustment.adjustmentQty,
+                        adjustmentWorth: adjustment.adjustmentWorth,
+                        hasQty: adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0,
+                        hasWorth: adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0
+                    };
+                })
             });
             
             if (itemsWithAdjustments.length === 0) {
@@ -1256,8 +1338,8 @@ export const Accounting: React.FC = () => {
             // Store item updates for Firestore (to update after posting ledger entries)
             const itemStockUpdates: Array<{ itemId: string; newStockQty: number; newAvgCost: number }> = [];
             
-            // Process each item with adjustment
-            for (const [itemId, adj] of itemsWithAdjustments) {
+            // Process each item with adjustment (using finalAdjustments which may include converted targets)
+            for (const [itemId, adj] of itemsWithAdjustments as Array<[string, ItemAdjustment]>) {
                 const item = state.items.find(i => i.id === itemId);
                 if (!item) {
                     console.error(`❌ Item not found for ID: ${itemId}`);
@@ -1426,150 +1508,106 @@ export const Accounting: React.FC = () => {
                 }
             };
         } else if (vType === 'IAO') {
-            // Original Stock Adjustment - Table-Based Design
-            try {
-                if (!iaoReason) {
-                    alert("Reason is required for original stock adjustment");
-                    return;
-                }
-                
-                // If in target mode, always convert targets to adjustments (targets take precedence)
-                let finalAdjustments = iaoAdjustments;
-                if (useSimpleMode && Object.keys(iaoTargets).length > 0) {
+            // Original Stock Adjustment - Simplified Design (following IA pattern)
+            if (!iaoReason) {
+                return alert("Reason is required for original stock adjustment");
+            }
+            
+            // If in target mode, convert targets to adjustments
+            let finalAdjustments = iaoAdjustments;
+            if (useSimpleMode && Object.keys(iaoTargets).length > 0) {
                 console.log('📊 IAO Voucher - Converting targets to adjustments on-the-fly');
                 const convertedAdjustments: Record<string, OriginalStockAdjustment> = {};
-                Object.entries(iaoTargets).forEach(([key, target]) => {
+                Object.entries(iaoTargets).forEach(([key, target]: [string, OriginalStockTarget]) => {
                     const item = originalStockData.find(i => i.key === key);
                     if (!item) return;
                     const currentWeight = item.weightInHand || 0;
                     const currentWorth = item.worth || 0;
                     
-                    // Check if values were explicitly provided (including 0 - 0 is a valid explicit value!)
-                    // We need to distinguish between "not provided" (empty string/null/undefined) and "explicitly set to 0"
+                    // Check if values were explicitly provided (including 0)
                     const hasExplicitWeight = target.targetWeight !== '' && target.targetWeight !== null && target.targetWeight !== undefined;
                     const hasExplicitWorth = target.targetWorth !== '' && target.targetWorth !== null && target.targetWorth !== undefined;
                     
-                    console.log('📊 IAO Voucher - Converting target for key:', key, {
-                        rawTargetWeight: target.targetWeight,
-                        rawTargetWorth: target.targetWorth,
-                        hasExplicitWeight,
-                        hasExplicitWorth,
-                        currentWeight,
-                        currentWorth
-                    });
-                    
                     if (!hasExplicitWeight && !hasExplicitWorth) return;
                     
-                    // Parse target values - explicitly handle 0 as a valid value
-                    let targetWeight: number;
-                    if (hasExplicitWeight) {
-                        if (typeof target.targetWeight === 'number') {
-                            targetWeight = target.targetWeight;
-                        } else {
-                            const parsed = parseFloat(String(target.targetWeight));
-                            targetWeight = isNaN(parsed) ? currentWeight : parsed;
-                        }
-                    } else {
-                        targetWeight = currentWeight;
-                    }
-                    
-                    let targetWorth: number;
-                    if (hasExplicitWorth) {
-                        if (typeof target.targetWorth === 'number') {
-                            targetWorth = target.targetWorth; // This includes 0!
-                        } else {
-                            const parsed = parseFloat(String(target.targetWorth));
-                            targetWorth = isNaN(parsed) ? currentWorth : parsed; // This includes 0!
-                        }
-                    } else {
-                        targetWorth = currentWorth;
-                    }
-                    
-                    console.log('📊 IAO Voucher - Parsed target values:', {
-                        key,
-                        targetWeight,
-                        targetWorth,
-                        currentWeight,
-                        currentWorth,
-                        weightWillChange: Math.abs(targetWeight - currentWeight) > 0.0001,
-                        worthWillChange: Math.abs(targetWorth - currentWorth) > 0.0001
-                    });
+                    // Parse target values
+                    const targetWeight = hasExplicitWeight 
+                        ? (typeof target.targetWeight === 'number' ? target.targetWeight : parseFloat(String(target.targetWeight)))
+                        : currentWeight;
+                    const targetWorth = hasExplicitWorth 
+                        ? (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)))
+                        : currentWorth;
                     
                     // Validate parsed values
-                    if (hasExplicitWeight && (isNaN(targetWeight) || !isFinite(targetWeight))) {
-                        console.warn(`⚠️ Invalid target weight for key ${key}:`, target.targetWeight);
-                        return;
-                    }
-                    if (hasExplicitWorth && (isNaN(targetWorth) || !isFinite(targetWorth))) {
-                        console.warn(`⚠️ Invalid target worth for key ${key}:`, target.targetWorth);
+                    if (isNaN(targetWeight) || isNaN(targetWorth)) {
+                        console.error(`❌ Invalid target values for key ${key}:`, { targetWeight, targetWorth, currentWeight, currentWorth });
                         return;
                     }
                     
-                    const weightChanged = hasExplicitWeight && Math.abs(targetWeight - currentWeight) > 0.0001;
-                    const worthChanged = hasExplicitWorth && Math.abs(targetWorth - currentWorth) > 0.0001;
+                    // Calculate adjustments (target - current)
+                    const adjustmentWeight = targetWeight - currentWeight;
+                    const adjustmentWorth = targetWorth - currentWorth;
                     
-                    if (weightChanged || worthChanged) {
+                    console.log(`📊 IAO Target Conversion for ${key}:`, {
+                        currentWeight,
+                        currentWorth,
+                        targetWeight,
+                        targetWorth,
+                        adjustmentWeight,
+                        adjustmentWorth,
+                        itemAvgCost: item.avgCostPerKg,
+                        calculatedWorth: currentWeight * item.avgCostPerKg
+                    });
+                    
+                    // CRITICAL FIX: If currentWorth is 0 but we have weight and avgCost, recalculate worth
+                    if (currentWorth === 0 && currentWeight > 0 && item.avgCostPerKg > 0) {
+                        const recalculatedWorth = currentWeight * item.avgCostPerKg;
+                        console.log(`⚠️ IAO Target Conversion - Recalculating worth: ${currentWorth} -> ${recalculatedWorth}`);
+                        // Recalculate adjustment with correct current worth
+                        const correctedAdjustmentWorth = targetWorth - recalculatedWorth;
+                        console.log(`⚠️ IAO Target Conversion - Corrected adjustment worth: ${adjustmentWorth} -> ${correctedAdjustmentWorth}`);
+                        // Use corrected adjustment
+                        if (Math.abs(correctedAdjustmentWorth) > 0.01) {
+                            convertedAdjustments[key] = {
+                                key,
+                                adjustmentWeight: adjustmentWeight !== 0 ? adjustmentWeight : '',
+                                adjustmentWorth: correctedAdjustmentWorth !== 0 ? correctedAdjustmentWorth : ''
+                            };
+                            return; // Skip the code below that would use the wrong adjustment
+                        }
+                    }
+                    
+                    // Only add if there's a change
+                    if (adjustmentWeight !== 0 || adjustmentWorth !== 0) {
                         convertedAdjustments[key] = {
                             key,
-                            adjustmentWeight: targetWeight - currentWeight,
-                            adjustmentWorth: targetWorth - currentWorth,
-                            // Store target values for narration and parsing
-                            targetWeight: hasExplicitWeight ? targetWeight : undefined,
-                            targetWorth: hasExplicitWorth ? targetWorth : undefined
-                        } as any; // Type assertion to allow additional fields
+                            adjustmentWeight: adjustmentWeight !== 0 ? adjustmentWeight : '',
+                            adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                        };
                     }
                 });
                 
-                // Merge with any existing adjustments (targets take precedence, but non-target adjustments are preserved)
                 finalAdjustments = { ...iaoAdjustments, ...convertedAdjustments };
-                
                 console.log('📊 IAO Voucher - Converted targets:', {
                     targetCount: Object.keys(iaoTargets).length,
                     convertedCount: Object.keys(convertedAdjustments).length,
-                    existingAdjustmentsCount: Object.keys(iaoAdjustments).length,
-                    finalAdjustmentsCount: Object.keys(finalAdjustments).length,
-                    convertedAdjustments: convertedAdjustments,
-                    finalAdjustments: finalAdjustments
+                    finalAdjustmentsCount: Object.keys(finalAdjustments).length
                 });
             }
             
-            console.log('📊 IAO Voucher - Starting processing:', {
-                iaoReason,
-                useSimpleMode,
-                totalAdjustments: Object.keys(finalAdjustments).length,
-                totalTargets: Object.keys(iaoTargets).length,
-                adjustments: finalAdjustments
-            });
-            
-            // Get adjustments with values - handle both string and number types
-            // IMPORTANT: Allow 0 as a valid adjustment value (e.g., setting a non-zero value to 0)
-            const adjustmentsWithValues = Object.entries(finalAdjustments).filter(([key, adj]) => {
-                const weight = adj.adjustmentWeight;
-                const worth = adj.adjustmentWorth;
-                // Check if weight is provided (including 0, but not empty/null/undefined/NaN)
-                const hasWeight = (weight !== '' && weight !== null && weight !== undefined && !isNaN(Number(weight)));
-                // Check if worth is provided (including 0, but not empty/null/undefined/NaN)
-                const hasWorth = (worth !== '' && worth !== null && worth !== undefined && !isNaN(Number(worth)));
-                // Include if either weight or worth is provided (even if it's 0)
-                // But exclude if both are 0 AND both are explicitly provided (no change)
-                if (hasWeight && hasWorth) {
-                    const weightNum = Number(weight);
-                    const worthNum = Number(worth);
-                    // If both are explicitly 0, this means no change, so exclude it
-                    if (weightNum === 0 && worthNum === 0) {
-                        return false;
-                    }
-                }
+            // Get adjustments with values
+            const adjustmentsWithValues: Array<[string, OriginalStockAdjustment]> = Object.entries(finalAdjustments).filter(([key, adj]) => {
+                const adjustment = adj as OriginalStockAdjustment;
+                const hasWeight = adjustment.adjustmentWeight !== '' && adjustment.adjustmentWeight !== null && adjustment.adjustmentWeight !== undefined && adjustment.adjustmentWeight !== 0;
+                const hasWorth = adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0;
                 return hasWeight || hasWorth;
-            });
-            
-            console.log('📊 IAO Voucher - Adjustments with values:', adjustmentsWithValues.length, adjustmentsWithValues);
+            }) as Array<[string, OriginalStockAdjustment]>;
             
             if (adjustmentsWithValues.length === 0) {
                 return alert("Please enter adjustment weight or worth for at least one original stock item.");
             }
             
-            // Lookup accounts dynamically
+            // Lookup accounts
             const inventoryAccount = state.accounts.find(a => 
                 a.name.includes('Raw Materials') || 
                 a.name.includes('Inventory - Raw Materials') ||
@@ -1577,336 +1615,105 @@ export const Accounting: React.FC = () => {
                 a.code === '1201'
             );
             const adjustmentAccount = state.accounts.find(a => 
-                a.name.includes('Inventory Adjustment') || 
-                a.name.includes('Write-off') ||
-                a.code === '503'
+                (a.name.includes('Inventory Adjustment') || 
+                 a.name.includes('Write-off') ||
+                 a.code === '503') &&
+                (a.type === AccountType.EXPENSE || a.type === AccountType.EQUITY)
             );
             
-            console.log('📊 IAO Voucher - Account lookup:', {
-                inventoryAccount: inventoryAccount ? { id: inventoryAccount.id, name: inventoryAccount.name } : null,
-                adjustmentAccount: adjustmentAccount ? { id: adjustmentAccount.id, name: adjustmentAccount.name } : null
-            });
+            // Fallback for backward compatibility
+            if (!adjustmentAccount) {
+                const found = state.accounts.find(a => 
+                    a.name.includes('Inventory Adjustment') || 
+                    a.name.includes('Write-off') ||
+                    a.code === '503'
+                );
+                if (found && found.type === AccountType.ASSET) {
+                    return alert(`❌ CRITICAL ERROR: Inventory Adjustment account "${found.name}" is an ASSET account.\n\nThis will cause Balance Sheet imbalance. The account should be:\n- Type: EXPENSE (recommended) or EQUITY\n- Code: 503\n\nPlease update the account type in Setup > Chart of Accounts.`);
+                }
+            }
             
             if (!inventoryAccount || !adjustmentAccount) {
                 const missingAccounts = [];
                 if (!inventoryAccount) missingAccounts.push('Inventory - Raw Materials (104 or 1201)');
-                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503)');
+                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503) - EXPENSE or EQUITY type');
                 return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
             }
             
-            let processedCount = 0;
-            let skippedCount = 0;
-            const skippedReasons: string[] = [];
-            
             // Process each adjustment
             for (const [key, adj] of adjustmentsWithValues) {
-                console.log(`📊 IAO Voucher - Processing key: ${key}`, {
-                    adjustmentWeight: adj.adjustmentWeight,
-                    adjustmentWorth: adj.adjustmentWorth,
-                    adjustmentWeightType: typeof adj.adjustmentWeight,
-                    adjustmentWorthType: typeof adj.adjustmentWorth
-                });
-                
-                // Look up the original stock data item by key to get the actual originalTypeId
-                // This avoids parsing issues when originalTypeId contains hyphens
+                const adjustment = adj as OriginalStockAdjustment;
                 const stockItem = originalStockData.find(item => item.key === key);
                 if (!stockItem) {
-                    const reason = `Original stock item not found for key: ${key}`;
-                    console.error(`❌ ${reason}`);
-                    skippedReasons.push(reason);
-                    skippedCount++;
+                    console.error(`❌ Original stock item not found for key: ${key}`);
                     continue;
                 }
                 
-                // Use the actual data from the stock item instead of parsing the key
-                const supplierId = stockItem.supplierId;
-                const subSupplierId = stockItem.subSupplierId;
-                const originalTypeId = stockItem.originalTypeId;
-                const originalProductId = stockItem.originalProductId;
+                const originalType = state.originalTypes.find(ot => ot.id === stockItem.originalTypeId);
+                const supplier = state.partners.find(p => p.id === stockItem.supplierId);
+                const subSupplier = stockItem.subSupplierId ? state.partners.find(p => p.id === stockItem.subSupplierId) : undefined;
                 
-                console.log(`📊 IAO Voucher - Parsed key:`, {
-                    key,
-                    supplierId,
-                    subSupplierId,
-                    originalTypeId,
-                    originalProductId
-                });
-                
-                const originalType = state.originalTypes.find(ot => ot.id === originalTypeId);
-                const supplier = state.partners.find(p => p.id === supplierId);
-                const subSupplier = subSupplierId ? state.partners.find(p => p.id === subSupplierId) : undefined;
-                
-                if (!originalType) {
-                    const reason = `Original Type not found for ID: ${originalTypeId} (Key: ${key}). Available types: ${state.originalTypes.map(ot => ot.id).slice(0, 5).join(', ')}`;
-                    console.error(`❌ ${reason}`);
-                    skippedReasons.push(reason);
-                    skippedCount++;
+                if (!originalType || !supplier) {
+                    console.error(`❌ Missing data for key ${key}:`, { originalType: !!originalType, supplier: !!supplier });
                     continue;
                 }
                 
-                if (!supplier) {
-                    const reason = `Supplier not found for ID: ${supplierId} (Key: ${key}). Available suppliers: ${state.partners.filter(p => p.type === 'SUPPLIER' || p.type === 'VENDOR').map(p => p.id).slice(0, 5).join(', ')}`;
-                    console.error(`❌ ${reason}`);
-                    skippedReasons.push(reason);
-                    skippedCount++;
-                    continue;
-                }
-                
-                const adjustmentWeight = (adj.adjustmentWeight !== '' && adj.adjustmentWeight !== null && adj.adjustmentWeight !== undefined) 
-                    ? parseFloat(String(adj.adjustmentWeight)) 
+                // Parse adjustment values
+                const adjustmentWeight = (adjustment.adjustmentWeight !== '' && adjustment.adjustmentWeight !== null && adjustment.adjustmentWeight !== undefined) 
+                    ? parseFloat(String(adjustment.adjustmentWeight)) 
                     : 0;
-                const adjustmentWorth = (adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined) 
-                    ? parseFloat(String(adj.adjustmentWorth)) 
+                const adjustmentWorth = (adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined) 
+                    ? parseFloat(String(adjustment.adjustmentWorth)) 
                     : 0;
                 
-                console.log(`📊 IAO Voucher - Parsed values:`, {
-                    key,
-                    rawWeight: adj.adjustmentWeight,
-                    rawWorth: adj.adjustmentWorth,
-                    parsedWeight: adjustmentWeight,
-                    parsedWorth: adjustmentWorth,
-                    weightIsNaN: isNaN(adjustmentWeight),
-                    worthIsNaN: isNaN(adjustmentWorth)
-                });
+                if (isNaN(adjustmentWeight) || isNaN(adjustmentWorth)) {
+                    console.error(`❌ Invalid adjustment values for key ${key}`);
+                    continue;
+                }
                 
-                // Determine adjustment value: use worth if provided, otherwise calculate from weight * avgCost
-                // Check if worth was explicitly provided (not empty string)
-                const worthWasProvided = adj.adjustmentWorth !== '' && adj.adjustmentWorth !== null && adj.adjustmentWorth !== undefined;
-                const worthExplicitlyZero = worthWasProvided && adjustmentWorth === 0;
-                
+                // Determine adjustment value: use worth if provided, otherwise calculate from weight
                 let adjustmentValue = 0;
-                let actualWorthAdjustment = 0; // The worth to apply to stock (may differ from ledger value)
-                
-                if (worthWasProvided && adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
-                    // Worth was explicitly provided and is non-zero
+                if (adjustmentWorth !== 0) {
                     adjustmentValue = Math.abs(adjustmentWorth);
-                    actualWorthAdjustment = adjustmentWorth;
-                    console.log(`📊 IAO Voucher - Using explicitly provided worth: ${adjustmentWorth} -> ${adjustmentValue}`);
-                } else if (worthExplicitlyZero) {
-                    // Worth was explicitly set to 0 - we need to create ledger entries for weight adjustment
-                    // Calculate worth from weight for ledger entries (accounting requirement)
-                    // But track that actual worth adjustment should be 0
-                    if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
-                    // Calculate average cost from purchases for this original type
-                    const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
-                    let totalWeight = 0;
-                    let totalCost = 0;
-                    
-                    relevantPurchases.forEach(purchase => {
-                        const items = purchase.items && purchase.items.length > 0 ? purchase.items : [{
-                            originalTypeId: purchase.originalTypeId,
-                            weightPurchased: purchase.weightPurchased,
-                            totalCostUSD: purchase.totalLandedCost || (purchase.totalCostFCY / (purchase.exchangeRate || 1))
-                        }];
-                        
-                        items.forEach(item => {
-                            if (item.originalTypeId === originalTypeId && 
-                                (item.subSupplierId || 'none') === (subSupplierId || 'none') &&
-                                (item.originalProductId || '') === (originalProductId || '')) {
-                                totalWeight += item.weightPurchased || 0;
-                                totalCost += item.totalCostUSD || 0;
-                            }
-                        });
-                    });
-                    
-                    const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
-                    adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
-                        actualWorthAdjustment = 0; // User explicitly wants worth to be 0
-                        console.log(`📊 IAO Voucher - Zero-worth adjustment: Using calculated worth ${adjustmentValue} for ledger, but applying 0 worth to stock`);
+                } else if (adjustmentWeight !== 0) {
+                    // Calculate from weight using avgCostPerKg
+                    adjustmentValue = Math.abs(adjustmentWeight) * (stockItem.avgCostPerKg || 0);
                 } else {
-                        const reason = `Worth is explicitly 0 but weight is also 0 or invalid for key: ${key}`;
-                        console.error(`❌ ${reason}`);
-                        skippedReasons.push(reason);
-                        skippedCount++;
-                        continue;
-                    }
-                } else if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
-                    // Worth was not provided (empty) - calculate from weight
-                    // Calculate average cost from purchases for this original type
-                    const relevantPurchases = state.purchases.filter(p => p.supplierId === supplierId);
-                    let totalWeight = 0;
-                    let totalCost = 0;
-                    
-                    relevantPurchases.forEach(purchase => {
-                        const items = purchase.items && purchase.items.length > 0 ? purchase.items : [{
-                            originalTypeId: purchase.originalTypeId,
-                            weightPurchased: purchase.weightPurchased,
-                            totalCostUSD: purchase.totalLandedCost || (purchase.totalCostFCY / (purchase.exchangeRate || 1))
-                        }];
-                        
-                        items.forEach(item => {
-                            if (item.originalTypeId === originalTypeId && 
-                                (item.subSupplierId || 'none') === (subSupplierId || 'none') &&
-                                (item.originalProductId || '') === (originalProductId || '')) {
-                                totalWeight += item.weightPurchased || 0;
-                                totalCost += item.totalCostUSD || 0;
-                            }
-                        });
-                    });
-                    
-                    const avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
-                    adjustmentValue = Math.abs(adjustmentWeight) * avgCostPerKg;
-                    actualWorthAdjustment = adjustmentWeight > 0 ? adjustmentValue : -adjustmentValue;
-                    console.log(`📊 IAO Voucher - Calculated from weight (worth was empty): ${adjustmentWeight} * ${avgCostPerKg} = ${adjustmentValue}`);
-                } else {
-                    const reason = `Both weight and worth are 0 or invalid for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth}, worthWasProvided: ${worthWasProvided})`;
-                    console.error(`❌ ${reason}`);
-                    skippedReasons.push(reason);
-                    skippedCount++;
                     continue; // Skip if both are 0
                 }
                 
-                // Validate adjustmentValue
-                if (isNaN(adjustmentValue) || adjustmentValue === 0) {
-                    const reason = `Invalid adjustment value (${adjustmentValue}) for key: ${key} (weight: ${adjustmentWeight}, worth: ${adjustmentWorth})`;
-                    console.error(`❌ ${reason}`);
-                    skippedReasons.push(reason);
-                    skippedCount++;
+                if (adjustmentValue === 0 || isNaN(adjustmentValue)) {
+                    console.error(`❌ Invalid adjustment value for key ${key}`);
                     continue;
                 }
                 
-                // Determine if increase or decrease based on sign
-                // If both weight and worth are provided, use weight as primary indicator
-                // If only worth is provided, use worth sign
-                // If only weight is provided, use weight sign
-                let isIncrease = false;
-                if (adjustmentWeight !== 0 && !isNaN(adjustmentWeight)) {
-                    // Weight is provided - use its sign as primary indicator
-                    isIncrease = adjustmentWeight > 0;
-                } else if (adjustmentWorth !== 0 && !isNaN(adjustmentWorth)) {
-                    // Only worth is provided - use its sign
-                    isIncrease = adjustmentWorth > 0;
-                }
+                // Determine if increase or decrease
+                const isIncrease = (adjustmentWeight > 0) || (adjustmentWorth > 0);
                 
-                console.log(`📊 IAO Voucher - Direction determination:`, {
-                    adjustmentWeight,
-                    adjustmentWorth,
-                    isIncrease,
-                    adjustmentValue
-                });
-                
-                const displayName = originalProductId 
-                    ? `${originalType.name} - ${state.originalProducts.find(op => op.id === originalProductId)?.name || ''}`
+                const displayName = stockItem.originalProductId 
+                    ? `${originalType.name} - ${state.originalProducts.find(op => op.id === stockItem.originalProductId)?.name || ''}`
                     : originalType.name;
                 const supplierName = subSupplier ? `${supplier.name} / ${subSupplier.name}` : supplier.name;
                 
-                console.log(`📊 IAO Voucher - Processing adjustment:`, {
-                    key,
-                    displayName,
-                    supplierName,
-                    adjustmentWeight,
-                    adjustmentWorth,
-                    adjustmentValue,
-                    isIncrease,
-                    willPostAs: isIncrease ? 'INCREASE' : 'DECREASE'
-                });
-                
-                // Create ledger entries (adjustmentValue is always > 0 at this point)
-                // For zero-worth adjustments, we use calculated worth for ledger but mark it in narration
-                const worthMarker = worthExplicitlyZero ? ' [Zero-Worth Adjustment: Stock worth set to $0.00]' : '';
-                const narrationWorth = worthExplicitlyZero ? '$0.00' : `$${adjustmentValue.toFixed(2)}`;
-                
-                // Get target values from adjustment object (if available from target mode conversion)
-                const storedTargetWeight = (adj as any).targetWeight;
-                const storedTargetWorth = (adj as any).targetWorth;
-                
-                // Use stored target values if available, otherwise calculate from current + adjustment
-                const targetWeight = storedTargetWeight !== undefined 
-                    ? storedTargetWeight 
-                    : (stockItem.weightInHand + adjustmentWeight);
-                const targetWorth = storedTargetWorth !== undefined 
-                    ? storedTargetWorth 
-                    : (stockItem.worth + actualWorthAdjustment);
-                
-                // Check if this is a "set to zero" adjustment (both weight and worth are being set to 0)
-                const isSetToZero = Math.abs(targetWeight) < 0.01 && Math.abs(targetWorth) < 0.01;
-                const setToZeroMarker = isSetToZero ? ` [SET-TO-ZERO: Target Weight=${targetWeight.toFixed(2)} kg, Target Worth=$${targetWorth.toFixed(2)}]` : '';
-                
-                // Store target values in narration for reference (if in target mode or explicitly set)
-                // This helps with debugging and ensures we can verify the intended target
-                // Always include target values when they're explicitly set (even if 0)
-                const targetWeightDisplay = (storedTargetWeight !== undefined && !isNaN(targetWeight))
-                    ? ` (Target Weight: ${targetWeight.toFixed(2)} kg)` 
-                    : '';
-                const targetWorthDisplay = (storedTargetWorth !== undefined && !isNaN(targetWorth))
-                    ? ` (Target Worth: $${targetWorth.toFixed(2)})`
-                    : '';
-                
-                console.log('📊 IAO Voucher - Adjustment markers:', {
-                    key,
-                    displayName,
-                    currentWeight: stockItem.weightInHand,
-                    currentWorth: stockItem.worth,
-                    adjustmentWeight,
-                    adjustmentWorth,
-                    targetWeight,
-                    targetWorth,
-                    isSetToZero,
-                    worthExplicitlyZero
-                });
-                
+                // Create ledger entries
                 if (isIncrease) {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: ${narrationWorth})${targetWeightDisplay}${targetWorthDisplay}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Increase: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Increase: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                 } else {
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${adjustmentWeight || 'N/A'} kg, Worth: ${narrationWorth})${targetWeightDisplay}${targetWorthDisplay}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
-                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName}${worthMarker}${setToZeroMarker} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    // For decrease, ensure weight is negative in narration for correct parsing
+                    const weightDisplay = adjustmentWeight < 0 ? adjustmentWeight : -Math.abs(adjustmentWeight);
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: inventoryAccount.id, accountName: inventoryAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: 0, credit: adjustmentValue, narration: `Original Stock Decrease: ${displayName} (${supplierName}) (Weight: ${weightDisplay} kg, Worth: $${adjustmentValue.toFixed(2)}) - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
+                    entries.push({ date, transactionId: voucherNo, transactionType: TransactionType.INVENTORY_ADJUSTMENT, accountId: adjustmentAccount.id, accountName: adjustmentAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: adjustmentValue, debit: adjustmentValue, credit: 0, narration: `Original Stock Decrease: ${displayName} - ${iaoReason}`, factoryId: state.currentFactory?.id || '' });
                 }
-                
-                // Store actual worth adjustment for later use (if different from ledger value)
-                if (worthExplicitlyZero) {
-                    console.log(`📊 IAO Voucher - Zero-worth adjustment stored:`, {
-                        key,
-                        displayName,
-                        adjustmentWeight,
-                        ledgerWorth: adjustmentValue,
-                        actualWorthAdjustment: actualWorthAdjustment
-                    });
-                }
-                
-                processedCount++;
             }
-            
-            console.log('📊 IAO Voucher - Processing complete:', {
-                processedCount,
-                skippedCount,
-                skippedReasons: skippedReasons,
-                totalEntries: entries.length,
-                allAdjustmentsWithValues: adjustmentsWithValues.map(([key, adj]) => ({
-                    key,
-                    adjustmentWeight: adj.adjustmentWeight,
-                    adjustmentWorth: adj.adjustmentWorth
-                }))
-            });
             
             if (entries.length === 0) {
-                const errorMsg = skippedReasons.length > 0 
-                    ? `No valid adjustments to process.\n\nSkipped reasons:\n${skippedReasons.join('\n')}`
-                    : 'No valid adjustments to process. Please check your adjustment values.';
-                console.error('❌ IAO Voucher - No entries created:', errorMsg);
-                alert(errorMsg);
-                return;
+                return alert("No valid adjustments to process. Please check your adjustment values.");
             }
             
-            // Log entries before posting
-            console.log('📊 IAO Voucher - Entries to post:', {
-                count: entries.length,
-                entries: entries.map(e => ({
-                    accountId: e.accountId,
-                    accountName: e.accountName,
-                    debit: e.debit,
-                    credit: e.credit,
-                    transactionId: e.transactionId,
-                    narration: e.narration
-                })),
-                totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
-                totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
-            });
-            } catch (error: any) {
-                console.error('❌ Error in IAO processing:', error);
-                alert(`Error processing Original Stock Adjustment: ${error?.message || 'Unknown error occurred. Please check the console for details.'}`);
-                return;
-            }
+            // Note: Available stock for opening and direct sale is now calculated from ledger entries
+            // The IAO adjustments are automatically reflected in available stock calculations
+            // See DataEntry.tsx availableStockInfo and dsBatches calculations which now include IAO adjustments
         } else if (vType === 'MJV') {
             // Manual JV Entry Helper for Original Stock Adjustment
             if (!mjvTypeId || !mjvSupplierId) {
@@ -2140,27 +1947,83 @@ export const Accounting: React.FC = () => {
             const entityName = account ? account.name : (partner ? partner.name : 'Unknown');
             
             // Lookup discrepancy account dynamically (factory-specific, always correct)
-            const discrepancyAccount = state.accounts.find(a => 
-                a.name.includes('Discrepancy') || 
-                a.name.includes('Suspense') ||
-                a.name.includes('Balancing Discrepancy') ||
-                a.code === '505'
+            // Try EQUITY first (preferred for balancing), then LIABILITY
+            let discrepancyAccount = state.accounts.find(a => 
+                (a.name.includes('Discrepancy') || 
+                 a.name.includes('Suspense') ||
+                 a.name.includes('Balancing Discrepancy') ||
+                 a.code === '505') &&
+                a.type === AccountType.EQUITY
             );
             
             if (!discrepancyAccount) {
-                return alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: LIABILITY\n- Opening Balance: 0\n\nThe system will automatically find it by code "505" or if the name contains "Discrepancy", "Suspense", or "Balancing Discrepancy".');
+                // Fallback to LIABILITY if EQUITY not found
+                discrepancyAccount = state.accounts.find(a => 
+                    (a.name.includes('Discrepancy') || 
+                     a.name.includes('Suspense') ||
+                     a.name.includes('Balancing Discrepancy') ||
+                     a.code === '505') &&
+                    a.type === AccountType.LIABILITY
+                );
             }
+            
+            if (!discrepancyAccount) {
+                return alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: EQUITY (preferred) or LIABILITY\n- Opening Balance: 0\n\nThe system will automatically find it by code "505" or if the name contains "Discrepancy", "Suspense", or "Balancing Discrepancy".');
+            }
+            
+            const isEquityAccount = discrepancyAccount.type === AccountType.EQUITY;
+            
+            console.log('🔍 BD Entry Creation:', {
+                entityName,
+                entityId: bdAccountId,
+                adjustmentType: bdAdjustmentType,
+                amount: baseAmount,
+                discrepancyAccount: {
+                    id: discrepancyAccount.id,
+                    name: discrepancyAccount.name,
+                    type: discrepancyAccount.type,
+                    isEquity: isEquityAccount
+                }
+            });
             
             // BD vouchers always use current date to show when the adjustment was actually made
             const bdDate = new Date().toISOString().split('T')[0];
             
             if (bdAdjustmentType === 'INCREASE') {
+                // Increase: Debit account/partner (increases asset or decreases liability), Credit Discrepancy
                 entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                if (isEquityAccount) {
+                    // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                } else {
+                    // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                }
             } else {
+                // Decrease: Credit account/partner (decreases asset or increases liability), Debit Discrepancy
+                // When we decrease an asset, we need to decrease equity (debit) or decrease liability (debit) to balance
                 entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                if (isEquityAccount) {
+                    // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                } else {
+                    // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                }
             }
+            
+            console.log('✅ BD Entries Created:', {
+                totalEntries: entries.length,
+                entries: entries.map(e => ({
+                    accountId: e.accountId,
+                    accountName: e.accountName,
+                    debit: e.debit,
+                    credit: e.credit,
+                    narration: e.narration
+                })),
+                totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
+                totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
+            });
         }
 
         // 🛡️ DOUBLE-ENTRY VALIDATION: Ensure edited voucher is balanced
@@ -2255,6 +2118,23 @@ export const Accounting: React.FC = () => {
         });
         
         try {
+        // Debug logging for BD transactions
+        if (vType === 'BD') {
+            console.log('📤 Posting BD Transaction:', {
+                voucherNo,
+                totalEntries: entries.length,
+                entries: entries.map(e => ({
+                    accountId: e.accountId,
+                    accountName: e.accountName,
+                    debit: e.debit,
+                    credit: e.credit,
+                    transactionId: e.transactionId
+                })),
+                totalDebits: entries.reduce((sum, e) => sum + (e.debit || 0), 0),
+                totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
+            });
+        }
+        
         await postTransaction(entries);
             console.log('✅ Transaction posted successfully:', voucherNo);
         } catch (error: any) {
@@ -2606,7 +2486,6 @@ export const Accounting: React.FC = () => {
                                 { id: 'TR', label: 'Internal Transfer', icon: RefreshCw, color: 'text-purple-600' },
                                 { id: 'IA', label: 'Inventory Adjustment', icon: Package, color: 'text-indigo-600' },
                                 { id: 'IAO', label: 'Original Stock Adjustment', icon: ShoppingBag, color: 'text-purple-600' },
-                                { id: 'MJV', label: 'Manual JV Helper', icon: Calculator, color: 'text-green-600' },
                                 { id: 'RTS', label: 'Return to Supplier', icon: RotateCcw, color: 'text-pink-600' },
                                 { id: 'WO', label: 'Write-off', icon: AlertTriangle, color: 'text-red-700' },
                                 { id: 'BD', label: 'Balancing Discrepancy', icon: Scale, color: 'text-teal-600' },
@@ -3203,6 +3082,13 @@ export const Accounting: React.FC = () => {
                                     <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
                                         <Package size={20} /> Inventory Adjustment (Finished Goods)
                                     </h3>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={() => setIaUseTargetMode(!iaUseTargetMode)}
+                                            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center gap-2"
+                                        >
+                                            {iaUseTargetMode ? 'Switch to Adjustment Mode' : 'Switch to Target Mode'}
+                                        </button>
                                     <button
                                         onClick={handlePrintInventoryAdjustment}
                                         className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
@@ -3210,7 +3096,19 @@ export const Accounting: React.FC = () => {
                                     >
                                         <Printer size={18} /> Print/Export
                                     </button>
+                                    </div>
                                 </div>
+                                
+                                {iaUseTargetMode && (
+                                    <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
+                                        <h4 className="font-bold text-green-900 mb-2 flex items-center gap-2">
+                                            <CheckCircle size={18} /> Target Mode
+                                        </h4>
+                                        <p className="text-sm text-green-700">
+                                            Enter the <strong>target values</strong> you want for each item. The system will automatically calculate and apply the adjustments.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {/* CSV Upload Section */}
                                 {(() => {
@@ -3225,6 +3123,7 @@ export const Accounting: React.FC = () => {
                                             complete: (results) => {
                                                 const errors: string[] = [];
                                                 const newAdjustments: Record<string, ItemAdjustment> = { ...iaItemAdjustments };
+                                                const newTargets: Record<string, ItemTarget> = { ...iaTargets };
                                                 let successCount = 0;
 
                                                 for (let idx = 0; idx < results.data.length; idx++) {
@@ -3264,41 +3163,54 @@ export const Accounting: React.FC = () => {
                                                     const systemCurrentStock = item.stockQty || 0;
                                                     const systemCurrentWorth = (item.stockQty || 0) * (item.avgCost || 0);
 
-                                                    // Calculate adjustments
-                                                    let adjustmentQty: number | '' = '';
-                                                    let adjustmentWorth: number | '' = '';
+                                                    if (iaUseTargetMode) {
+                                                        // Target Mode: Store target values directly
+                                                        newTargets[item.id] = {
+                                                            itemId: item.id,
+                                                            targetQty: csvCurrentStock !== null ? csvCurrentStock : '',
+                                                            targetWorth: csvCurrentWorth !== null ? csvCurrentWorth : ''
+                                                        };
+                                                    } else {
+                                                        // Adjustment Mode: Calculate and store adjustments
+                                                        let adjustmentQty: number | '' = '';
+                                                        let adjustmentWorth: number | '' = '';
 
-                                                    if (csvCurrentStock !== null) {
-                                                        // Calculate quantity adjustment
-                                                        adjustmentQty = csvCurrentStock - systemCurrentStock;
+                                                        if (csvCurrentStock !== null) {
+                                                            // Calculate quantity adjustment
+                                                            adjustmentQty = csvCurrentStock - systemCurrentStock;
+                                                        }
+
+                                                        if (csvCurrentWorth !== null) {
+                                                            // Calculate worth adjustment
+                                                            adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
+                                                        } else if (csvCurrentStock !== null && item.avgCost) {
+                                                            // If only quantity provided, calculate worth adjustment based on current avgCost
+                                                            adjustmentWorth = (adjustmentQty as number) * item.avgCost;
+                                                        }
+
+                                                        // Update adjustments
+                                                        newAdjustments[item.id] = {
+                                                            itemId: item.id,
+                                                            adjustmentQty: adjustmentQty !== 0 ? adjustmentQty : '',
+                                                            adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                                                        };
                                                     }
-
-                                                    if (csvCurrentWorth !== null) {
-                                                        // Calculate worth adjustment
-                                                        adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
-                                                    } else if (csvCurrentStock !== null && item.avgCost) {
-                                                        // If only quantity provided, calculate worth adjustment based on current avgCost
-                                                        adjustmentWorth = adjustmentQty * item.avgCost;
-                                                    }
-
-                                                    // Update adjustments
-                                                    newAdjustments[item.id] = {
-                                                        itemId: item.id,
-                                                        adjustmentQty: adjustmentQty !== 0 ? adjustmentQty : '',
-                                                        adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
-                                                    };
 
                                                     successCount++;
                                                 }
 
-                                                // Update state with new adjustments
-                                                setIaItemAdjustments(newAdjustments);
+                                                // Update state based on mode
+                                                if (iaUseTargetMode) {
+                                                    setIaTargets(newTargets);
+                                                } else {
+                                                    setIaItemAdjustments(newAdjustments);
+                                                }
 
                                                 // Show results
                                                 if (errors.length > 0) {
                                                     alert(`CSV Upload Complete:\n\n✅ Successfully processed: ${successCount} item(s)\n❌ Errors: ${errors.length}\n\nErrors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`);
                                                 } else {
-                                                    alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} item(s).\nAdjustments have been calculated and populated in the table below.`);
+                                                    alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} item(s).\n${iaUseTargetMode ? 'Target values' : 'Adjustments'} have been ${iaUseTargetMode ? 'populated' : 'calculated and populated'} in the table below.`);
                                                 }
 
                                                 // Reset file input
@@ -3348,7 +3260,9 @@ export const Accounting: React.FC = () => {
                                                     Upload a CSV file with columns: <strong>Item Code</strong>, <strong>Current Stock</strong>, <strong>Current Stock Worth</strong>
                                                 </p>
                                                 <p className="text-xs text-slate-500">
-                                                    The system will calculate adjustments by comparing CSV values with current system values.
+                                                    {iaUseTargetMode 
+                                                        ? 'In Target Mode: CSV values will be set as target values directly. The system will calculate adjustments automatically when you post.'
+                                                        : 'In Adjustment Mode: The system will calculate adjustments by comparing CSV values with current system values.'}
                                                 </p>
                                                 <input
                                                     type="file"
@@ -3476,15 +3390,34 @@ export const Accounting: React.FC = () => {
                                                                 )}
                                                             </div>
                                                         </th>
-                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
-                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
+                                                        {iaUseTargetMode ? (
+                                                            <>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-green-50">Target Quantity</th>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-green-50">Target Worth (USD)</th>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Calculated Adjustment Qty</th>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Calculated Adjustment Worth</th>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
+                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
+                                                            </>
+                                                        )}
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-200">
                                                     {filteredItems.map(item => {
                                                         const categoryName = state.categories.find(c => c.id === item.category || c.name === item.category)?.name || item.category;
-                                                        const currentWorth = (item.stockQty || 0) * (item.avgCost || 0);
+                                                        const currentQty = item.stockQty || 0;
+                                                        const currentWorth = currentQty * (item.avgCost || 0);
                                                         const adjustment = iaItemAdjustments[item.id] || { itemId: item.id, adjustmentQty: '', adjustmentWorth: '' };
+                                                        const target = iaTargets[item.id] || { itemId: item.id, targetQty: '', targetWorth: '' };
+                                                        
+                                                        // Calculate target values and differences
+                                                        const targetQty = target.targetQty === '' ? currentQty : (typeof target.targetQty === 'number' ? target.targetQty : parseFloat(String(target.targetQty)) || 0);
+                                                        const targetWorth = target.targetWorth === '' ? currentWorth : (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)) || 0);
+                                                        const qtyDiff = targetQty - currentQty;
+                                                        const worthDiff = targetWorth - currentWorth;
                                                         
                                                         return (
                                                             <tr key={item.id} className="hover:bg-slate-50">
@@ -3492,101 +3425,192 @@ export const Accounting: React.FC = () => {
                                                                 <td className="px-4 py-3 text-slate-800">{item.name}</td>
                                                                 <td className="px-4 py-3 text-slate-600">{categoryName}</td>
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-600">{(item.weightPerUnit || 0).toFixed(2)}</td>
-                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">{(item.stockQty || 0).toFixed(2)}</td>
-                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
-                                                                <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                    <div className="flex items-center justify-end gap-1">
-                                                                        <input 
-                                                                            type="number" 
-                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                            value={adjustment.adjustmentQty === '' || adjustment.adjustmentQty === null || adjustment.adjustmentQty === undefined ? '' : adjustment.adjustmentQty} 
-                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
-                                                                            onBlur={e => {
-                                                                                // Validate on blur
-                                                                                const val = e.target.value.trim();
-                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
-                                                                                    alert(`Invalid quantity for ${item.code}. Clearing field.`);
-                                                                                    setIaItemAdjustments(prev => ({
-                                                                                        ...prev,
-                                                                                        [item.id]: {
-                                                                                            ...prev[item.id],
-                                                                                            itemId: item.id,
-                                                                                            adjustmentQty: '',
-                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
-                                                                                        }
-                                                                                    }));
+                                                                {iaUseTargetMode ? (
+                                                                    <>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">{currentQty.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right bg-green-50">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                placeholder={currentQty.toFixed(2)}
+                                                                                value={
+                                                                                    target.targetQty === '' || target.targetQty === null || target.targetQty === undefined 
+                                                                                        ? '' 
+                                                                                        : (target.targetQty === 0 ? '0' : String(target.targetQty))
                                                                                 }
-                                                                            }}
-                                                                            placeholder="0"
-                                                                        />
-                                                                        {(adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0) && (
-                                                                            <button
-                                                                                onClick={() => {
-                                                                                    setIaItemAdjustments(prev => ({
+                                                                                onChange={(e) => {
+                                                                                    let val: number | '';
+                                                                                    if (e.target.value === '') {
+                                                                                        val = '';
+                                                                                    } else {
+                                                                                        const parsed = parseFloat(e.target.value);
+                                                                                        if (isNaN(parsed)) {
+                                                                                            val = '';
+                                                                                        } else {
+                                                                                            val = parsed;
+                                                                                        }
+                                                                                    }
+                                                                                    setIaTargets(prev => ({
                                                                                         ...prev,
                                                                                         [item.id]: {
-                                                                                            ...prev[item.id],
                                                                                             itemId: item.id,
-                                                                                            adjustmentQty: '',
-                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
+                                                                                            targetQty: val,
+                                                                                            targetWorth: prev[item.id]?.targetWorth || ''
                                                                                         }
                                                                                     }));
                                                                                 }}
-                                                                                className="text-red-500 hover:text-red-700 p-1"
-                                                                                title="Clear adjustment quantity"
-                                                                            >
-                                                                                <X size={14} />
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                </td>
-                                                                <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                    <div className="flex items-center justify-end gap-1">
-                                                                        <input 
-                                                                            type="number" 
-                                                                            step="0.01"
-                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                            value={adjustment.adjustmentWorth === '' || adjustment.adjustmentWorth === null || adjustment.adjustmentWorth === undefined ? '' : adjustment.adjustmentWorth} 
-                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
-                                                                            onBlur={e => {
-                                                                                // Validate on blur
-                                                                                const val = e.target.value.trim();
-                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
-                                                                                    alert(`Invalid worth for ${item.code}. Clearing field.`);
-                                                                                    setIaItemAdjustments(prev => ({
-                                                                                        ...prev,
-                                                                                        [item.id]: {
-                                                                                            ...prev[item.id],
-                                                                                            itemId: item.id,
-                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
-                                                                                            adjustmentWorth: ''
-                                                                                        }
-                                                                                    }));
+                                                                                className="w-24 px-2 py-1 border border-green-300 rounded text-right text-sm focus:ring-2 focus:ring-green-500"
+                                                                            />
+                                                                            {qtyDiff !== 0 && (
+                                                                                <div className={`text-xs mt-1 ${qtyDiff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                                    {qtyDiff > 0 ? '+' : ''}{qtyDiff.toFixed(2)}
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-green-50">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                placeholder={currentWorth.toFixed(2)}
+                                                                                value={
+                                                                                    target.targetWorth === '' || target.targetWorth === null || target.targetWorth === undefined 
+                                                                                        ? '' 
+                                                                                        : (target.targetWorth === 0 ? '0' : String(target.targetWorth))
                                                                                 }
-                                                                            }}
-                                                                            placeholder="0.00"
-                                                                        />
-                                                                        {(adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0) && (
-                                                                            <button
-                                                                                onClick={() => {
-                                                                                    setIaItemAdjustments(prev => ({
+                                                                                onChange={(e) => {
+                                                                                    let val: number | '';
+                                                                                    if (e.target.value === '') {
+                                                                                        val = '';
+                                                                                    } else {
+                                                                                        const parsed = parseFloat(e.target.value);
+                                                                                        if (isNaN(parsed)) {
+                                                                                            val = '';
+                                                                                        } else {
+                                                                                            val = parsed;
+                                                                                        }
+                                                                                    }
+                                                                                    setIaTargets(prev => ({
                                                                                         ...prev,
                                                                                         [item.id]: {
-                                                                                            ...prev[item.id],
                                                                                             itemId: item.id,
-                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
-                                                                                            adjustmentWorth: ''
+                                                                                            targetQty: prev[item.id]?.targetQty || '',
+                                                                                            targetWorth: val
                                                                                         }
                                                                                     }));
                                                                                 }}
-                                                                                className="text-red-500 hover:text-red-700 p-1"
-                                                                                title="Clear adjustment worth"
-                                                                            >
-                                                                                <X size={14} />
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                </td>
+                                                                                className="w-24 px-2 py-1 border border-green-300 rounded text-right text-sm focus:ring-2 focus:ring-green-500"
+                                                                            />
+                                                                            {worthDiff !== 0 && (
+                                                                                <div className={`text-xs mt-1 ${worthDiff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                                    {worthDiff > 0 ? '+' : ''}${worthDiff.toFixed(2)}
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50 font-mono text-sm">
+                                                                            {qtyDiff !== 0 ? (qtyDiff > 0 ? '+' : '') + qtyDiff.toFixed(2) : '0.00'}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50 font-mono text-sm">
+                                                                            {worthDiff !== 0 ? (worthDiff > 0 ? '+' : '') + '$' + worthDiff.toFixed(2) : '$0.00'}
+                                                                        </td>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">{currentQty.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                            <div className="flex items-center justify-end gap-1">
+                                                                                <input 
+                                                                                    type="number" 
+                                                                                    className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                                    value={adjustment.adjustmentQty === '' || adjustment.adjustmentQty === null || adjustment.adjustmentQty === undefined ? '' : adjustment.adjustmentQty} 
+                                                                                    onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
+                                                                                    onBlur={e => {
+                                                                                        const val = e.target.value.trim();
+                                                                                        if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                            alert(`Invalid quantity for ${item.code}. Clearing field.`);
+                                                                                            setIaItemAdjustments(prev => ({
+                                                                                                ...prev,
+                                                                                                [item.id]: {
+                                                                                                    ...prev[item.id],
+                                                                                                    itemId: item.id,
+                                                                                                    adjustmentQty: '',
+                                                                                                    adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
+                                                                                                }
+                                                                                            }));
+                                                                                        }
+                                                                                    }}
+                                                                                    placeholder="0"
+                                                                                />
+                                                                                {(adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0) && (
+                                                                                    <button
+                                                                                        onClick={() => {
+                                                                                            setIaItemAdjustments(prev => ({
+                                                                                                ...prev,
+                                                                                                [item.id]: {
+                                                                                                    ...prev[item.id],
+                                                                                                    itemId: item.id,
+                                                                                                    adjustmentQty: '',
+                                                                                                    adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
+                                                                                                }
+                                                                                            }));
+                                                                                        }}
+                                                                                        className="text-red-500 hover:text-red-700 p-1"
+                                                                                        title="Clear adjustment quantity"
+                                                                                    >
+                                                                                        <X size={14} />
+                                                                                    </button>
+                                                                                )}
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                            <div className="flex items-center justify-end gap-1">
+                                                                                <input 
+                                                                                    type="number" 
+                                                                                    step="0.01"
+                                                                                    className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                                    value={adjustment.adjustmentWorth === '' || adjustment.adjustmentWorth === null || adjustment.adjustmentWorth === undefined ? '' : adjustment.adjustmentWorth} 
+                                                                                    onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
+                                                                                    onBlur={e => {
+                                                                                        const val = e.target.value.trim();
+                                                                                        if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                            alert(`Invalid worth for ${item.code}. Clearing field.`);
+                                                                                            setIaItemAdjustments(prev => ({
+                                                                                                ...prev,
+                                                                                                [item.id]: {
+                                                                                                    ...prev[item.id],
+                                                                                                    itemId: item.id,
+                                                                                                    adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                                    adjustmentWorth: ''
+                                                                                                }
+                                                                                            }));
+                                                                                        }
+                                                                                    }}
+                                                                                    placeholder="0.00"
+                                                                                />
+                                                                                {(adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0) && (
+                                                                                    <button
+                                                                                        onClick={() => {
+                                                                                            setIaItemAdjustments(prev => ({
+                                                                                                ...prev,
+                                                                                                [item.id]: {
+                                                                                                    ...prev[item.id],
+                                                                                                    itemId: item.id,
+                                                                                                    adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                                    adjustmentWorth: ''
+                                                                                                }
+                                                                                            }));
+                                                                                        }}
+                                                                                        className="text-red-500 hover:text-red-700 p-1"
+                                                                                        title="Clear adjustment worth"
+                                                                                    >
+                                                                                        <X size={14} />
+                                                                                    </button>
+                                                                                )}
+                                                                            </div>
+                                                                        </td>
+                                                                    </>
+                                                                )}
                                                             </tr>
                                                         );
                                                     })}
@@ -3709,10 +3733,13 @@ export const Accounting: React.FC = () => {
                                                                 <th className="px-4 py-3 text-left font-semibold text-slate-700">Code</th>
                                                                 <th className="px-4 py-3 text-left font-semibold text-slate-700">Original Type Name</th>
                                                                 <th className="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
+                                                                <th className="px-4 py-3 text-left font-semibold text-slate-700">Sub Supplier</th>
                                                                 <th className="px-4 py-3 text-right font-semibold text-slate-700">Current Weight (Kg)</th>
                                                                 <th className="px-4 py-3 text-right font-semibold text-slate-700">Current Worth (USD)</th>
                                                                 <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-green-50">Target Weight (Kg)</th>
                                                                 <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-green-50">Target Worth (USD)</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-yellow-50">Calculated Adjustment Weight</th>
+                                                                <th className="px-4 py-3 text-right font-semibold text-slate-700 bg-yellow-50">Calculated Adjustment Worth</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody>
@@ -3728,10 +3755,14 @@ export const Accounting: React.FC = () => {
                                                                 return (
                                                                     <tr key={item.key} className="border-b border-slate-200 hover:bg-slate-50">
                                                                         <td className="px-4 py-3 font-mono text-xs">{item.originalTypeId}</td>
-                                                                        <td className="px-4 py-3">{item.originalTypeName}</td>
-                                                                        <td className="px-4 py-3">{item.supplierName}{item.subSupplierName ? ` / ${item.subSupplierName}` : ''}</td>
-                                                                        <td className="px-4 py-3 text-right">{currentWeight.toFixed(2)}</td>
-                                                                        <td className="px-4 py-3 text-right">${currentWorth.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3">
+                                                                            {item.originalTypeName}
+                                                                            {item.originalProductName && <span className="text-slate-500 text-xs"> - {item.originalProductName}</span>}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-slate-600">{item.supplierName}</td>
+                                                                        <td className="px-4 py-3 text-slate-500 text-xs">{item.subSupplierName || '-'}</td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">{currentWeight.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
                                                                         <td className="px-4 py-3 text-right bg-green-50">
                                                                             <input
                                                                                 type="number"
@@ -3743,8 +3774,6 @@ export const Accounting: React.FC = () => {
                                                                                         : (target.targetWeight === 0 ? '0' : String(target.targetWeight))
                                                                                 }
                                                                                 onChange={(e) => {
-                                                                                    // Store as number if valid, empty string if cleared
-                                                                                    // Explicitly handle "0" as a valid value (not empty!)
                                                                                     let val: number | '';
                                                                                     if (e.target.value === '') {
                                                                                         val = '';
@@ -3753,7 +3782,7 @@ export const Accounting: React.FC = () => {
                                                                                         if (isNaN(parsed)) {
                                                                                             val = '';
                                                                                         } else {
-                                                                                            val = parsed; // This includes 0!
+                                                                                            val = parsed;
                                                                                         }
                                                                                     }
                                                                                     setIaoTargets(prev => ({
@@ -3784,8 +3813,6 @@ export const Accounting: React.FC = () => {
                                                                                         : (target.targetWorth === 0 ? '0' : String(target.targetWorth))
                                                                                 }
                                                                                 onChange={(e) => {
-                                                                                    // Store as number if valid, empty string if cleared
-                                                                                    // Explicitly handle "0" as a valid value (not empty!)
                                                                                     let val: number | '';
                                                                                     if (e.target.value === '') {
                                                                                         val = '';
@@ -3794,15 +3821,9 @@ export const Accounting: React.FC = () => {
                                                                                         if (isNaN(parsed)) {
                                                                                             val = '';
                                                                                         } else {
-                                                                                            val = parsed; // This includes 0!
+                                                                                            val = parsed;
                                                                                         }
                                                                                     }
-                                                                                    console.log('📊 Target Worth Input - onChange:', {
-                                                                                        key: item.key,
-                                                                                        inputValue: e.target.value,
-                                                                                        parsedValue: val,
-                                                                                        currentWorth: currentWorth
-                                                                                    });
                                                                                     setIaoTargets(prev => ({
                                                                                         ...prev,
                                                                                         [item.key]: {
@@ -3820,69 +3841,18 @@ export const Accounting: React.FC = () => {
                                                                                 </div>
                                                                             )}
                                                                         </td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50 font-mono text-sm">
+                                                                            {weightDiff !== 0 ? (weightDiff > 0 ? '+' : '') + weightDiff.toFixed(2) : '0.00'}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-right bg-yellow-50 font-mono text-sm">
+                                                                            {worthDiff !== 0 ? (worthDiff > 0 ? '+' : '') + '$' + worthDiff.toFixed(2) : '$0.00'}
+                                                                        </td>
                                                                     </tr>
                                                                 );
                                                             })}
                                                         </tbody>
                                                     </table>
                                                 </div>
-                                            </div>
-                                            
-                                            {/* Post Button */}
-                                            <div className="flex justify-end">
-                                                <button
-                                                    onClick={async () => {
-                                                        if (!iaoReason.trim()) {
-                                                            alert('Please enter a reason for adjustment');
-                                                            return;
-                                                        }
-                                                        
-                                                        const targetsWithValues = Object.entries(iaoTargets).filter(([key, target]) => {
-                                                            const item = originalStockData.find(i => i.key === key);
-                                                            if (!item) return false;
-                                                            const currentWeight = item.weightInHand || 0;
-                                                            const currentWorth = item.worth || 0;
-                                                            
-                                                            // Determine target values: empty string means "no change", any other value (including 0) is explicit
-                                                            const hasExplicitWeight = target.targetWeight !== '' && target.targetWeight !== null && target.targetWeight !== undefined;
-                                                            const hasExplicitWorth = target.targetWorth !== '' && target.targetWorth !== null && target.targetWorth !== undefined;
-                                                            
-                                                            // If neither is explicitly set, skip this item
-                                                            if (!hasExplicitWeight && !hasExplicitWorth) return false;
-                                                            
-                                                            // Parse target values (0 is a valid explicit value)
-                                                            const targetWeight = hasExplicitWeight 
-                                                                ? (typeof target.targetWeight === 'number' ? target.targetWeight : parseFloat(String(target.targetWeight)))
-                                                                : currentWeight;
-                                                            const targetWorth = hasExplicitWorth 
-                                                                ? (typeof target.targetWorth === 'number' ? target.targetWorth : parseFloat(String(target.targetWorth)))
-                                                                : currentWorth;
-                                                            
-                                                            // Check if there's a change (allow 0 as a valid target)
-                                                            const weightChanged = hasExplicitWeight && targetWeight !== currentWeight;
-                                                            const worthChanged = hasExplicitWorth && targetWorth !== currentWorth;
-                                                            
-                                                            return weightChanged || worthChanged;
-                                                        });
-                                                        
-                                                        if (targetsWithValues.length === 0) {
-                                                            alert('No changes to post. Please enter target values that differ from current values.');
-                                                            return;
-                                                        }
-                                                        
-                                                        // Just call handleSave - it will convert targets to adjustments on-the-fly
-                                                        try {
-                                                            console.log('📊 Target Mode - Button clicked, calling handleSave');
-                                                            handleSave();
-                                                        } catch (error) {
-                                                            console.error('❌ Error in handleSave:', error);
-                                                            alert(`Error: ${error instanceof Error ? error.message : 'Unknown error occurred. Please check the console for details.'}`);
-                                                        }
-                                                    }}
-                                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 flex items-center gap-2"
-                                                >
-                                                    <CheckCircle size={18} /> Post IAO Voucher
-                                                </button>
                                             </div>
                                         </div>
                                     ) : (
@@ -3901,7 +3871,8 @@ export const Accounting: React.FC = () => {
                                                 skipEmptyLines: true,
                                                 complete: (results) => {
                                                     const errors: string[] = [];
-                                                    const newAdjustments: Record<string, { key: string; adjustmentWeight: number | ''; adjustmentWorth: number | '' }> = { ...iaoAdjustments };
+                                                    const newAdjustments: Record<string, OriginalStockAdjustment> = { ...iaoAdjustments };
+                                                    const newTargets: Record<string, OriginalStockTarget> = { ...iaoTargets };
                                                     let successCount = 0;
                                                     const warnings: string[] = [];
 
@@ -3945,40 +3916,48 @@ export const Accounting: React.FC = () => {
 
                                                         // Update all matching entries
                                                         matchingItems.forEach(item => {
-                                                            // Get system's current values
-                                                            const systemCurrentWeight = item.weightInHand || 0;
-                                                            const systemCurrentWorth = item.worth || 0;
+                                                            if (useSimpleMode) {
+                                                                // Target Mode: Store target values directly
+                                                                newTargets[item.key] = {
+                                                                    key: item.key,
+                                                                    targetWeight: csvCurrentWeight !== null ? csvCurrentWeight : '',
+                                                                    targetWorth: csvCurrentWorth !== null ? csvCurrentWorth : ''
+                                                                };
+                                                            } else {
+                                                                // Adjustment Mode: Calculate and store adjustments
+                                                                const systemCurrentWeight = item.weightInHand || 0;
+                                                                const systemCurrentWorth = item.worth || 0;
 
-                                                            // Calculate adjustments
-                                                            let adjustmentWeight: number | '' = '';
-                                                            let adjustmentWorth: number | '' = '';
+                                                                let adjustmentWeight: number | '' = '';
+                                                                let adjustmentWorth: number | '' = '';
 
-                                                            if (csvCurrentWeight !== null) {
-                                                                // Calculate weight adjustment
-                                                                adjustmentWeight = csvCurrentWeight - systemCurrentWeight;
+                                                                if (csvCurrentWeight !== null) {
+                                                                    adjustmentWeight = csvCurrentWeight - systemCurrentWeight;
+                                                                }
+
+                                                                if (csvCurrentWorth !== null) {
+                                                                    adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
+                                                                } else if (csvCurrentWeight !== null && item.avgCostPerKg) {
+                                                                    adjustmentWorth = (adjustmentWeight as number) * item.avgCostPerKg;
+                                                                }
+
+                                                                newAdjustments[item.key] = {
+                                                                    key: item.key,
+                                                                    adjustmentWeight: adjustmentWeight !== 0 ? adjustmentWeight : '',
+                                                                    adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
+                                                                };
                                                             }
-
-                                                            if (csvCurrentWorth !== null) {
-                                                                // Calculate worth adjustment
-                                                                adjustmentWorth = csvCurrentWorth - systemCurrentWorth;
-                                                            } else if (csvCurrentWeight !== null && item.avgCostPerKg) {
-                                                                // If only weight provided, calculate worth adjustment based on current avgCostPerKg
-                                                                adjustmentWorth = adjustmentWeight * item.avgCostPerKg;
-                                                            }
-
-                                                            // Update adjustments
-                                                            newAdjustments[item.key] = {
-                                                                key: item.key,
-                                                                adjustmentWeight: adjustmentWeight !== 0 ? adjustmentWeight : '',
-                                                                adjustmentWorth: adjustmentWorth !== 0 ? adjustmentWorth : ''
-                                                            };
                                                         });
 
                                                         successCount++;
                                                     }
 
-                                                    // Update state with new adjustments
-                                                    setIaoAdjustments(newAdjustments);
+                                                    // Update state based on mode
+                                                    if (useSimpleMode) {
+                                                        setIaoTargets(newTargets);
+                                                    } else {
+                                                        setIaoAdjustments(newAdjustments);
+                                                    }
 
                                                     // Show results
                                                     let message = '';
@@ -3995,7 +3974,7 @@ export const Accounting: React.FC = () => {
                                                     if (errors.length > 0 || warnings.length > 0) {
                                                         alert(`CSV Upload Complete:\n\n${message}`);
                                                     } else {
-                                                        alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} row(s).\nAdjustments have been calculated and populated in the table below.`);
+                                                        alert(`✅ CSV Upload Complete!\n\nSuccessfully processed ${successCount} row(s).\n${useSimpleMode ? 'Target values' : 'Adjustments'} have been ${useSimpleMode ? 'populated' : 'calculated and populated'} in the table below.`);
                                                     }
 
                                                     // Reset file input
@@ -4054,7 +4033,9 @@ export const Accounting: React.FC = () => {
                                                         Upload a CSV file with columns: <strong>Code</strong>, <strong>Kg</strong>, <strong>Worth</strong>
                                                     </p>
                                                     <p className="text-xs text-slate-500">
-                                                        The system will calculate adjustments by comparing CSV values with current system values. If a Code matches multiple entries (different suppliers), all matching entries will be updated.
+                                                        {useSimpleMode 
+                                                            ? 'In Target Mode: CSV values will be set as target values directly. The system will calculate adjustments automatically when you post.'
+                                                            : 'In Adjustment Mode: The system will calculate adjustments by comparing CSV values with current system values. If a Code matches multiple entries (different suppliers), all matching entries will be updated.'}
                                                     </p>
                                                     <input
                                                         type="file"
@@ -4574,19 +4555,32 @@ export const Accounting: React.FC = () => {
                                         const file = e.target.files?.[0];
                                         if (!file) return;
 
-                                        // Check for discrepancy account first
-                                        const discrepancyAccount = state.accounts.find(a => 
-                                            a.name.includes('Discrepancy') || 
-                                            a.name.includes('Suspense') ||
-                                            a.name.includes('Balancing Discrepancy') ||
-                                            a.code === '505'
+                                        // Check for discrepancy account first (prefer EQUITY, fallback to LIABILITY)
+                                        let discrepancyAccount = state.accounts.find(a => 
+                                            (a.name.includes('Discrepancy') || 
+                                             a.name.includes('Suspense') ||
+                                             a.name.includes('Balancing Discrepancy') ||
+                                             a.code === '505') &&
+                                            a.type === AccountType.EQUITY
                                         );
                                         
                                         if (!discrepancyAccount) {
-                                            alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: LIABILITY\n- Opening Balance: 0');
+                                            discrepancyAccount = state.accounts.find(a => 
+                                                (a.name.includes('Discrepancy') || 
+                                                 a.name.includes('Suspense') ||
+                                                 a.name.includes('Balancing Discrepancy') ||
+                                                 a.code === '505') &&
+                                                a.type === AccountType.LIABILITY
+                                            );
+                                        }
+                                        
+                                        if (!discrepancyAccount) {
+                                            alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: EQUITY (preferred) or LIABILITY\n- Opening Balance: 0');
                                             e.target.value = '';
                                             return;
                                         }
+                                        
+                                        const isEquityAccount = discrepancyAccount.type === AccountType.EQUITY;
 
                                         Papa.parse(file, {
                                             header: true,
@@ -4653,8 +4647,8 @@ export const Accounting: React.FC = () => {
                                                         if (partner.type === PartnerType.CUSTOMER) {
                                                             // Customers: debit increases balance (they owe us) - positive
                                                             systemBalance = debitSum - creditSum;
-                                                        } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
-                                                            // Suppliers/agents: credit increases liability (we owe them) - negative
+                                                        } else if ([PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                                                            // Suppliers/sub-suppliers/vendors/agents: credit increases liability (we owe them) - negative
                                                             systemBalance = creditSum - debitSum;
                                                         } else {
                                                             systemBalance = debitSum - creditSum;
@@ -4689,7 +4683,7 @@ export const Accounting: React.FC = () => {
                                                     const reason = `CSV Bulk Adjustment: Target Balance ${csvCurrentBalance.toFixed(2)}, System Balance ${systemBalance.toFixed(2)}`;
 
                                                     if (isIncrease) {
-                                                        // Increase: Debit account/partner, Credit discrepancy account
+                                                        // Increase: Debit account/partner (increases asset or decreases liability), Credit Discrepancy
                                                         entries.push({ 
                                                             date: bdDate, 
                                                             transactionId: voucherNo, 
@@ -4704,22 +4698,42 @@ export const Accounting: React.FC = () => {
                                                             narration: `Balance Increase: ${entityName} - ${reason}`, 
                                                             factoryId: state.currentFactory?.id || '' 
                                                         });
-                                                        entries.push({ 
-                                                            date: bdDate, 
-                                                            transactionId: voucherNo, 
-                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                            accountId: discrepancyAccount.id, 
-                                                            accountName: discrepancyAccount.name, 
-                                                            currency, 
-                                                            exchangeRate, 
-                                                            fcyAmount, 
-                                                            debit: 0, 
-                                                            credit: baseAmount, 
-                                                            narration: `Balance Increase: ${entityName} - ${reason}`, 
-                                                            factoryId: state.currentFactory?.id || '' 
-                                                        });
+                                                        if (isEquityAccount) {
+                                                            // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                            entries.push({ 
+                                                                date: bdDate, 
+                                                                transactionId: voucherNo, 
+                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                accountId: discrepancyAccount.id, 
+                                                                accountName: discrepancyAccount.name, 
+                                                                currency, 
+                                                                exchangeRate, 
+                                                                fcyAmount, 
+                                                                debit: baseAmount, 
+                                                                credit: 0, 
+                                                                narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                factoryId: state.currentFactory?.id || '' 
+                                                            });
+                                                        } else {
+                                                            // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                                                            entries.push({ 
+                                                                date: bdDate, 
+                                                                transactionId: voucherNo, 
+                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                accountId: discrepancyAccount.id, 
+                                                                accountName: discrepancyAccount.name, 
+                                                                currency, 
+                                                                exchangeRate, 
+                                                                fcyAmount, 
+                                                                debit: 0, 
+                                                                credit: baseAmount, 
+                                                                narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                factoryId: state.currentFactory?.id || '' 
+                                                            });
+                                                        }
                                                     } else {
-                                                        // Decrease: Credit account/partner, Debit discrepancy account
+                                                        // Decrease: Credit account/partner (decreases asset or increases liability), Debit Discrepancy
+                                                        // When we decrease an asset, we need to decrease equity (debit) or decrease liability (debit) to balance
                                                         entries.push({ 
                                                             date: bdDate, 
                                                             transactionId: voucherNo, 
@@ -4734,20 +4748,39 @@ export const Accounting: React.FC = () => {
                                                             narration: `Balance Decrease: ${entityName} - ${reason}`, 
                                                             factoryId: state.currentFactory?.id || '' 
                                                         });
-                                                        entries.push({ 
-                                                            date: bdDate, 
-                                                            transactionId: voucherNo, 
-                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                            accountId: discrepancyAccount.id, 
-                                                            accountName: discrepancyAccount.name, 
-                                                            currency, 
-                                                            exchangeRate, 
-                                                            fcyAmount, 
-                                                            debit: baseAmount, 
-                                                            credit: 0, 
-                                                            narration: `Balance Decrease: ${entityName} - ${reason}`, 
-                                                            factoryId: state.currentFactory?.id || '' 
-                                                        });
+                                                        if (isEquityAccount) {
+                                                            // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                            entries.push({ 
+                                                                date: bdDate, 
+                                                                transactionId: voucherNo, 
+                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                accountId: discrepancyAccount.id, 
+                                                                accountName: discrepancyAccount.name, 
+                                                                currency, 
+                                                                exchangeRate, 
+                                                                fcyAmount, 
+                                                                debit: baseAmount, 
+                                                                credit: 0, 
+                                                                narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                factoryId: state.currentFactory?.id || '' 
+                                                            });
+                                                        } else {
+                                                            // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                                                            entries.push({ 
+                                                                date: bdDate, 
+                                                                transactionId: voucherNo, 
+                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                accountId: discrepancyAccount.id, 
+                                                                accountName: discrepancyAccount.name, 
+                                                                currency, 
+                                                                exchangeRate, 
+                                                                fcyAmount, 
+                                                                debit: baseAmount, 
+                                                                credit: 0, 
+                                                                narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                factoryId: state.currentFactory?.id || '' 
+                                                            });
+                                                        }
                                                     }
 
                                                     // Post transaction
@@ -5284,7 +5317,7 @@ const BalanceAlignmentComponent: React.FC<{
         if (entityType === 'partner') {
             if (entity.type === PartnerType.CUSTOMER) {
                 currentBalance = totalDebits - totalCredits;
-            } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
+            } else if ([PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
                 currentBalance = totalCredits - totalDebits;
             } else {
                 currentBalance = totalDebits - totalCredits;

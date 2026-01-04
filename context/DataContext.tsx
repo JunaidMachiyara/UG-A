@@ -219,19 +219,52 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             return { ...state, bundlePurchases: action.payload };
         }
         case 'LOAD_LEDGER': {
+            const startTime = performance.now();
             console.log('✅ LOADED LEDGER ENTRIES FROM FIREBASE:', action.payload.length);
             
-            // Recalculate account balances from all ledger entries
+            // 🚀 PERFORMANCE OPTIMIZATION: Create index maps to avoid O(n*m) filtering
+            // Index ledger entries by accountId for fast lookup
+            const accountEntriesMap = new Map<string, { debit: number; credit: number }>();
+            action.payload.forEach(entry => {
+                const accountId = entry.accountId;
+                const current = accountEntriesMap.get(accountId) || { debit: 0, credit: 0 };
+                accountEntriesMap.set(accountId, {
+                    debit: current.debit + (entry.debit || 0),
+                    credit: current.credit + (entry.credit || 0)
+                });
+            });
+            
+            // Recalculate account balances using the index (O(m) instead of O(n*m))
             const updatedAccounts = state.accounts.map(acc => {
-                const debitSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.debit || 0), 0);
-                const creditSum = action.payload.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + (e.credit || 0), 0);
+                const totals = accountEntriesMap.get(acc.id) || { debit: 0, credit: 0 };
                 let newBalance = 0;
                 if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
-                    newBalance = debitSum - creditSum;
+                    newBalance = totals.debit - totals.credit;
                 } else {
-                    newBalance = creditSum - debitSum;
+                    newBalance = totals.credit - totals.debit;
                 }
                 return { ...acc, balance: newBalance };
+            });
+            
+            // 🚀 PERFORMANCE OPTIMIZATION: Index entries by partnerId and transactionId for fast lookup
+            // Index by partnerId (for direct partner entries)
+            const partnerEntriesMap = new Map<string, { debit: number; credit: number }>();
+            // Index by transactionId (for opening balance entries)
+            const transactionEntriesMap = new Map<string, LedgerEntry[]>();
+            action.payload.forEach(entry => {
+                // Index by partnerId
+                if (entry.accountId) {
+                    const current = partnerEntriesMap.get(entry.accountId) || { debit: 0, credit: 0 };
+                    partnerEntriesMap.set(entry.accountId, {
+                        debit: current.debit + (entry.debit || 0),
+                        credit: current.credit + (entry.credit || 0)
+                    });
+                }
+                // Index by transactionId (for opening balance lookups)
+                if (entry.transactionId) {
+                    const existing = transactionEntriesMap.get(entry.transactionId) || [];
+                    transactionEntriesMap.set(entry.transactionId, [...existing, entry]);
+                }
             });
             
             // Recalculate partner balances from ledger entries
@@ -239,28 +272,33 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             // For suppliers, opening balance entries use AP account ID, so we need to check both
             const updatedPartners = state.partners.map(partner => {
                 const partnerId = partner.id;
+                const partnerCode = (partner as any).code; // CSV code for imported partners
                 
                 let newPartnerBalance = 0;
                 
                 if (partner.type === PartnerType.CUSTOMER) {
                     // Customers: debit increases balance (they owe us) - positive
                     // Opening balance entries use partner ID as accountId
-                    // So we can simply filter by accountId === partnerId
-                    const customerEntries = action.payload.filter(e => e.accountId === partnerId);
-                    const customerDebitSum = customerEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
-                    const customerCreditSum = customerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
-                    newPartnerBalance = customerDebitSum - customerCreditSum;
-                } else if ([PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
-                    // Suppliers/agents: credit increases liability, so balance becomes more negative
+                    // So we can simply use the indexed totals
+                    const totals = partnerEntriesMap.get(partnerId) || { debit: 0, credit: 0 };
+                    newPartnerBalance = totals.debit - totals.credit;
+                } else if ([PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type)) {
+                    // Suppliers/sub-suppliers/vendors/agents: credit increases liability, so balance becomes more negative
                     // Opening balance entries use AP account ID, not partner ID
                     // Regular entries (purchases, payments) might use partner ID
                     
-                    // Step 1: Get opening balance from opening balance entries (by transactionId)
-                    const openingBalanceEntries = action.payload.filter(e => 
-                        e.transactionId === `OB-${partnerId}` && e.transactionType === TransactionType.OPENING_BALANCE
-                    );
+                    // Step 1: Get opening balance from opening balance entries (by transactionId) - use index
+                    // CSV imports use OB-{code}, manual adds use OB-{firestoreId}
+                    const obTransactionId1 = `OB-${partnerId}`;
+                    const obTransactionId2 = partnerCode ? `OB-${partnerCode}` : null;
                     
                     let openingBalance = 0;
+                    const obEntries1 = transactionEntriesMap.get(obTransactionId1) || [];
+                    const obEntries2 = obTransactionId2 ? (transactionEntriesMap.get(obTransactionId2) || []) : [];
+                    const openingBalanceEntries = [...obEntries1, ...obEntries2].filter(e => 
+                        e.transactionType === TransactionType.OPENING_BALANCE
+                    );
+                    
                     if (openingBalanceEntries.length > 0) {
                         // Find the AP account entry in opening balance entries
                         const apEntry = openingBalanceEntries.find(e => 
@@ -280,32 +318,36 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                     }
                     
                     // Step 2: Get regular entries (purchases, payments) where accountId === partnerId
-                    const regularEntries = action.payload.filter(e => 
-                        e.accountId === partnerId && 
-                        e.transactionId !== `OB-${partnerId}` // Exclude opening balance entries
-                    );
-                    const regularDebitSum = regularEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
-                    const regularCreditSum = regularEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
-                    const regularBalance = regularCreditSum - regularDebitSum;
+                    // Use indexed totals, then subtract opening balance entries
+                    const allPartnerTotals = partnerEntriesMap.get(partnerId) || { debit: 0, credit: 0 };
+                    // Subtract opening balance entries from totals
+                    const obDebitSum = openingBalanceEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                    const obCreditSum = openingBalanceEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                    const regularDebitSum = allPartnerTotals.debit - obDebitSum;
+                    const regularCreditSum = allPartnerTotals.credit - obCreditSum;
+                    // For suppliers: Credit increases liability (we owe them more) → makes balance MORE NEGATIVE
+                    // Debit decreases liability (we pay them) → makes balance LESS NEGATIVE (more positive)
+                    // So: regularBalance = debitSum - creditSum
+                    // Example: Credit 5000 → regularBalance = 0 - 5000 = -5000 (more negative) ✅
+                    // Example: Debit 5000 → regularBalance = 5000 - 0 = 5000 (less negative) ✅
+                    const regularBalance = regularDebitSum - regularCreditSum;
                     
                     // Step 3: Combine opening balance with regular balance
+                    // Both should be negative when we owe them, so adding them together is correct
                     newPartnerBalance = openingBalance + regularBalance;
                 } else {
-                    // Other partners: default logic
-                    const partnerEntries = action.payload.filter(e => e.accountId === partnerId);
-                    const partnerDebitSum = partnerEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
-                    const partnerCreditSum = partnerEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
-                    newPartnerBalance = partnerDebitSum - partnerCreditSum;
+                    // Other partners: default logic - use indexed totals
+                    const totals = partnerEntriesMap.get(partnerId) || { debit: 0, credit: 0 };
+                    newPartnerBalance = totals.debit - totals.credit;
                 }
                 
                 // Fallback: If no entries found and partner has existing balance, preserve it
                 // This prevents overwriting explicitly set balances when ledger is empty
                 if (newPartnerBalance === 0 && partner.balance !== undefined && partner.balance !== 0) {
-                    // Check if there are actually any entries for this partner
-                    const hasAnyEntries = action.payload.some(e => 
-                        e.accountId === partnerId || 
-                        e.transactionId === `OB-${partnerId}`
-                    );
+                    // Check if there are actually any entries for this partner - use index for fast lookup
+                    const hasAnyEntries = partnerEntriesMap.has(partnerId) || 
+                                         transactionEntriesMap.has(`OB-${partnerId}`) ||
+                                         (partnerCode && transactionEntriesMap.has(`OB-${partnerCode}`));
                     if (!hasAnyEntries) {
                         // No entries found, preserve existing balance from Firebase
                         newPartnerBalance = partner.balance;
@@ -316,9 +358,9 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 // If there's a mismatch and we have opening balance entries, trust the saved balance
                 // This prevents incorrect recalculation from overriding explicitly set opening balances
                 if (partner.balance !== undefined && partner.balance !== 0 && newPartnerBalance !== partner.balance) {
-                    const hasOpeningBalanceEntries = action.payload.some(e => 
-                        e.transactionId === `OB-${partnerId}` && e.transactionType === TransactionType.OPENING_BALANCE
-                    );
+                    // Use index for fast lookup
+                    const hasOpeningBalanceEntries = transactionEntriesMap.has(`OB-${partnerId}`) ||
+                                                     (partnerCode && transactionEntriesMap.has(`OB-${partnerCode}`));
                     const difference = Math.abs(newPartnerBalance - partner.balance);
                     
                     if (hasOpeningBalanceEntries && difference > 0.01) {
@@ -343,6 +385,12 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 
                 return { ...partner, balance: newPartnerBalance };
             });
+            
+            const endTime = performance.now();
+            const processingTime = endTime - startTime;
+            if (processingTime > 100) {
+                console.log(`⚡ Ledger processing took ${processingTime.toFixed(2)}ms (${action.payload.length} entries, ${state.accounts.length} accounts, ${state.partners.length} partners)`);
+            }
             
             return { ...state, ledger: action.payload, accounts: updatedAccounts, partners: updatedPartners };
         }
@@ -564,7 +612,24 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 }
                 return { ...acc, balance: newBalance };
              });
-             return { ...state, ledger: state.ledger.filter(e => e.transactionId !== action.payload.transactionId), accounts: correctedAccounts, archive: [archiveEntry, ...state.archive] };
+             // 🔧 FIX: Also update partner balances when deleting ledger entries
+             const correctedPartners = state.partners.map(partner => {
+                const partnerDebitRemoved = entriesToRemove.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + e.debit, 0);
+                const partnerCreditRemoved = entriesToRemove.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + e.credit, 0);
+                // Reverse the effect of the deleted entries
+                // For customers: debit increases AR (positive), credit decreases AR → removing debit decreases balance, removing credit increases balance
+                // For suppliers: credit increases AP (negative), debit decreases AP → removing credit decreases liability (balance becomes less negative), removing debit increases liability (balance becomes more negative)
+                let newPartnerBalance = partner.balance;
+                if ([PartnerType.CUSTOMER].includes(partner.type)) {
+                    // Customers: removing debit decreases balance, removing credit increases balance
+                    newPartnerBalance = partner.balance - partnerDebitRemoved + partnerCreditRemoved;
+                } else {
+                    // Suppliers: removing credit decreases liability (balance becomes less negative), removing debit increases liability (balance becomes more negative)
+                    newPartnerBalance = partner.balance + partnerCreditRemoved - partnerDebitRemoved;
+                }
+                return { ...partner, balance: newPartnerBalance };
+             });
+             return { ...state, ledger: state.ledger.filter(e => e.transactionId !== action.payload.transactionId), accounts: correctedAccounts, partners: correctedPartners, archive: [archiveEntry, ...state.archive] };
         }
         default: return state;
     }
@@ -688,11 +753,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 snapshot.forEach((doc) => {
                     const partnerData = doc.data();
                     const { id: _, ...dataWithoutId } = partnerData; // Remove old client-generated id from data
-                    console.log(`👥 Loading partner from Firebase:`, {
-                        firestoreId: doc.id,
-                        oldDataId: partnerData.id,
-                        name: partnerData.name
-                    });
+                    // Removed verbose per-partner logging for performance
                     partners.push({
                         ...dataWithoutId,
                         id: doc.id // Use Firebase document ID
@@ -702,7 +763,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PARTNERS', payload: partners });
                 markCollectionLoaded('partners');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                // Removed setTimeout - not needed, immediate update is fine
+                isUpdatingFromFirestore.current = false;
             },
             (error) => {
                 console.error('❌ Error loading partners:', error);
@@ -728,7 +790,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ACCOUNTS', payload: accounts });
                 markCollectionLoaded('accounts');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => {
                 console.error('❌ Error loading accounts:', error);
@@ -748,7 +810,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ITEMS', payload: items });
                 markCollectionLoaded('items');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading items:', error)
         );
@@ -764,7 +826,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_CATEGORIES', payload: categories });
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading categories:', error)
         );
@@ -781,7 +843,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SECTIONS', payload: sections });
                 markCollectionLoaded('sections');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading sections:', error)
         );
@@ -798,7 +860,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_WAREHOUSES', payload: warehouses });
                 markCollectionLoaded('warehouses');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading warehouses:', error)
         );
@@ -815,7 +877,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_DIVISIONS', payload: divisions });
                 markCollectionLoaded('divisions');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading divisions:', error)
         );
@@ -832,7 +894,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SUBDIVISIONS', payload: subDivisions });
                 markCollectionLoaded('subDivisions');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading subDivisions:', error)
         );
@@ -849,7 +911,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LOGOS', payload: logos });
                 markCollectionLoaded('logos');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading logos:', error)
         );
@@ -866,7 +928,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PORTS', payload: ports });
                 markCollectionLoaded('ports');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading ports:', error)
         );
@@ -883,7 +945,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_TYPES', payload: originalTypes });
                 markCollectionLoaded('originalTypes');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading originalTypes:', error)
         );
@@ -900,7 +962,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_PRODUCTS', payload: originalProducts });
                 markCollectionLoaded('originalProducts');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading originalProducts:', error)
         );
@@ -917,7 +979,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_EMPLOYEES', payload: employees });
                 markCollectionLoaded('employees');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading employees:', error)
         );
@@ -933,7 +995,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_CURRENCIES', payload: currencies });
                 markCollectionLoaded('currencies');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading currencies:', error)
         );
@@ -950,7 +1012,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PURCHASES', payload: purchases });
                 markCollectionLoaded('purchases');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading purchases:', error)
         );
@@ -967,7 +1029,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_BUNDLE_PURCHASES', payload: bundlePurchases });
                 markCollectionLoaded('bundlePurchases');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading bundle purchases:', error)
         );
@@ -984,7 +1046,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LEDGER', payload: ledgerEntries });
                 markCollectionLoaded('ledger');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading ledger:', error)
         );
@@ -1001,7 +1063,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PRODUCTIONS', payload: productions });
                 markCollectionLoaded('productions');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading productions:', error)
         );
@@ -1018,7 +1080,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ORIGINAL_OPENINGS', payload: originalOpenings });
                 markCollectionLoaded('originalOpenings');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading original openings:', error)
         );
@@ -1035,7 +1097,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_LOGISTICS_ENTRIES', payload: logisticsEntries });
                 markCollectionLoaded('logisticsEntries');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading logistics entries:', error)
         );
@@ -1052,7 +1114,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_SALES_INVOICES', payload: salesInvoices });
                 markCollectionLoaded('salesInvoices');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading sales invoices:', error)
         );
@@ -1069,7 +1131,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ONGOING_ORDERS', payload: ongoingOrders });
                 markCollectionLoaded('ongoingOrders');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading ongoing orders:', error)
         );
@@ -1086,7 +1148,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_ATTENDANCE', payload: attendance });
                 markCollectionLoaded('attendance');
-                setTimeout(() => { isUpdatingFromFirestore.current = false; }, 100);
+                isUpdatingFromFirestore.current = false;
             },
             (error) => console.error('❌ Error loading attendance:', error)
         );
@@ -1277,7 +1339,60 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
+        // Dispatch to update local state first (so we can calculate new balances)
         dispatch({ type: 'POST_TRANSACTION', payload: { entries: entriesWithFactory } });
+        
+        // Update partner balances in Firebase if any entries affect partners
+        // This ensures partner balances persist correctly after BD adjustments
+        // IMPORTANT: This must happen AFTER dispatch so we calculate from updated state
+        try {
+            const partnerAffectingEntries = entriesWithFactory.filter(e => {
+                // Check if this entry affects a partner (accountId matches a partner ID)
+                return state.partners.some(p => p.id === e.accountId);
+            });
+            
+            if (partnerAffectingEntries.length > 0 && isFirestoreLoaded) {
+                // Group entries by partner to calculate net change
+                const partnerChanges = new Map<string, { debit: number; credit: number }>();
+                
+                partnerAffectingEntries.forEach(entry => {
+                    const partnerId = entry.accountId;
+                    const current = partnerChanges.get(partnerId) || { debit: 0, credit: 0 };
+                    partnerChanges.set(partnerId, {
+                        debit: current.debit + (entry.debit || 0),
+                        credit: current.credit + (entry.credit || 0)
+                    });
+                });
+                
+                // Update partners in Firebase with new balances
+                // Use a small delay to ensure state has been updated by the dispatch
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                for (const [partnerId, changes] of partnerChanges.entries()) {
+                    const partner = state.partners.find(p => p.id === partnerId);
+                    if (partner) {
+                        // Calculate new balance: current balance + debit - credit
+                        // For customers: debit increases (they owe more), credit decreases
+                        // For suppliers: same formula (credit increases liability = more negative)
+                        const currentBalance = partner.balance || 0;
+                        const newBalance = currentBalance + changes.debit - changes.credit;
+                        
+                        try {
+                            await updateDoc(doc(db, 'partners', partnerId), {
+                                balance: newBalance,
+                                updatedAt: serverTimestamp()
+                            });
+                            console.log(`✅ Partner balance updated in Firebase: ${partner.name} (${partnerId}) = ${newBalance} (was ${currentBalance}, change: ${changes.debit - changes.credit})`);
+                        } catch (error) {
+                            console.error(`❌ Error updating partner balance in Firebase for ${partnerId}:`, error);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error updating partner balances in Firebase:', error);
+            // Continue even if partner balance update fails
+        }
     };
     
     const deleteTransaction = async (transactionId: string, reason?: string, user?: string) => {
@@ -1358,8 +1473,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 if (entity.type === PartnerType.CUSTOMER) {
                     // Customers: debit increases balance (they owe us)
                     currentBalance = totalDebits - totalCredits;
-                } else if ([PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
-                    // Suppliers/agents: credit increases liability (we owe them)
+                } else if ([PartnerType.SUPPLIER, PartnerType.SUB_SUPPLIER, PartnerType.VENDOR, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(entity.type)) {
+                    // Suppliers/sub-suppliers/vendors/agents: credit increases liability (we owe them)
                     currentBalance = totalCredits - totalDebits;
                 } else {
                     currentBalance = totalDebits - totalCredits;
@@ -1986,9 +2101,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             throw new Error(errorMsg);
         }
 
+        // Verify supplier exists
+        const supplier = state.partners.find(p => p.id === purchaseWithFactory.supplierId);
+        if (!supplier) {
+            const errorMsg = `❌ CRITICAL ERROR: Cannot create purchase entry.\n\n` +
+                `Supplier not found: ${purchaseWithFactory.supplierId}\n\n` +
+                `Please ensure the supplier exists in Setup > Business Partners.\n\n` +
+                `Purchase will NOT be saved.`;
+            console.error(errorMsg);
+            alert(errorMsg);
+            throw new Error(errorMsg);
+        }
+
         const inventoryId = inventoryAccount.id;
         const transactionId = `PI-${purchaseWithFactory.batchNumber || purchaseWithFactory.id.toUpperCase()}`;
+        const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
+        const supplierName = supplier.name;
+        
         const entries: Omit<LedgerEntry, 'id'>[] = [
+            // Debit: Inventory - Raw Materials (Asset increases)
                 { 
                     date: purchaseWithFactory.date, 
                     transactionId, 
@@ -2002,12 +2133,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     credit: 0, 
                     narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`, 
                     factoryId: purchaseWithFactory.factoryId 
-                }
-        ];
-        const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
-        const supplierName = state.partners.find(p=>p.id===purchaseWithFactory.supplierId)?.name || 'Unknown Supplier';
-        // Credit the SUPPLIER's account directly (not general AP)
-            entries.push({ 
+            },
+            // Credit: Supplier Account (Liability increases - we owe them)
+            { 
                 date: purchaseWithFactory.date, 
                 transactionId, 
                 transactionType: TransactionType.PURCHASE_INVOICE, 
@@ -2020,31 +2148,72 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 credit: materialCostUSD, 
                 narration: `Material Cost: ${supplierName}`, 
                 factoryId: purchaseWithFactory.factoryId 
-            });
+            }
+        ];
+        
             // Additional costs (freight, clearing, etc.) credited to their providers
         purchaseWithFactory.additionalCosts.forEach(cost => {
-            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+            const provider = state.partners.find(p => p.id === cost.providerId);
+            if (!provider) {
+                console.warn(`⚠️ Provider not found for cost ${cost.costType}: ${cost.providerId}`);
+                return;
+            }
+            
+            // Debit: Inventory (capitalize additional costs)
                 entries.push({ 
-                    date: purchase.date, 
+                date: purchaseWithFactory.date, 
+                transactionType: TransactionType.PURCHASE_INVOICE,
+                transactionId, 
+                accountId: inventoryId, 
+                accountName: 'Inventory - Raw Materials', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: cost.amountUSD, 
+                debit: cost.amountUSD, 
+                credit: 0, 
+                narration: `${cost.costType} (Capitalized): ${provider.name}`, 
+                factoryId: purchaseWithFactory.factoryId 
+            });
+            
+            // Credit: Provider Account
+            entries.push({ 
+                date: purchaseWithFactory.date, 
                     transactionType: TransactionType.PURCHASE_INVOICE,
                     transactionId, 
                     accountId: cost.providerId, 
-                    accountName: providerName, 
+                accountName: provider.name, 
                     currency: cost.currency, 
                     exchangeRate: cost.exchangeRate, 
                     fcyAmount: cost.amountFCY, 
                     debit: 0, 
                     credit: cost.amountUSD, 
-                    narration: `${cost.costType}: ${providerName}`, 
+                narration: `${cost.costType}: ${provider.name}`, 
                     factoryId: purchaseWithFactory.factoryId 
                 });
             });
+        
+        console.log('📊 Purchase Ledger Entries:', {
+            transactionId,
+            entriesCount: entries.length,
+            inventoryDebit: entries[0].debit,
+            supplierCredit: entries[1].credit,
+            supplierId: purchaseWithFactory.supplierId,
+            supplierName: supplierName
+        });
+        
             return entries;
         };
 
         const entries = buildPurchaseEntries();
-        if (entries) {
-        postTransaction(entries);
+        if (entries && entries.length > 0) {
+            console.log('✅ Posting purchase ledger entries:', entries.length);
+            postTransaction(entries).catch((error) => {
+                console.error('❌ Error posting purchase ledger entries:', error);
+                alert(`Failed to post ledger entries: ${error.message}\n\nPurchase was saved but ledger entries may be incomplete. Please check Accounting > Ledger.`);
+            });
+        } else {
+            console.error('❌ No ledger entries created for purchase');
+            alert('Warning: Purchase was saved but no ledger entries were created. Please check the console for details.');
         }
     };
     const addBundlePurchase = (bundle: BundlePurchase) => {
@@ -2312,25 +2481,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 
                 // Create new opening balance entries
-                    console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
-                    const prevYear = new Date().getFullYear() - 1;
-                    const date = `${prevYear}-12-31`;
-                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
-                    let entries: Omit<LedgerEntry, 'id'>[] = [];
-                    const currency = partner.defaultCurrency || existingPartner.defaultCurrency || 'USD';
-                    const exchangeRates = getExchangeRates(state.currencies);
-                    const rate = exchangeRates[currency] || 1;
-                    const fcyAmt = newBalance * rate;
-                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
-                    
-                    if (existingPartner.type === 'CUSTOMER') {
+                console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
+                const prevYear = new Date().getFullYear() - 1;
+                const date = `${prevYear}-12-31`;
+                const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                let entries: Omit<LedgerEntry, 'id'>[] = [];
+                const currency = partner.defaultCurrency || existingPartner.defaultCurrency || 'USD';
+                const exchangeRates = getExchangeRates(state.currencies);
+                const rate = exchangeRates[currency] || 1;
+                const fcyAmt = newBalance * rate;
+                const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+                
+                if (existingPartner.type === 'CUSTOMER') {
                         // Customer opening balance logic:
                         // Positive balance (they owe us): Debit AR, Credit Equity
                         // Negative balance (we owe them/credit balance): Credit AR, Debit Equity
                         const absBalance = Math.abs(newBalance);
                         
-                        if (newBalance >= 0) {
-                            // Positive balance: Customer owes us
+                    if (newBalance >= 0) {
+                        // Positive balance: Customer owes us
                         entries = [
                             {
                                 ...commonProps,
@@ -2339,76 +2508,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 transactionType: TransactionType.OPENING_BALANCE,
                                 accountId: id,
                                 accountName: existingPartner.name,
-                                    debit: absBalance,
-                                credit: 0,
-                                narration: `Opening Balance - ${existingPartner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            },
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
-                                debit: 0,
-                                    credit: absBalance,
-                                narration: `Opening Balance - ${existingPartner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            }
-                        ];
-                    } else {
-                            // Negative balance: Credit balance (we owe them or they overpaid)
-                            entries = [
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: id,
-                                    accountName: existingPartner.name,
-                                    debit: 0,
-                                    credit: absBalance,
-                                    narration: `Opening Balance (Credit) - ${existingPartner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                },
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: openingEquityId,
-                                    accountName: 'Opening Equity',
-                                    debit: absBalance,
-                                    credit: 0,
-                                    narration: `Opening Balance (Credit) - ${existingPartner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                }
-                            ];
-                        }
-                    } else {
-                        // Supplier/Vendor/Sub Supplier: Credit Accounts Payable, Debit equity
-                        const absBalance = Math.abs(newBalance);
-                        
-                        // Find Accounts Payable account (for Suppliers/Sub Suppliers)
-                        const apAccount = state.accounts.find(a => 
-                            a.name.includes('Accounts Payable') || 
-                            a.code === '201' ||
-                            (a.type === AccountType.LIABILITY && a.name.toLowerCase().includes('payable'))
-                        );
-                        
-                        if (!apAccount) {
-                            throw new Error('CRITICAL: Accounts Payable account not found! Please create it in Setup > Chart of Accounts (Code: 201, Type: LIABILITY)');
-                        }
-                        
-                        entries = [
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
                                 debit: absBalance,
                                 credit: 0,
                                 narration: `Opening Balance - ${existingPartner.name}`,
@@ -2419,47 +2518,117 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 date,
                                 transactionId: `OB-${id}`,
                                 transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: apAccount.id, // Use Accounts Payable account, not partner ID
-                                accountName: apAccount.name,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
                                 debit: 0,
                                 credit: absBalance,
                                 narration: `Opening Balance - ${existingPartner.name}`,
                                 factoryId: currentFactory?.id || ''
                             }
                         ];
+                    } else {
+                        // Negative balance: Credit balance (we owe them or they overpaid)
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingPartner.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance (Credit) - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance (Credit) - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
                     }
-                    await postTransaction(entries);
-                    console.log('✅ Opening balance entries created');
+                } else {
+                    // Supplier/Vendor/Sub Supplier: Credit Accounts Payable, Debit equity
+                    const absBalance = Math.abs(newBalance);
                     
-                    // Wait a moment for Firebase to sync the new entries
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    // Find Accounts Payable account (for Suppliers/Sub Suppliers)
+                    const apAccount = state.accounts.find(a => 
+                        a.name.includes('Accounts Payable') || 
+                        a.code === '201' ||
+                        (a.type === AccountType.LIABILITY && a.name.toLowerCase().includes('payable'))
+                    );
                     
-                    // Update partner document with the balance we set
-                    // This ensures the Balance Sheet reflects the correct balance immediately
-                    try {
-                        await updateDoc(doc(db, 'partners', id), {
-                            balance: newBalance,
-                            updatedAt: serverTimestamp()
-                        });
-                        console.log(`✅ Partner balance updated in Firebase: ${newBalance}`);
-                        
-                        // Update local state immediately so Balance Sheet updates
-                        dispatch({ 
-                            type: 'UPDATE_ENTITY', 
-                            payload: { 
-                                type: 'partners', 
-                                id, 
-                                data: { balance: newBalance } 
-                            } 
-                        });
-                    } catch (balanceError) {
-                        console.error('⚠️ Error updating partner balance:', balanceError);
-                        // Continue - balance will be recalculated when ledger reloads
+                    if (!apAccount) {
+                        throw new Error('CRITICAL: Accounts Payable account not found! Please create it in Setup > Chart of Accounts (Code: 201, Type: LIABILITY)');
+                    }
+                    
+                    entries = [
+                        {
+                            ...commonProps,
+                            date,
+                            transactionId: `OB-${id}`,
+                            transactionType: TransactionType.OPENING_BALANCE,
+                            accountId: openingEquityId,
+                            accountName: 'Opening Equity',
+                            debit: absBalance,
+                            credit: 0,
+                            narration: `Opening Balance - ${existingPartner.name}`,
+                            factoryId: currentFactory?.id || ''
+                        },
+                        {
+                            ...commonProps,
+                            date,
+                            transactionId: `OB-${id}`,
+                            transactionType: TransactionType.OPENING_BALANCE,
+                            accountId: apAccount.id, // Use Accounts Payable account, not partner ID
+                            accountName: apAccount.name,
+                            debit: 0,
+                            credit: absBalance,
+                            narration: `Opening Balance - ${existingPartner.name}`,
+                            factoryId: currentFactory?.id || ''
+                        }
+                    ];
+                }
+                await postTransaction(entries);
+                console.log('✅ Opening balance entries created');
+                
+                // Wait a moment for Firebase to sync the new entries
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Update partner document with the balance we set
+                // This ensures the Balance Sheet reflects the correct balance immediately
+                try {
+                    await updateDoc(doc(db, 'partners', id), {
+                        balance: newBalance,
+                        updatedAt: serverTimestamp()
+                    });
+                    console.log(`✅ Partner balance updated in Firebase: ${newBalance}`);
+                    
+                    // Update local state immediately so Balance Sheet updates
+                    dispatch({ 
+                        type: 'UPDATE_ENTITY', 
+                        payload: { 
+                            type: 'partners', 
+                            id, 
+                            data: { balance: newBalance } 
+                        } 
+                    });
+                } catch (balanceError) {
+                    console.error('⚠️ Error updating partner balance:', balanceError);
+                    // Continue - balance will be recalculated when ledger reloads
                 }
             }
             
             // Firebase listener will handle updating local state
-        } catch (error) {
+        } catch (error: any) {
             console.error('❌ Error updating partner in Firebase:', error);
             alert('Failed to update partner: ' + (error as Error).message);
             throw error;

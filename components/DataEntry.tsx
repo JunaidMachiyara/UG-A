@@ -535,6 +535,274 @@ export const DataEntry: React.FC = () => {
         setPurCart(purCart.filter(item => item.id !== id));
     };
     
+    // --- CSV Upload Handler for Original Purchase ---
+    const handleOriginalPurchaseCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                const parsedItems: PurchaseOriginalItem[] = [];
+                const errors: string[] = [];
+                
+                for (let idx = 0; idx < results.data.length; idx++) {
+                    const row = results.data[idx] as any;
+                    
+                    // Validate required fields
+                    if (!row['Original Type ID'] || !row['Weight (Kg)'] || !row['Price per Kg (USD)']) {
+                        errors.push(`Row ${idx + 2}: Missing required fields (Original Type ID, Weight (Kg), or Price per Kg (USD))`);
+                        continue;
+                    }
+                    
+                    // Find original type by ID or name
+                    const originalType = state.originalTypes.find(ot => 
+                        ot.id === row['Original Type ID'] || 
+                        ot.name === row['Original Type ID']
+                    );
+                    if (!originalType) {
+                        errors.push(`Row ${idx + 2}: Original Type "${row['Original Type ID']}" not found`);
+                        continue;
+                    }
+                    
+                    // Find original product (optional)
+                    let originalProduct: any = undefined;
+                    if (row['Original Product ID'] && row['Original Product ID'].trim() !== '') {
+                        originalProduct = state.originalProducts.find(op => 
+                            op.id === row['Original Product ID'] || 
+                            op.name === row['Original Product ID']
+                        );
+                        if (!originalProduct) {
+                            errors.push(`Row ${idx + 2}: Original Product "${row['Original Product ID']}" not found (will be skipped)`);
+                        } else if (originalProduct.originalTypeId !== originalType.id) {
+                            errors.push(`Row ${idx + 2}: Original Product "${row['Original Product ID']}" does not belong to Original Type "${row['Original Type ID']}" (will be skipped)`);
+                            originalProduct = undefined;
+                        }
+                    }
+                    
+                    // Find sub supplier (optional)
+                    let subSupplier: any = undefined;
+                    if (row['Sub Supplier ID'] && row['Sub Supplier ID'].trim() !== '') {
+                        subSupplier = state.partners.find(p => 
+                            (p.id === row['Sub Supplier ID'] || 
+                             (p as any).code === row['Sub Supplier ID'] ||
+                             p.name === row['Sub Supplier ID']) &&
+                            p.type === PartnerType.SUB_SUPPLIER
+                        );
+                        if (!subSupplier) {
+                            errors.push(`Row ${idx + 2}: Sub Supplier "${row['Sub Supplier ID']}" not found (will be skipped)`);
+                        }
+                    }
+                    
+                    // Validate weight
+                    const weight = parseFloat(row['Weight (Kg)']);
+                    if (isNaN(weight) || weight <= 0) {
+                        errors.push(`Row ${idx + 2}: Invalid weight "${row['Weight (Kg)']}"`);
+                        continue;
+                    }
+                    
+                    // Validate price
+                    const grossPricePerKgFCY = parseFloat(row['Price per Kg (USD)']);
+                    if (isNaN(grossPricePerKgFCY) || grossPricePerKgFCY <= 0) {
+                        errors.push(`Row ${idx + 2}: Invalid price "${row['Price per Kg (USD)']}"`);
+                        continue;
+                    }
+                    
+                    // Parse discount and surcharge (optional, default to 0)
+                    const discountPerKg = row['Discount per Kg (USD)'] && row['Discount per Kg (USD)'].trim() !== '' 
+                        ? parseFloat(row['Discount per Kg (USD)']) 
+                        : 0;
+                    const surchargePerKg = row['Surcharge per Kg (USD)'] && row['Surcharge per Kg (USD)'].trim() !== '' 
+                        ? parseFloat(row['Surcharge per Kg (USD)']) 
+                        : 0;
+                    
+                    if (isNaN(discountPerKg) || discountPerKg < 0) {
+                        errors.push(`Row ${idx + 2}: Invalid discount "${row['Discount per Kg (USD)']}" (will use 0)`);
+                    }
+                    if (isNaN(surchargePerKg) || surchargePerKg < 0) {
+                        errors.push(`Row ${idx + 2}: Invalid surcharge "${row['Surcharge per Kg (USD)']}" (will use 0)`);
+                    }
+                    
+                    // Calculate quantity from weight and packing size
+                    const packingSize = originalType.packingSize ? parseFloat(String(originalType.packingSize)) : 1;
+                    const calculatedQty = weight / packingSize;
+                    
+                    // Calculate net price and totals
+                    const netPricePerKgFCY = grossPricePerKgFCY - (isNaN(discountPerKg) ? 0 : discountPerKg) + (isNaN(surchargePerKg) ? 0 : surchargePerKg);
+                    const totalCostFCY = weight * netPricePerKgFCY;
+                    const totalCostUSD = totalCostFCY / purExchangeRate; // Use current exchange rate from form
+                    
+                    // Build type name
+                    const typeName = originalType.name;
+                    const productName = originalProduct?.name;
+                    const finalName = productName ? `${typeName} - ${productName}` : typeName;
+                    
+                    // Update form state if Date, Supplier, Batch, Container, Division are provided in CSV
+                    // Use first row's values if form fields are empty
+                    if (idx === 0) {
+                        if (row['Date'] && row['Date'].trim() !== '' && !purDate) {
+                            let purchaseDate = row['Date'].trim();
+                            // Handle different date formats
+                            if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) {
+                                const dateObj = new Date(purchaseDate);
+                                if (!isNaN(dateObj.getTime())) {
+                                    const year = dateObj.getFullYear();
+                                    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                    const day = String(dateObj.getDate()).padStart(2, '0');
+                                    purchaseDate = `${year}-${month}-${day}`;
+                                }
+                            }
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) {
+                                setPurDate(purchaseDate);
+                            }
+                        }
+                        
+                        if (row['Supplier ID'] && row['Supplier ID'].trim() !== '' && !purSupplier) {
+                            const supplier = state.partners.find(p => 
+                                p.id === row['Supplier ID'] || 
+                                (p as any).code === row['Supplier ID'] ||
+                                p.name === row['Supplier ID']
+                            );
+                            if (supplier) {
+                                setPurSupplier(supplier.id);
+                            }
+                        }
+                        
+                        if (row['Batch Number'] && row['Batch Number'].trim() !== '' && !purBatch) {
+                            setPurBatch(row['Batch Number'].trim());
+                        }
+                        
+                        if (row['Container Number'] && row['Container Number'].trim() !== '' && !purContainer) {
+                            setPurContainer(row['Container Number'].trim());
+                        }
+                        
+                        if (row['Division ID'] && row['Division ID'].trim() !== '' && !purDivision) {
+                            const division = state.divisions.find(d => 
+                                d.id === row['Division ID'] || 
+                                (d as any).code === row['Division ID'] ||
+                                d.name === row['Division ID']
+                            );
+                            if (division) {
+                                setPurDivision(division.id);
+                            }
+                        }
+                        
+                        if (row['Sub Division ID'] && row['Sub Division ID'].trim() !== '' && !purSubDivision) {
+                            const subDivision = state.subDivisions.find(sd => 
+                                sd.id === row['Sub Division ID'] || 
+                                (sd as any).code === row['Sub Division ID'] ||
+                                sd.name === row['Sub Division ID']
+                            );
+                            if (subDivision) {
+                                setPurSubDivision(subDivision.id);
+                            }
+                        }
+                    }
+                    
+                    parsedItems.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        originalTypeId: originalType.id,
+                        originalType: finalName,
+                        originalProductId: originalProduct?.id || undefined,
+                        subSupplierId: subSupplier?.id || undefined,
+                        weightPurchased: weight,
+                        qtyPurchased: calculatedQty,
+                        costPerKgFCY: grossPricePerKgFCY,
+                        discountPerKgFCY: isNaN(discountPerKg) ? 0 : discountPerKg,
+                        surchargePerKgFCY: isNaN(surchargePerKg) ? 0 : surchargePerKg,
+                        totalCostFCY: totalCostFCY,
+                        totalCostUSD: totalCostUSD
+                    });
+                }
+                
+                if (errors.length > 0) {
+                    alert(`CSV Upload Errors:\n${errors.join('\n')}\n\nOnly valid rows will be added.`);
+                }
+                
+                if (parsedItems.length > 0) {
+                    setPurCart([...purCart, ...parsedItems]);
+                    alert(`Successfully loaded ${parsedItems.length} purchase item(s) from CSV.`);
+                } else {
+                    alert('No valid purchase items found in CSV.');
+                }
+            },
+            error: (err) => {
+                alert(`Error parsing CSV: ${err.message}`);
+            }
+        });
+        
+        // Reset file input
+        e.target.value = '';
+    };
+    
+    // Download CSV Template for Original Purchase
+    const downloadOriginalPurchaseTemplate = () => {
+        // Get sample data
+        const sampleSupplier = state.partners.find(p => p.type === PartnerType.SUPPLIER);
+        const sampleOriginalType = state.originalTypes[0];
+        const sampleProduct = state.originalProducts.find(op => op.originalTypeId === sampleOriginalType?.id);
+        const sampleSubSupplier = state.partners.find(p => p.type === PartnerType.SUB_SUPPLIER);
+        const sampleDivision = state.divisions[0];
+        const sampleSubDivision = state.subDivisions.find(sd => sd.divisionId === sampleDivision?.id);
+        
+        const template = [
+            ['Date', 'Supplier ID', 'Original Type ID', 'Original Product ID', 'Sub Supplier ID', 'Weight (Kg)', 'Price per Kg (USD)', 'Discount per Kg (USD)', 'Surcharge per Kg (USD)', 'Batch Number', 'Container Number', 'Division ID', 'Sub Division ID'],
+            [
+                new Date().toISOString().split('T')[0],
+                sampleSupplier?.id || sampleSupplier?.name || 'SUP-001',
+                sampleOriginalType?.id || sampleOriginalType?.name || 'OT-001',
+                sampleProduct?.id || sampleProduct?.name || 'OP-001',
+                sampleSubSupplier?.id || sampleSubSupplier?.name || 'SUB-001',
+                '10000',
+                '2.50',
+                '0.10',
+                '0.05',
+                'BATCH-001',
+                'CONT-12345',
+                sampleDivision?.id || sampleDivision?.name || 'DIV-001',
+                sampleSubDivision?.id || sampleSubDivision?.name || 'SUBDIV-001'
+            ],
+            [
+                new Date().toISOString().split('T')[0],
+                sampleSupplier?.id || sampleSupplier?.name || 'SUP-001',
+                sampleOriginalType?.id || sampleOriginalType?.name || 'OT-001',
+                '', // Optional
+                '', // Optional
+                '5000',
+                '3.00',
+                '0.00',
+                '0.00',
+                'BATCH-002',
+                'CONT-12346',
+                sampleDivision?.id || sampleDivision?.name || 'DIV-001',
+                '' // Optional
+            ]
+        ];
+        
+        // Convert to CSV string
+        const csv = template.map(row => 
+            row.map(cell => {
+                const cellStr = String(cell || '');
+                if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                    return `"${cellStr.replace(/"/g, '""')}"`;
+                }
+                return cellStr;
+            }).join(',')
+        ).join('\n');
+        
+        // Create download
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `original-purchase-template-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    };
+    
     const filteredProviders = useMemo(() => {
         let relevantTypes: PartnerType[] = [];
         if (acType === 'Freight') relevantTypes = [PartnerType.FREIGHT_FORWARDER];
@@ -761,9 +1029,45 @@ export const DataEntry: React.FC = () => {
                 weight: acc.weight + curr.weightOpened
             }), { qty: 0, weight: 0 });
 
-        // Subtract direct sales from available stock
+        // Subtract IAO adjustments (Original Stock Adjustments) from available stock
+        // These are ledger entries with transactionType = INVENTORY_ADJUSTMENT that affect this stock
+        const supplier = state.partners.find(p => p.id === ooSupplier);
+        const supplierName = supplier?.name || '';
+        const originalType = state.originalTypes.find(ot => ot.id === ooType || ot.name === ooType);
+        const typeName = originalType?.name || ooType || '';
+        
+        const iaoAdjustments = state.ledger
+            .filter((entry: any) => {
+                if (entry.transactionType !== 'INVENTORY_ADJUSTMENT') return false;
+                if (!entry.narration) return false;
+                const narration = entry.narration.toLowerCase();
+                // Check if this is an Original Stock Adjustment entry
+                if (!narration.includes('original stock')) return false;
+                // Match supplier name in narration
+                if (supplierName && !narration.includes(supplierName.toLowerCase())) return false;
+                // Match type name in narration
+                if (typeName && !narration.includes(typeName.toLowerCase())) return false;
+                return true;
+            })
+            .reduce((acc: { weight: number }, entry: any) => {
+                // Parse weight adjustment from narration
+                // Format: "Original Stock Decrease: abc (USMAN INTL AC) (Weight: -500 kg, Worth: $2000.00)"
+                const weightMatch = entry.narration.match(/Weight:\s*([+-]?\d+\.?\d*|N\/A)\s*kg/i);
+                if (weightMatch && weightMatch[1] !== 'N/A' && weightMatch[1] !== 'n/a') {
+                    const weightAdjustment = parseFloat(weightMatch[1]);
+                    if (!isNaN(weightAdjustment)) {
+                        // Negative adjustments (decreases) reduce available stock
+                        // Positive adjustments (increases) add to available stock
+                        // Use += because: -300 adjustment means subtract 300, so += (-300) = subtracts 300
+                        acc.weight += weightAdjustment;
+                    }
+                }
+                return acc;
+            }, { weight: 0 });
+
+        // Subtract direct sales and IAO adjustments from available stock
         const currentQty = purchased.qty - opened.qty - sold.qty;
-        const currentWeight = purchased.weight - opened.weight - sold.weight;
+        const currentWeight = purchased.weight - opened.weight - sold.weight - iaoAdjustments.weight;
         const avgCostPerKg = purchased.weight > 0 ? (purchased.cost / purchased.weight) : 0;
 
         return { 
@@ -771,7 +1075,7 @@ export const DataEntry: React.FC = () => {
             weight: currentWeight, 
             avgCost: avgCostPerKg 
         };
-    }, [ooSupplier, ooType, ooProduct, ooBatch, state.purchases, state.originalOpenings, state.salesInvoices]);
+    }, [ooSupplier, ooType, ooProduct, ooBatch, state.purchases, state.originalOpenings, state.salesInvoices, state.ledger, state.partners, state.originalTypes]);
 
     const handleOpeningSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -882,6 +1186,230 @@ export const DataEntry: React.FC = () => {
     
     const handleRemoveStagedOpening = (id: string) => {
         setStagedOriginalOpenings(stagedOriginalOpenings.filter(o => o.id !== id));
+    };
+    
+    // --- CSV Upload Handler for Original Opening ---
+    const handleOriginalOpeningCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                const parsedEntries: OriginalOpening[] = [];
+                const errors: string[] = [];
+                
+                for (let idx = 0; idx < results.data.length; idx++) {
+                    const row = results.data[idx] as any;
+                    
+                    // Validate required fields
+                    if (!row['Date'] || !row['Supplier ID'] || !row['Original Type ID'] || !row['Quantity']) {
+                        errors.push(`Row ${idx + 2}: Missing required fields (Date, Supplier ID, Original Type ID, or Quantity)`);
+                        continue;
+                    }
+                    
+                    // Find supplier by ID or code
+                    const supplier = state.partners.find(p => 
+                        p.id === row['Supplier ID'] || 
+                        (p as any).code === row['Supplier ID'] ||
+                        p.name === row['Supplier ID']
+                    );
+                    if (!supplier) {
+                        errors.push(`Row ${idx + 2}: Supplier "${row['Supplier ID']}" not found`);
+                        continue;
+                    }
+                    
+                    // Find original type by ID or code
+                    const originalType = state.originalTypes.find(ot => 
+                        ot.id === row['Original Type ID'] || 
+                        ot.name === row['Original Type ID']
+                    );
+                    if (!originalType) {
+                        errors.push(`Row ${idx + 2}: Original Type "${row['Original Type ID']}" not found`);
+                        continue;
+                    }
+                    
+                    // Find original product (optional)
+                    let originalProduct: any = undefined;
+                    if (row['Original Product ID'] && row['Original Product ID'].trim() !== '') {
+                        originalProduct = state.originalProducts.find(op => 
+                            op.id === row['Original Product ID'] || 
+                            op.name === row['Original Product ID']
+                        );
+                        if (!originalProduct) {
+                            errors.push(`Row ${idx + 2}: Original Product "${row['Original Product ID']}" not found (will be skipped)`);
+                        }
+                    }
+                    
+                    // Validate quantity
+                    const qty = parseFloat(row['Quantity']);
+                    if (isNaN(qty) || qty <= 0) {
+                        errors.push(`Row ${idx + 2}: Invalid quantity "${row['Quantity']}"`);
+                        continue;
+                    }
+                    
+                    // Parse date
+                    let openingDate = row['Date'];
+                    if (openingDate) {
+                        // Handle different date formats
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(openingDate)) {
+                            const dateObj = new Date(openingDate);
+                            if (!isNaN(dateObj.getTime())) {
+                                const year = dateObj.getFullYear();
+                                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                const day = String(dateObj.getDate()).padStart(2, '0');
+                                openingDate = `${year}-${month}-${day}`;
+                            } else {
+                                errors.push(`Row ${idx + 2}: Invalid date format "${row['Date']}". Use YYYY-MM-DD format.`);
+                                continue;
+                            }
+                        }
+                    } else {
+                        errors.push(`Row ${idx + 2}: Date is required.`);
+                        continue;
+                    }
+                    
+                    // Calculate weight (if not provided, estimate from quantity and packing size)
+                    let weight = 0;
+                    if (row['Weight (Kg)'] && row['Weight (Kg)'].trim() !== '') {
+                        const parsedWeight = parseFloat(row['Weight (Kg)']);
+                        if (!isNaN(parsedWeight) && parsedWeight > 0) {
+                            weight = parsedWeight;
+                        }
+                    }
+                    
+                    // If weight not provided, calculate from quantity and packing size
+                    if (weight === 0) {
+                        const packingSize = originalType.packingSize ? parseFloat(String(originalType.packingSize)) : 1;
+                        weight = qty * packingSize;
+                    }
+                    
+                    // Get available stock info to calculate cost per kg
+                    // Find purchases for this supplier and type
+                    const relevantPurchases = state.purchases.filter(p => 
+                        p.supplierId === supplier.id &&
+                        ((p.originalTypeId || p.originalType) === originalType.id)
+                    );
+                    
+                    // Calculate average cost from purchases
+                    let avgCostPerKg = 0;
+                    if (relevantPurchases.length > 0) {
+                        const totalCost = relevantPurchases.reduce((sum, p) => {
+                            if (p.items && p.items.length > 0) {
+                                const matchingItem = p.items.find(item => 
+                                    (item.originalTypeId || item.originalType) === originalType.id
+                                );
+                                return sum + (matchingItem?.totalCostUSD || 0);
+                            }
+                            return sum + (p.totalLandedCost || 0);
+                        }, 0);
+                        
+                        const totalWeight = relevantPurchases.reduce((sum, p) => {
+                            if (p.items && p.items.length > 0) {
+                                const matchingItem = p.items.find(item => 
+                                    (item.originalTypeId || item.originalType) === originalType.id
+                                );
+                                return sum + (matchingItem?.weightPurchased || 0);
+                            }
+                            return sum + (p.weightPurchased || 0);
+                        }, 0);
+                        
+                        avgCostPerKg = totalWeight > 0 ? totalCost / totalWeight : 0;
+                    }
+                    
+                    // If no purchases found, use 0 (will be calculated from available stock in addOriginalOpening)
+                    if (avgCostPerKg === 0) {
+                        // Try to get from available stock info (same logic as manual entry)
+                        // Note: This is a simplified calculation - the actual cost will be calculated in addOriginalOpening
+                        avgCostPerKg = 0; // Will be calculated from available stock
+                    }
+                    
+                    parsedEntries.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        date: openingDate,
+                        supplierId: supplier.id,
+                        originalType: originalType.id,
+                        originalProductId: originalProduct?.id || undefined,
+                        batchNumber: row['Batch Number'] && row['Batch Number'].trim() !== '' ? row['Batch Number'].trim() : undefined,
+                        qtyOpened: qty,
+                        weightOpened: weight,
+                        costPerKg: avgCostPerKg,
+                        totalValue: weight * avgCostPerKg,
+                        factoryId: state.currentFactory?.id || ''
+                    });
+                }
+                
+                if (errors.length > 0) {
+                    alert(`CSV Upload Errors:\n${errors.join('\n')}\n\nOnly valid rows will be added.`);
+                }
+                
+                if (parsedEntries.length > 0) {
+                    setStagedOriginalOpenings([...stagedOriginalOpenings, ...parsedEntries]);
+                    alert(`Successfully loaded ${parsedEntries.length} original opening entry(ies) from CSV.`);
+                } else {
+                    alert('No valid original opening entries found in CSV.');
+                }
+            },
+            error: (err) => {
+                alert(`Error parsing CSV: ${err.message}`);
+            }
+        });
+        
+        // Reset file input
+        e.target.value = '';
+    };
+    
+    // Download CSV Template for Original Opening
+    const downloadOriginalOpeningTemplate = () => {
+        // Get sample data
+        const sampleSupplier = state.partners.find(p => p.type === PartnerType.SUPPLIER);
+        const sampleOriginalType = state.originalTypes[0];
+        const sampleProduct = state.originalProducts.find(op => op.originalTypeId === sampleOriginalType?.id);
+        
+        const template = [
+            ['Date', 'Supplier ID', 'Original Type ID', 'Original Product ID', 'Batch Number', 'Quantity', 'Weight (Kg)'],
+            [
+                new Date().toISOString().split('T')[0],
+                sampleSupplier?.id || sampleSupplier?.name || 'SUP-001',
+                sampleOriginalType?.id || sampleOriginalType?.name || 'OT-001',
+                sampleProduct?.id || sampleProduct?.name || 'OP-001',
+                'BATCH-001',
+                '100',
+                '500.00'
+            ],
+            [
+                new Date().toISOString().split('T')[0],
+                sampleSupplier?.id || sampleSupplier?.name || 'SUP-001',
+                sampleOriginalType?.id || sampleOriginalType?.name || 'OT-001',
+                '', // Optional
+                '', // Optional
+                '50',
+                '250.00'
+            ]
+        ];
+        
+        // Convert to CSV string
+        const csv = template.map(row => 
+            row.map(cell => {
+                const cellStr = String(cell || '');
+                if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                    return `"${cellStr.replace(/"/g, '""')}"`;
+                }
+                return cellStr;
+            }).join(',')
+        ).join('\n');
+        
+        // Create download
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `original-opening-template-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
     };
     
     // --- History Table Data ---
@@ -1562,7 +2090,51 @@ export const DataEntry: React.FC = () => {
             }, 0);
             // Subtract direct sales for this batch
             const directSold = state.directSales?.filter(ds => ds.batchId === p.id && ds.supplierId === dsSupplier).reduce((sum, ds) => sum + ds.quantity, 0) || 0;
-            const remaining = p.weightPurchased - opened - sold - directSold;
+            
+            // Subtract IAO adjustments for this purchase
+            const supplier = state.partners.find(partner => partner.id === dsSupplier);
+            const supplierName = supplier?.name || '';
+            let iaoAdjustmentWeight = 0;
+            
+            // Get original type name(s) for this purchase
+            const purchaseTypeNames: string[] = [];
+            if (p.items && p.items.length > 0) {
+                p.items.forEach(item => {
+                    const type = state.originalTypes.find(ot => ot.id === (item.originalTypeId || item.originalType));
+                    if (type) purchaseTypeNames.push(type.name);
+                });
+            } else {
+                const type = state.originalTypes.find(ot => ot.id === (p.originalTypeId || p.originalType));
+                if (type) purchaseTypeNames.push(type.name);
+            }
+            
+            // Calculate IAO adjustments for this purchase
+            state.ledger.forEach((entry: any) => {
+                if (entry.transactionType !== 'INVENTORY_ADJUSTMENT') return;
+                if (!entry.narration) return;
+                const narration = entry.narration.toLowerCase();
+                if (!narration.includes('original stock')) return;
+                if (supplierName && !narration.includes(supplierName.toLowerCase())) return;
+                if (!purchaseTypeNames.some(typeName => narration.includes(typeName.toLowerCase()))) return;
+                
+                // Check if this adjustment affects this specific batch
+                if (p.batchNumber && !narration.includes(`batch: ${p.batchNumber}`.toLowerCase()) && !narration.includes(`batch ${p.batchNumber}`.toLowerCase())) {
+                    // If batch number is specified in narration, it must match
+                    if (narration.includes('batch:')) return;
+                }
+                
+                // Parse weight adjustment from narration
+                const weightMatch = entry.narration.match(/Weight:\s*([+-]?\d+\.?\d*|N\/A)\s*kg/i);
+                if (weightMatch && weightMatch[1] !== 'N/A' && weightMatch[1] !== 'n/a') {
+                    const weightAdjustment = parseFloat(weightMatch[1]);
+                    if (!isNaN(weightAdjustment)) {
+                        // Use += because: -300 adjustment means subtract 300, so += (-300) = subtracts 300
+                        iaoAdjustmentWeight += weightAdjustment;
+                    }
+                }
+            });
+            
+            const remaining = p.weightPurchased - opened - sold - directSold - iaoAdjustmentWeight;
             return remaining > 0.01;
         }).map(p => {
             // Helper to check if an opening matches this purchase (same logic as above)
@@ -1591,10 +2163,54 @@ export const DataEntry: React.FC = () => {
                 return sum + inv.items.filter(i => i.originalPurchaseId === p.id).reduce((is, item) => is + item.totalKg, 0);
             }, 0);
             const directSold = state.directSales?.filter(ds => ds.batchId === p.id && ds.supplierId === dsSupplier).reduce((sum, ds) => sum + ds.quantity, 0) || 0;
-            const remaining = p.weightPurchased - opened - sold - directSold;
+            
+            // Subtract IAO adjustments for this purchase (same logic as above)
+            const supplier = state.partners.find(partner => partner.id === dsSupplier);
+            const supplierName = supplier?.name || '';
+            let iaoAdjustmentWeight = 0;
+            
+            // Get original type name(s) for this purchase
+            const purchaseTypeNames: string[] = [];
+            if (p.items && p.items.length > 0) {
+                p.items.forEach(item => {
+                    const type = state.originalTypes.find(ot => ot.id === (item.originalTypeId || item.originalType));
+                    if (type) purchaseTypeNames.push(type.name);
+                });
+            } else {
+                const type = state.originalTypes.find(ot => ot.id === (p.originalTypeId || p.originalType));
+                if (type) purchaseTypeNames.push(type.name);
+            }
+            
+            // Calculate IAO adjustments for this purchase
+            state.ledger.forEach((entry: any) => {
+                if (entry.transactionType !== 'INVENTORY_ADJUSTMENT') return;
+                if (!entry.narration) return;
+                const narration = entry.narration.toLowerCase();
+                if (!narration.includes('original stock')) return;
+                if (supplierName && !narration.includes(supplierName.toLowerCase())) return;
+                if (!purchaseTypeNames.some(typeName => narration.includes(typeName.toLowerCase()))) return;
+                
+                // Check if this adjustment affects this specific batch
+                if (p.batchNumber && !narration.includes(`batch: ${p.batchNumber}`.toLowerCase()) && !narration.includes(`batch ${p.batchNumber}`.toLowerCase())) {
+                    // If batch number is specified in narration, it must match
+                    if (narration.includes('batch:')) return;
+                }
+                
+                // Parse weight adjustment from narration
+                const weightMatch = entry.narration.match(/Weight:\s*([+-]?\d+\.?\d*|N\/A)\s*kg/i);
+                if (weightMatch && weightMatch[1] !== 'N/A' && weightMatch[1] !== 'n/a') {
+                    const weightAdjustment = parseFloat(weightMatch[1]);
+                    if (!isNaN(weightAdjustment)) {
+                        // Use += because: -300 adjustment means subtract 300, so += (-300) = subtracts 300
+                        iaoAdjustmentWeight += weightAdjustment;
+                    }
+                }
+            });
+            
+            const remaining = p.weightPurchased - opened - sold - directSold - iaoAdjustmentWeight;
             return { id: p.id, name: `Batch #${p.batchNumber} (${remaining.toLocaleString()} Kg)`, remaining, landedCostPerKg: p.landedCostPerKg, purchase: p };
         });
-    }, [dsSupplier, state.purchases, state.originalOpenings, state.salesInvoices, state.originalTypes, state.directSales]);
+    }, [dsSupplier, state.purchases, state.originalOpenings, state.salesInvoices, state.originalTypes, state.directSales, state.ledger, state.partners]);
 
     const dsSelectedBatch = useMemo(() => dsBatches.find(b => b.id === dsPurchaseId), [dsPurchaseId, dsBatches]);
 
@@ -2393,6 +3009,31 @@ export const DataEntry: React.FC = () => {
                                                 <button type="submit" disabled={!ooQty || !ooType} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-2">+ Add to List</button>
                                             </form>
                                             
+                                            {/* Bulk Upload CSV Section */}
+                                            <div className="mt-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                                <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2"><FileText size={16} /> Bulk Upload (CSV)</h4>
+                                                <div className="flex gap-3">
+                                                    <label className="flex-1 cursor-pointer">
+                                                        <input
+                                                            type="file"
+                                                            accept=".csv"
+                                                            onChange={handleOriginalOpeningCSVUpload}
+                                                            className="hidden"
+                                                        />
+                                                        <span className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors">
+                                                            <Download size={18} /> Choose CSV File
+                                                        </span>
+                                                    </label>
+                                                    <button
+                                                        onClick={downloadOriginalOpeningTemplate}
+                                                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors"
+                                                    >
+                                                        <FileText size={18} /> Download Template
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-slate-500 mt-2">CSV must include: Date, Supplier ID, Original Type ID, Quantity. Original Product ID, Batch Number, and Weight (Kg) are optional.</p>
+                                            </div>
+                                            
                                             {/* Staging Cart */}
                                             {stagedOriginalOpenings.length > 0 && (
                                                 <div className="mt-6 bg-amber-50 border-2 border-amber-200 rounded-xl p-4">
@@ -2957,6 +3598,33 @@ export const DataEntry: React.FC = () => {
                                         <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                         <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
                                     </div>
+                                    
+                                    {/* Bulk Upload CSV Section */}
+                                    <div className="mt-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                                        <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2"><FileText size={16} /> Bulk Upload (CSV)</h4>
+                                        <div className="flex gap-3">
+                                            <label className="flex-1 cursor-pointer">
+                                                <input
+                                                    type="file"
+                                                    accept=".csv"
+                                                    onChange={handleOriginalPurchaseCSVUpload}
+                                                    className="hidden"
+                                                />
+                                                <span className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors">
+                                                    <Download size={18} /> Choose CSV File
+                                                </span>
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={downloadOriginalPurchaseTemplate}
+                                                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow transition-colors"
+                                            >
+                                                <FileText size={18} /> Download Template
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-slate-500 mt-2">CSV must include: Original Type ID, Weight (Kg), Price per Kg (USD). Date, Supplier ID, Original Product ID, Sub Supplier ID, Discount/Surcharge, Batch Number, Container Number, and Division IDs are optional.</p>
+                                    </div>
+                                    
                                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed" disabled={!purSupplier || purCart.length === 0}><FileText size={18} /> Review & Submit</button>
                                 </form>
                                 )}

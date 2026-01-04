@@ -1407,6 +1407,19 @@ const BalanceSheet: React.FC = () => {
     const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
     const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
     
+    // DEBUG: Check for Discrepancy account in each category
+    const discrepancyInAssets = assets.find(a => a.name.includes('Discrepancy') || a.code === '505');
+    const discrepancyInLiabilities = liabilities.find(a => a.name.includes('Discrepancy') || a.code === '505');
+    const discrepancyInEquity = equity.find(a => a.name.includes('Discrepancy') || a.code === '505');
+    
+    if (discrepancyInAssets || discrepancyInEquity) {
+        console.error('❌ CRITICAL: Discrepancy account found in wrong category!', {
+            inAssets: !!discrepancyInAssets,
+            inEquity: !!discrepancyInEquity,
+            account: discrepancyInAssets || discrepancyInEquity
+        });
+    }
+    
     // Filter "Other Payable" accounts (codes 2030-2099) for aggregation
     const otherPayableAccounts = liabilities.filter(a => {
         const codeNum = parseInt(a.code || '0');
@@ -1414,42 +1427,264 @@ const BalanceSheet: React.FC = () => {
     });
     const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
     
-    // Regular liabilities (excluding Other Payable accounts 2030-2099)
+    // Regular liabilities (excluding Other Payable accounts 2030-2099 and Discrepancy account)
+    // Discrepancy account is handled separately to correctly show decreases as reductions
+    const discrepancyAccount = liabilities.find(a => 
+        a.name.includes('Discrepancy') || 
+        a.name.includes('Suspense') ||
+        a.code === '505'
+    );
     const regularLiabilities = liabilities.filter(a => {
         const codeNum = parseInt(a.code || '0');
-        return !(codeNum >= 2030 && codeNum <= 2099);
+        // Exclude Other Payable accounts (2030-2099) and Discrepancy account
+        if (codeNum >= 2030 && codeNum <= 2099) return false;
+        if (discrepancyAccount && a.id === discrepancyAccount.id) return false;
+        return true;
     });
     
     // Add customer balances (Accounts Receivable) - grouped as "Debtors"
     const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
-    const totalCustomersAR = customers.reduce((sum, c) => sum + c.balance, 0);
+    const totalCustomersAR = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
 
     // Add negative customer balances (Customer Advances) - grouped as liability
     const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
-    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance), 0);
+    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0);
 
     // Split supplier/vendor balances
     // NOTE: Include SUPPLIER + VENDOR + freight/clearing/commission agents so ALL trade payables/advances are reflected
     const supplierLikeTypes = [
         PartnerType.SUPPLIER,
+        PartnerType.SUB_SUPPLIER,
         PartnerType.VENDOR,
         PartnerType.FREIGHT_FORWARDER,
         PartnerType.CLEARING_AGENT,
         PartnerType.COMMISSION_AGENT
     ];
-    const positiveSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance > 0);
-    const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + s.balance, 0);
-    const negativeSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && p.balance < 0);
-    const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance), 0);
+    // For suppliers: negative balance = we owe them (Accounts Payable), positive balance = they owe us (Advances)
+    const positiveSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && (p.balance || 0) > 0);
+    const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0);
     
-    const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
-    const expenses = state.accounts.filter(a => a.type === AccountType.EXPENSE).reduce((sum, a) => sum + Math.abs(a.balance), 0);
+    // Suppliers with negative balance = Accounts Payable (we owe them)
+    // Note: Supplier balances should be stored as NEGATIVE when we owe them (credit balance in ledger = negative in partner.balance)
+    const negativeSuppliers = state.partners.filter(p => {
+        if (!supplierLikeTypes.includes(p.type)) return false;
+        const balance = p.balance || 0;
+        return balance < 0;
+    });
+    const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance || 0), 0);
+    
+    // DEBUG: Log supplier balances to console to help diagnose
+    console.log('🔍 Balance Sheet - Supplier Analysis:', {
+        totalSuppliers: state.partners.filter(p => supplierLikeTypes.includes(p.type)).length,
+        negativeSuppliers: negativeSuppliers.length,
+        positiveSuppliers: positiveSuppliers.length,
+        totalSuppliersAP: totalSuppliersAP.toFixed(2),
+        totalSupplierAdvances: totalSupplierAdvances.toFixed(2),
+        sampleNegativeSuppliers: negativeSuppliers.slice(0, 3).map(s => ({ name: s.name, balance: s.balance })),
+        allSupplierBalances: state.partners
+            .filter(p => supplierLikeTypes.includes(p.type) && Math.abs(p.balance || 0) > 1000)
+            .map(s => ({ name: s.name, balance: s.balance, type: s.type }))
+            .sort((a, b) => Math.abs(b.balance || 0) - Math.abs(a.balance || 0))
+            .slice(0, 10)
+    });
+    
+    const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    const expenseAccounts = state.accounts.filter(a => a.type === AccountType.EXPENSE);
+    
+    // Calculate expenses from account balances
+    let expenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    
+    // FIX: Also include expenses from orphaned ledger entries (entries where accountId doesn't match any account)
+    // This handles cases where PB entries were created with account IDs that no longer exist
+    const orphanedExpenseEntries = state.ledger.filter((e: any) => {
+        // Check if this is an expense entry (debit > 0) but account not found
+        if (e.debit > 0 && e.credit === 0) {
+            const account = state.accounts.find((a: any) => a.id === e.accountId);
+            // If account not found, check if it's an expense-type transaction
+            if (!account && (
+                e.transactionType === TransactionType.PURCHASE_BILL ||
+                e.transactionType === TransactionType.EXPENSE_VOUCHER ||
+                e.accountName?.toLowerCase().includes('expense')
+            )) {
+                return true;
+            }
+        }
+        return false;
+    });
+    
+    // Calculate expense balance from orphaned entries
+    const orphanedExpenses = orphanedExpenseEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+    expenses += orphanedExpenses;
+    
+    if (orphanedExpenses > 0) {
+        console.warn('⚠️ Found orphaned expense ledger entries:', {
+            count: orphanedExpenseEntries.length,
+            totalAmount: orphanedExpenses,
+            entries: orphanedExpenseEntries.map((e: any) => ({
+                transactionId: e.transactionId,
+                accountId: e.accountId,
+                accountName: e.accountName,
+                debit: e.debit
+            }))
+        });
+    }
+    
     const netIncome = revenue - expenses;
 
-    const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0) + totalCustomersAR + totalSupplierAdvances;
-    const totalLiabilities = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance), 0) + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances;
+    // DEBUG: Log expense accounts for PB voucher investigation
+    const expenseAccountsWithBalance = expenseAccounts.filter(a => (a.balance || 0) !== 0);
+    
+    // Check PB-1001 entries in detail
+    const pb1001LedgerEntries = state.ledger.filter((e: any) => e.transactionId === 'PB-1001');
+    if (pb1001LedgerEntries.length > 0) {
+        pb1001LedgerEntries.forEach((e: any, index: number) => {
+            const account = state.accounts.find((a: any) => a.id === e.accountId);
+            const partner = state.partners.find((p: any) => p.id === e.accountId);
+            
+            // Try to find account by name if ID doesn't match
+            const accountByName = state.accounts.find((a: any) => 
+                a.name.toLowerCase() === e.accountName?.toLowerCase() ||
+                a.name.toLowerCase().includes('expense') && e.accountName?.toLowerCase().includes('expense')
+            );
+            
+            console.log(`🔍 PB-1001 Entry ${index + 1}:`, {
+                accountId: e.accountId,
+                accountName: e.accountName,
+                accountFound: !!account,
+                accountType: account?.type,
+                accountCode: account?.code,
+                accountBalance: account?.balance,
+                isPartner: !!partner,
+                partnerName: partner?.name,
+                partnerBalance: partner?.balance,
+                accountFoundByName: !!accountByName,
+                accountByNameId: accountByName?.id,
+                accountByNameType: accountByName?.type,
+                debit: e.debit,
+                credit: e.credit,
+                transactionType: e.transactionType,
+                narration: e.narration,
+                allAccountIds: state.accounts.map((a: any) => ({ id: a.id, name: a.name, type: a.type })).slice(0, 5)
+            });
+        });
+    }
+    
+    // Always log expense accounts (even if balance is 0) to debug PB-1001 issue
+    console.log('🔍 Balance Sheet - Expense Accounts:', {
+        totalExpenseAccounts: expenseAccounts.length,
+        expenseAccountsWithBalance: expenseAccountsWithBalance.length,
+        totalExpenses: expenses,
+        allExpenseAccounts: expenseAccounts.map(a => ({
+            name: a.name,
+            code: a.code,
+            balance: a.balance,
+            absBalance: Math.abs(a.balance || 0),
+            id: a.id
+        })),
+        expenseAccountsWithBalance: expenseAccountsWithBalance.map(a => ({
+            name: a.name,
+            code: a.code,
+            balance: a.balance,
+            absBalance: Math.abs(a.balance || 0)
+        })),
+        // Check for PB-1001 ledger entries
+        pb1001Entries: state.ledger.filter((e: any) => e.transactionId === 'PB-1001').map((e: any) => {
+            const account = state.accounts.find((a: any) => a.id === e.accountId);
+            return {
+                accountId: e.accountId,
+                accountName: e.accountName,
+                accountType: account?.type,
+                accountCode: account?.code,
+                accountBalance: account?.balance,
+                debit: e.debit,
+                credit: e.credit,
+                transactionType: e.transactionType,
+                narration: e.narration
+            };
+        }),
+        // Check all expense accounts to see their balances
+        sampleExpenseAccounts: expenseAccounts.slice(0, 5).map(a => ({
+            name: a.name,
+            code: a.code,
+            id: a.id,
+            balance: a.balance,
+            ledgerEntries: state.ledger.filter((e: any) => e.accountId === a.id).length,
+            totalDebits: state.ledger.filter((e: any) => e.accountId === a.id).reduce((sum: number, e: any) => sum + (e.debit || 0), 0),
+            totalCredits: state.ledger.filter((e: any) => e.accountId === a.id).reduce((sum: number, e: any) => sum + (e.credit || 0), 0)
+        }))
+    });
+
+    const totalAssets = assets.reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR + totalSupplierAdvances;
+    
+    // Calculate regular liabilities (excluding Discrepancy account which is handled separately)
+    const regularLiabilitiesTotal = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    
+    // Handle Discrepancy account separately:
+    // For LIABILITY type Discrepancy account:
+    // - Positive balance = we've increased liabilities (add to total)
+    // - Negative balance = we've decreased liabilities (subtract from total, or show as reduction)
+    let discrepancyAdjustment = 0;
+    if (discrepancyAccount) {
+        const discrepancyBalance = discrepancyAccount.balance || 0;
+        if (discrepancyAccount.type === AccountType.LIABILITY) {
+            // For LIABILITY: negative balance means we decreased liabilities (good), so subtract from total
+            // Positive balance means we increased liabilities (bad), so add to total
+            discrepancyAdjustment = discrepancyBalance; // Use actual balance (negative = reduction, positive = increase)
+        }
+    }
+    
+    // For Discrepancy account (LIABILITY):
+    // - Positive balance = liability increased, so add to total
+    // - Negative balance = liability decreased, so subtract from total (add negative = subtract)
+    // IMPORTANT: Use discrepancyAdjustment directly (don't use || 0 because -300 || 0 = -300, but we want to handle 0 correctly)
+    const totalLiabilities = regularLiabilitiesTotal + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances + discrepancyAdjustment;
     // FIXED: Equity should preserve negative balances (like negative inventory costs)
-    const totalEquity = equity.reduce((sum, a) => sum + a.balance, 0) + netIncome;
+    // If Discrepancy is EQUITY type, include it in equity calculation
+    const discrepancyEquityAdjustment = discrepancyAccount && discrepancyAccount.type === AccountType.EQUITY ? (discrepancyAccount.balance || 0) : 0;
+    const totalEquity = equity.reduce((sum, a) => sum + (a.balance || 0), 0) + netIncome + discrepancyEquityAdjustment;
+    
+    // DEBUG: Log Balance Sheet calculation details
+    if (discrepancyAccount) {
+        console.log('🔍 Balance Sheet - Discrepancy Account Analysis:', {
+            name: discrepancyAccount.name,
+            code: discrepancyAccount.code,
+            balance: discrepancyAccount.balance,
+            absBalance: Math.abs(discrepancyAccount.balance || 0),
+            includedInTotalLiabilities: true,
+            ledgerEntries: state.ledger.filter((e: any) => e.accountId === discrepancyAccount.id).map((e: any) => ({
+                date: e.date,
+                transactionId: e.transactionId,
+                debit: e.debit,
+                credit: e.credit,
+                narration: e.narration?.substring(0, 50)
+            }))
+        });
+    }
+    
+    console.log('🔍 Balance Sheet - Totals:', {
+        totalAssets,
+        totalLiabilities,
+        totalEquity,
+        totalLiabilitiesAndEquity: totalLiabilities + totalEquity,
+        difference: (totalLiabilities + totalEquity) - totalAssets,
+        assetsBreakdown: {
+            assetAccounts: assets.reduce((sum, a) => sum + (a.balance || 0), 0),
+            customersAR: totalCustomersAR,
+            supplierAdvances: totalSupplierAdvances
+        },
+        liabilitiesBreakdown: {
+            regularLiabilities: regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0),
+            otherPayables: totalOtherPayables,
+            suppliersAP: totalSuppliersAP,
+            customerAdvances: totalCustomerAdvances
+        },
+        equityBreakdown: {
+            equityAccounts: equity.reduce((sum, a) => sum + (a.balance || 0), 0),
+            revenue: revenue,
+            expenses: expenses,
+            netIncome: netIncome
+        }
+    });
 
     const handleAccountClick = (accountId: string, accountName: string) => {
         setModalTitle(accountName);
@@ -1508,6 +1743,17 @@ const BalanceSheet: React.FC = () => {
                                         <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                                     </div>
                                 ))}
+                                {/* Display Discrepancy account separately with correct sign handling */}
+                                {discrepancyAccount && (discrepancyAccount.balance || 0) !== 0 && discrepancyAccount.type === AccountType.LIABILITY && (
+                                    <div key={discrepancyAccount.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(discrepancyAccount.id, discrepancyAccount.name)}>
+                                        <span className="text-slate-600 hover:text-blue-600">{discrepancyAccount.name}</span>
+                                        <span className={`font-mono font-medium ${(discrepancyAccount.balance || 0) < 0 ? 'text-green-600' : ''}`}>
+                                            {(discrepancyAccount.balance || 0) < 0 
+                                                ? `(${Math.abs(discrepancyAccount.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})})` 
+                                                : Math.abs(discrepancyAccount.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                        </span>
+                                    </div>
+                                )}
                                 {totalOtherPayables > 0 && (
                                     <div className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAggregatedClick('Other Payables', 'otherPayables')}>
                                         <span className="text-slate-600 font-medium hover:text-blue-600">Other Payables</span>

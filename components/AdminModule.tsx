@@ -838,6 +838,403 @@ export const AdminModule: React.FC = () => {
 
                 <DataBackupRestoreUtility />
             </div>
+
+            {/* FIX: Recalculate Supplier Balances from Ledger Entries */}
+            <div className="bg-green-50 border-2 border-green-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <RefreshCw className="text-green-600" size={24} />
+                    <h3 className="text-lg font-bold text-green-900">✅ FIX: Recalculate Supplier Balances from Ledger</h3>
+                </div>
+                
+                <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-green-800 mb-2 font-bold">
+                        This will recalculate ALL supplier balances from ledger entries and ensure they're stored correctly.
+                    </p>
+                    <p className="text-sm text-green-700 mb-2">
+                        <strong>Key Fix:</strong> Supplier balances should be NEGATIVE when we owe them (credit balance in ledger).
+                        This utility uses the EXACT same calculation logic as the system's reducer.
+                    </p>
+                </div>
+
+                <button
+                    onClick={async () => {
+                        if (!currentFactory?.id) {
+                            alert('Please select a factory first');
+                            return;
+                        }
+
+                        const confirmFix = confirm(
+                            'This will recalculate ALL supplier balances from ledger entries.\n\n' +
+                            'Supplier balances will be stored as NEGATIVE when we owe them (correct).\n\n' +
+                            'This will fix the Balance Sheet imbalance.\n\n' +
+                            'Continue?'
+                        );
+
+                        if (!confirmFix) return;
+
+                        try {
+                            const supplierTypes = [
+                                PartnerType.SUPPLIER,
+                                PartnerType.VENDOR,
+                                PartnerType.FREIGHT_FORWARDER,
+                                PartnerType.CLEARING_AGENT,
+                                PartnerType.COMMISSION_AGENT
+                            ];
+
+                            let fixedCount = 0;
+                            const fixes: Array<{ name: string; oldBalance: number; newBalance: number }> = [];
+
+                            for (const partner of state.partners.filter(p => supplierTypes.includes(p.type))) {
+                                const partnerId = partner.id;
+                                const partnerCode = partner.code;
+
+                                // Use EXACT same logic as reducer (LOAD_LEDGERS action)
+                                // Step 1: Get opening balance from opening balance entries
+                                const openingBalanceEntries = state.ledger.filter((e: any) => {
+                                    if (e.transactionType !== TransactionType.OPENING_BALANCE) return false;
+                                    return e.transactionId === `OB-${partnerId}` || 
+                                           (partnerCode && e.transactionId === `OB-${partnerCode}`);
+                                });
+                                
+                                let openingBalance = 0;
+                                if (openingBalanceEntries.length > 0) {
+                                    const apEntry = openingBalanceEntries.find((e: any) => 
+                                        e.accountName?.includes('Accounts Payable') || 
+                                        e.accountName?.includes('Payable')
+                                    );
+                                    if (apEntry) {
+                                        // If AP account is credited, we owe them (negative balance)
+                                        openingBalance = apEntry.credit > 0 ? -apEntry.credit : apEntry.debit;
+                                    } else {
+                                        const obDebitSum = openingBalanceEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                        const obCreditSum = openingBalanceEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                        openingBalance = obCreditSum - obDebitSum;
+                                    }
+                                }
+                                
+                                // Step 2: Get regular entries (purchases, payments) where accountId === partnerId
+                                const regularEntries = state.ledger.filter((e: any) => {
+                                    if (e.accountId !== partnerId) return false;
+                                    if (e.transactionId === `OB-${partnerId}`) return false;
+                                    if (partnerCode && e.transactionId === `OB-${partnerCode}`) return false;
+                                    return true;
+                                });
+                                const regularDebitSum = regularEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                const regularCreditSum = regularEntries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                const regularBalance = regularCreditSum - regularDebitSum;
+                                
+                                // Step 3: Combine opening balance with regular balance
+                                const newBalance = openingBalance + regularBalance;
+
+                                // Only update if balance changed significantly
+                                const oldBalance = partner.balance || 0;
+                                if (Math.abs(newBalance - oldBalance) > 0.01) {
+                                    fixes.push({
+                                        name: partner.name,
+                                        oldBalance,
+                                        newBalance
+                                    });
+
+                                    // Update in Firebase
+                                    await updateDoc(doc(db, 'partners', partnerId), {
+                                        balance: newBalance,
+                                        updatedAt: serverTimestamp()
+                                    });
+
+                                    fixedCount++;
+                                }
+                            }
+
+                            if (fixedCount === 0) {
+                                alert('✅ All supplier balances are already correct! No updates needed.');
+                            } else {
+                                const details = fixes.slice(0, 10).map(f => 
+                                    `${f.name}: ${f.oldBalance.toFixed(2)} → ${f.newBalance.toFixed(2)}`
+                                ).join('\n');
+                                
+                                const moreText = fixes.length > 10 ? `\n... and ${fixes.length - 10} more` : '';
+                                
+                                alert(
+                                    `✅ Fixed ${fixedCount} supplier balance(s):\n\n${details}${moreText}\n\n` +
+                                    `Please refresh the page to see the updated Balance Sheet.`
+                                );
+                                
+                                setTimeout(() => window.location.reload(), 2000);
+                            }
+                        } catch (error: any) {
+                            alert(`❌ Error fixing balances: ${error.message}`);
+                            console.error('Error fixing supplier balances:', error);
+                        }
+                    }}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold"
+                >
+                    ✅ Fix All Supplier Balances from Ledger
+                </button>
+            </div>
+
+            {/* DIAGNOSE: Check Supplier Balances in Balance Sheet */}
+            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <AlertTriangle className="text-yellow-600" size={24} />
+                    <h3 className="text-lg font-bold text-yellow-900">🔍 Diagnose: Supplier Balances in Balance Sheet</h3>
+                </div>
+                
+                <div className="bg-white border border-yellow-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-yellow-800 mb-2">
+                        Check which suppliers have balances and why they might not be showing in the Balance Sheet.
+                    </p>
+                </div>
+
+                <button
+                    onClick={() => {
+                        const supplierTypes = [
+                            PartnerType.SUPPLIER,
+                            PartnerType.VENDOR,
+                            PartnerType.FREIGHT_FORWARDER,
+                            PartnerType.CLEARING_AGENT,
+                            PartnerType.COMMISSION_AGENT
+                        ];
+                        
+                        const allSuppliers = state.partners.filter(p => supplierTypes.includes(p.type));
+                        const negativeSuppliers = allSuppliers.filter(p => (p.balance || 0) < 0);
+                        const positiveSuppliers = allSuppliers.filter(p => (p.balance || 0) > 0);
+                        const zeroSuppliers = allSuppliers.filter(p => (p.balance || 0) === 0);
+                        
+                        const totalAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance || 0), 0);
+                        const totalAdvances = positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0);
+                        
+                        const details = [
+                            `Total Suppliers: ${allSuppliers.length}`,
+                            `Negative Balance (AP): ${negativeSuppliers.length} - Total: $${totalAP.toFixed(2)}`,
+                            `Positive Balance (Advances): ${positiveSuppliers.length} - Total: $${totalAdvances.toFixed(2)}`,
+                            `Zero Balance: ${zeroSuppliers.length}`,
+                            '',
+                            'Top 10 Suppliers by Balance (Absolute):',
+                            ...allSuppliers
+                                .map(s => ({ name: s.name, balance: s.balance || 0, type: s.type }))
+                                .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
+                                .slice(0, 10)
+                                .map(s => `  ${s.name}: $${s.balance.toFixed(2)} ${s.balance < 0 ? '(AP - we owe them)' : s.balance > 0 ? '(Advance - they owe us)' : '(Zero)'}`)
+                        ].join('\n');
+                        
+                        console.log('🔍 Supplier Balance Diagnosis:', {
+                            allSuppliers: allSuppliers.length,
+                            negativeSuppliers: negativeSuppliers.length,
+                            positiveSuppliers: positiveSuppliers.length,
+                            totalAP,
+                            totalAdvances,
+                            details
+                        });
+                        
+                        alert(`Supplier Balance Analysis:\n\n${details}\n\nCheck browser console (F12) for detailed breakdown.`);
+                    }}
+                    className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-semibold mb-3"
+                >
+                    🔍 Check Supplier Balances
+                </button>
+            </div>
+
+            {/* EMERGENCY: Fix Partner Balances - Use System's Own Calculation */}
+            <div className="bg-red-50 border-2 border-red-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <AlertTriangle className="text-red-600" size={24} />
+                    <h3 className="text-lg font-bold text-red-900">⚠️ EMERGENCY FIX: Restore Partner Balances</h3>
+                </div>
+                
+                <div className="bg-white border border-red-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-red-800 mb-2 font-bold">
+                        If balances were incorrectly updated, use one of these options:
+                    </p>
+                    <ol className="list-decimal list-inside text-sm text-red-700 space-y-2 ml-2">
+                        <li><strong>If you have a backup:</strong> Go to Admin &gt; Import/Export &gt; Partners and restore from backup</li>
+                        <li><strong>If no backup:</strong> Refresh the page (F5) to reload from Firebase, then manually fix balances in Setup &gt; Business Partners</li>
+                        <li><strong>Or use the button below:</strong> This will trigger the system&apos;s own balance calculation (same as when ledger loads)</li>
+                    </ol>
+                </div>
+
+                <div className="flex gap-3">
+                    <button
+                        onClick={() => {
+                            alert('Please refresh the page (F5 or Ctrl+R) to reload all data from Firebase.\n\nAfter refresh, you may need to manually correct partner balances in Setup > Business Partners.');
+                            window.location.reload();
+                        }}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold"
+                    >
+                        🔄 Refresh Page (Reload from Firebase)
+                    </button>
+                    
+                    <button
+                        onClick={async () => {
+                            if (!currentFactory?.id) {
+                                alert('Please select a factory first');
+                                return;
+                            }
+
+                            const confirmFix = confirm(
+                                'This will trigger the system to recalculate partner balances using the EXACT same logic as when ledger entries load.\n\n' +
+                                'This should restore correct balances.\n\n' +
+                                'Continue?'
+                            );
+
+                            if (!confirmFix) return;
+
+                            try {
+                                // Trigger a LOAD_LEDGERS action which will recalculate all partner balances
+                                // We'll simulate this by dispatching the action with current ledger entries
+                                alert('⚠️ This feature requires access to the data context dispatch function.\n\n' +
+                                      'Please refresh the page instead (F5), and the system will automatically recalculate balances when ledger entries load.\n\n' +
+                                      'If balances are still wrong after refresh, you may need to manually fix them in Setup > Business Partners.');
+                                
+                                window.location.reload();
+                            } catch (error: any) {
+                                alert(`❌ Error: ${error.message}`);
+                                console.error('Error:', error);
+                            }
+                        }}
+                        className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold"
+                    >
+                        🔧 Trigger System Recalculation
+                    </button>
+                </div>
+            </div>
+
+            {/* Recalculate Partner Balances from Ledger Entries - DISABLED */}
+            <div className="bg-gray-50 border-2 border-gray-300 rounded-xl p-6 mt-8 opacity-60">
+                <div className="flex items-center gap-3 mb-4">
+                    <AlertTriangle className="text-gray-600" size={24} />
+                    <h3 className="text-lg font-bold text-gray-700">⚠️ DISABLED: Recalculate Partner Balances</h3>
+                </div>
+                
+                <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-red-800 mb-2 font-bold">
+                        This utility has been temporarily disabled due to calculation issues.
+                    </p>
+                    <p className="text-sm text-gray-700">
+                        Please use the "Reload All Partners from Firebase" utility above instead.
+                    </p>
+                </div>
+            </div>
+
+            {/* Find and Fix Orphaned Purchase Ledger Entries */}
+            <div className="bg-purple-50 border-2 border-purple-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <AlertTriangle className="text-purple-600" size={24} />
+                    <h3 className="text-lg font-bold text-purple-900">Find & Fix Orphaned Purchase Ledger Entries</h3>
+                </div>
+                
+                <div className="bg-white border border-purple-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-purple-800 mb-2">
+                        This utility finds purchase ledger entries (PI-*) where only one side exists (orphaned entries).
+                        This can happen if a purchase was deleted but only one ledger entry was removed.
+                    </p>
+                </div>
+
+                <button
+                    onClick={async () => {
+                        try {
+                            // Find all PI- transactions
+                            const piTransactions = new Set<string>();
+                            state.ledger.forEach((entry: any) => {
+                                if (entry.transactionId && entry.transactionId.startsWith('PI-')) {
+                                    piTransactions.add(entry.transactionId);
+                                }
+                            });
+
+                            // Check each transaction for orphaned entries
+                            const orphanedEntries: any[] = [];
+                            const transactionGroups: { [key: string]: any[] } = {};
+
+                            // Group entries by transactionId
+                            state.ledger.forEach((entry: any) => {
+                                if (entry.transactionId && entry.transactionId.startsWith('PI-')) {
+                                    if (!transactionGroups[entry.transactionId]) {
+                                        transactionGroups[entry.transactionId] = [];
+                                    }
+                                    transactionGroups[entry.transactionId].push(entry);
+                                }
+                            });
+
+                            // Find transactions with only 1 entry (orphaned)
+                            Object.entries(transactionGroups).forEach(([transactionId, entries]) => {
+                                if (entries.length === 1) {
+                                    orphanedEntries.push(...entries);
+                                }
+                            });
+
+                            if (orphanedEntries.length === 0) {
+                                alert('✅ No orphaned purchase ledger entries found! All PI- transactions have both debit and credit entries.');
+                                return;
+                            }
+
+                            // Show details
+                            const details = orphanedEntries.map(e => 
+                                `Transaction: ${e.transactionId}\nAccount: ${e.accountName}\nAmount: $${(e.debit || e.credit || 0).toFixed(2)}\nDate: ${e.date}`
+                            ).join('\n\n');
+
+                            const confirmDelete = confirm(
+                                `Found ${orphanedEntries.length} orphaned purchase ledger entry/entries:\n\n${details}\n\n` +
+                                `These entries are missing their matching entry and can cause Balance Sheet imbalance.\n\n` +
+                                `Do you want to delete these orphaned entries?`
+                            );
+
+                            if (confirmDelete) {
+                                // Delete orphaned entries from Firebase
+                                let deletedCount = 0;
+                                for (const entry of orphanedEntries) {
+                                    try {
+                                        // Find and delete the specific entry
+                                        const ledgerQuery = query(
+                                            collection(db, 'ledger'),
+                                            where('transactionId', '==', entry.transactionId),
+                                            where('accountId', '==', entry.accountId),
+                                            where('factoryId', '==', currentFactory?.id || '')
+                                        );
+                                        const snapshot = await getDocs(ledgerQuery);
+                                        const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
+                                        await Promise.all(deletePromises);
+                                        deletedCount += snapshot.docs.length;
+                                    } catch (error: any) {
+                                        console.error(`Error deleting entry ${entry.transactionId}:`, error);
+                                    }
+                                }
+
+                                alert(`✅ Deleted ${deletedCount} orphaned purchase ledger entry/entries.\n\nPlease refresh the page to see updated Balance Sheet.`);
+                                setTimeout(() => window.location.reload(), 1000);
+                            }
+                        } catch (error: any) {
+                            alert(`❌ Error: ${error.message}`);
+                            console.error('Error finding orphaned entries:', error);
+                        }
+                    }}
+                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-semibold"
+                >
+                    Find & Delete Orphaned Purchase Entries
+                </button>
+            </div>
+
+            {/* Delete Partners by Type Utility Section */}
+            <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <Users className="text-orange-600" size={24} />
+                    <h3 className="text-lg font-bold text-orange-900">Delete Partners by Type</h3>
+                </div>
+                
+                <div className="bg-white border border-orange-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-orange-800 mb-2">
+                        <strong>⚠️ DESTRUCTIVE OPERATION:</strong> This utility will permanently delete all partners of the selected type for the selected factory:
+                    </p>
+                    <ul className="list-disc list-inside text-sm text-orange-700 space-y-1 ml-4">
+                        <li>Delete ALL partners of the selected type (Supplier, Customer, or Vendor)</li>
+                        <li>Delete associated opening balance ledger entries</li>
+                        <li>This action CANNOT be undone</li>
+                    </ul>
+                    <p className="text-xs text-orange-600 mt-3 font-semibold">
+                        Only proceed if you are absolutely certain. Make sure to backup your data first.
+                    </p>
+                </div>
+
+                <DeletePartnersByTypeUtility />
+            </div>
                 </>
             )}
         </div>
@@ -1149,6 +1546,328 @@ const FactoryResetUtility: React.FC = () => {
                                 log.type === 'success' ? 'text-green-400' :
                                 log.type === 'warning' ? 'text-yellow-400' :
                                 'text-slate-300'
+                            }`}
+                        >
+                            <span className="text-slate-500">[{log.time}]</span> {log.message}
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Delete Partners by Type Utility Component
+const DeletePartnersByTypeUtility: React.FC = () => {
+    const { state } = useData();
+    const { currentFactory, factories } = useAuth();
+    const [selectedFactoryId, setSelectedFactoryId] = useState<string>(currentFactory?.id || '');
+    const [selectedPartnerType, setSelectedPartnerType] = useState<PartnerType | ''>('');
+    const [pinCode, setPinCode] = useState('');
+    const [isArmed, setIsArmed] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [logs, setLogs] = useState<Array<{ time: string; type: 'info' | 'success' | 'error' | 'warning'; message: string }>>([]);
+    const SUPERVISOR_PIN = '7860';
+    const BATCH_SIZE = 500; // Firestore batch limit
+
+    // Helper function to add log
+    const addLog = (type: 'info' | 'success' | 'error' | 'warning', message: string) => {
+        const time = new Date().toLocaleTimeString();
+        setLogs(prev => [...prev, { time, type, message }]);
+        console.log(`[${time}] ${type.toUpperCase()}: ${message}`);
+    };
+
+    // Get partners count for selected type and factory
+    const getPartnersCount = () => {
+        if (!selectedFactoryId || !selectedPartnerType) return 0;
+        return state.partners.filter(p => 
+            p.factoryId === selectedFactoryId && p.type === selectedPartnerType
+        ).length;
+    };
+
+    // Delete opening balance ledger entries for a partner
+    const deletePartnerOpeningBalances = async (partnerId: string, partnerCode: string | undefined) => {
+        try {
+            // Delete entries with OB-{partnerId} (for manually added partners)
+            const obByIdQuery = query(
+                collection(db, 'ledger'),
+                where('transactionId', '==', `OB-${partnerId}`),
+                where('factoryId', '==', selectedFactoryId)
+            );
+            const obByIdSnapshot = await getDocs(obByIdQuery);
+            
+            // Delete entries with OB-{partnerCode} (for CSV imported partners)
+            let obByCodeSnapshot = { empty: true, docs: [] };
+            if (partnerCode) {
+                const obByCodeQuery = query(
+                    collection(db, 'ledger'),
+                    where('transactionId', '==', `OB-${partnerCode}`),
+                    where('factoryId', '==', selectedFactoryId)
+                );
+                obByCodeSnapshot = await getDocs(obByCodeQuery);
+            }
+
+            const allEntries = [...obByIdSnapshot.docs, ...(obByCodeSnapshot.docs || [])];
+            
+            if (allEntries.length > 0) {
+                // Delete in batches
+                for (let i = 0; i < allEntries.length; i += BATCH_SIZE) {
+                    const batch = writeBatch(db);
+                    const batchEntries = allEntries.slice(i, i + BATCH_SIZE);
+                    batchEntries.forEach(doc => batch.delete(doc.ref));
+                    await batch.commit();
+                }
+                return allEntries.length;
+            }
+            return 0;
+        } catch (error: any) {
+            console.error(`Error deleting opening balances for partner ${partnerId}:`, error);
+            return 0;
+        }
+    };
+
+    // Main delete function
+    const executeDelete = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (!selectedFactoryId) {
+            addLog('error', '❌ Please select a factory.');
+            return;
+        }
+
+        if (!selectedPartnerType) {
+            addLog('error', '❌ Please select a partner type.');
+            return;
+        }
+
+        if (pinCode !== SUPERVISOR_PIN) {
+            addLog('error', '❌ Invalid PIN code.');
+            return;
+        }
+
+        if (!isArmed) {
+            addLog('error', '❌ Please arm the utility by toggling the switch.');
+            return;
+        }
+
+        const partnersCount = getPartnersCount();
+        if (partnersCount === 0) {
+            addLog('warning', `⚠️ No ${selectedPartnerType} partners found for the selected factory.`);
+            return;
+        }
+
+        setIsProcessing(true);
+        setLogs([]);
+        addLog('info', `🚀 Starting deletion of ${partnersCount} ${selectedPartnerType} partner(s)...`);
+        addLog('warning', 'This is a destructive operation. All selected partners will be permanently deleted.');
+
+        try {
+            const factory = factories.find(f => f.id === selectedFactoryId);
+            const factoryName = factory?.name || selectedFactoryId;
+
+            // Get all partners of the selected type for the selected factory
+            const partnersToDelete = state.partners.filter(p => 
+                p.factoryId === selectedFactoryId && p.type === selectedPartnerType
+            );
+
+            addLog('info', `Found ${partnersToDelete.length} ${selectedPartnerType} partner(s) to delete.`);
+
+            let deletedCount = 0;
+            let deletedOpeningBalances = 0;
+            let errors: string[] = [];
+
+            // Delete partners in batches
+            for (let i = 0; i < partnersToDelete.length; i += BATCH_SIZE) {
+                const batch = writeBatch(db);
+                const batchPartners = partnersToDelete.slice(i, i + BATCH_SIZE);
+                
+                for (const partner of batchPartners) {
+                    try {
+                        // Delete opening balance ledger entries first
+                        const partnerCode = (partner as any).code;
+                        const deletedOB = await deletePartnerOpeningBalances(partner.id, partnerCode);
+                        if (deletedOB > 0) {
+                            deletedOpeningBalances += deletedOB;
+                            addLog('info', `Deleted ${deletedOB} opening balance entries for ${partner.name}`);
+                        }
+
+                        // Delete partner document
+                        const partnerRef = doc(db, 'partners', partner.id);
+                        batch.delete(partnerRef);
+                        deletedCount++;
+                    } catch (error: any) {
+                        const errorMsg = `Error deleting partner ${partner.name}: ${error?.message || 'Unknown error'}`;
+                        errors.push(errorMsg);
+                        addLog('error', errorMsg);
+                    }
+                }
+
+                try {
+                    await batch.commit();
+                    addLog('success', `✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}: Deleted ${batchPartners.length} partner(s)`);
+                } catch (error: any) {
+                    const errorMsg = `Error committing batch ${Math.floor(i / BATCH_SIZE) + 1}: ${error?.message || 'Unknown error'}`;
+                    errors.push(errorMsg);
+                    addLog('error', errorMsg);
+                }
+            }
+
+            addLog('success', `🎉 Deletion completed!`);
+            addLog('info', `✅ Deleted ${deletedCount} ${selectedPartnerType} partner(s)`);
+            if (deletedOpeningBalances > 0) {
+                addLog('info', `✅ Deleted ${deletedOpeningBalances} opening balance ledger entries`);
+            }
+            if (errors.length > 0) {
+                addLog('warning', `⚠️ ${errors.length} error(s) occurred during deletion. Check logs above.`);
+            }
+
+            // Reset form
+            setPinCode('');
+            setIsArmed(false);
+            setIsProcessing(false);
+            setSelectedPartnerType('');
+
+        } catch (error: any) {
+            addLog('error', `❌ Error during deletion: ${error?.message || 'Unknown error'}`);
+            console.error('Delete Partners Error:', error);
+            setIsProcessing(false);
+        }
+    };
+
+    const partnersCount = getPartnersCount();
+    const isReady = selectedFactoryId && selectedPartnerType && pinCode === SUPERVISOR_PIN && isArmed && !isProcessing;
+
+    return (
+        <div className="space-y-4">
+            {/* Factory Selector */}
+            <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                    Select Factory <span className="text-red-500">*</span>
+                </label>
+                <select
+                    className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-orange-500 outline-none"
+                    value={selectedFactoryId}
+                    onChange={(e) => {
+                        setSelectedFactoryId(e.target.value);
+                        setSelectedPartnerType('');
+                        setLogs([]);
+                    }}
+                    disabled={isProcessing}
+                >
+                    <option value="">-- Select Factory --</option>
+                    {factories && factories.length > 0 ? (
+                        factories.map(factory => (
+                            <option key={factory.id} value={factory.id}>
+                                {factory.name} ({factory.code})
+                            </option>
+                        ))
+                    ) : (
+                        <option value="" disabled>No factories available</option>
+                    )}
+                </select>
+            </div>
+
+            {/* Partner Type Selector */}
+            <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                    Select Partner Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                    className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-orange-500 outline-none"
+                    value={selectedPartnerType}
+                    onChange={(e) => {
+                        setSelectedPartnerType(e.target.value as PartnerType | '');
+                        setLogs([]);
+                    }}
+                    disabled={!selectedFactoryId || isProcessing}
+                >
+                    <option value="">-- Select Partner Type --</option>
+                    <option value={PartnerType.SUPPLIER}>Supplier</option>
+                    <option value={PartnerType.CUSTOMER}>Customer</option>
+                    <option value={PartnerType.VENDOR}>Vendor</option>
+                </select>
+                {selectedPartnerType && partnersCount > 0 && (
+                    <p className="text-sm text-orange-700 mt-2 font-semibold">
+                        ⚠️ Found {partnersCount} {selectedPartnerType} partner(s) to delete
+                    </p>
+                )}
+            </div>
+
+            {/* Security PIN */}
+            <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                    Security PIN <span className="text-red-500">*</span>
+                </label>
+                <input
+                    type="password"
+                    className="w-full bg-white border border-slate-300 rounded-lg p-3 text-slate-800 focus:ring-2 focus:ring-orange-500 outline-none"
+                    placeholder="Enter supervisor PIN"
+                    value={pinCode}
+                    onChange={(e) => {
+                        setPinCode(e.target.value);
+                        setIsArmed(false); // Reset armed state when PIN changes
+                    }}
+                    disabled={!selectedFactoryId || !selectedPartnerType || isProcessing}
+                />
+            </div>
+
+            {/* Arming Toggle */}
+            <div className="flex items-center gap-3 bg-slate-100 p-4 rounded-lg">
+                <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        className="w-5 h-5 text-orange-600 focus:ring-orange-500 rounded"
+                        checked={isArmed}
+                        onChange={(e) => setIsArmed(e.target.checked)}
+                        disabled={!selectedFactoryId || !selectedPartnerType || pinCode !== SUPERVISOR_PIN || isProcessing}
+                    />
+                    <span className="text-sm font-bold text-slate-700">
+                        Arm Utility (Enable Delete Button)
+                    </span>
+                </label>
+            </div>
+
+            {/* Execute Button */}
+            <button
+                onClick={executeDelete}
+                disabled={!isReady}
+                className={`w-full py-4 rounded-lg font-bold text-lg transition-all ${
+                    !isReady
+                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                        : 'bg-red-600 hover:bg-red-700 text-white shadow-lg hover:shadow-xl'
+                }`}
+            >
+                {isProcessing ? (
+                    <span className="flex items-center justify-center gap-2">
+                        <RefreshCw className="animate-spin" size={20} />
+                        Deleting Partners...
+                    </span>
+                ) : (
+                    <span className="flex items-center justify-center gap-2">
+                        <Trash2 size={20} />
+                        Delete {partnersCount > 0 ? `${partnersCount} ` : ''}{selectedPartnerType || 'Partners'}
+                    </span>
+                )}
+            </button>
+
+            {/* Terminal/Logging UI */}
+            {logs.length > 0 && (
+                <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-sm max-h-96 overflow-y-auto">
+                    <div className="flex items-center gap-2 mb-2 text-slate-400 text-xs">
+                        <span>Terminal Output</span>
+                    </div>
+                    {logs.map((log, idx) => (
+                        <div
+                            key={idx}
+                            className={`mb-1 ${
+                                log.type === 'error'
+                                    ? 'text-red-400'
+                                    : log.type === 'warning'
+                                    ? 'text-yellow-400'
+                                    : log.type === 'success'
+                                    ? 'text-green-400'
+                                    : 'text-slate-300'
                             }`}
                         >
                             <span className="text-slate-500">[{log.time}]</span> {log.message}

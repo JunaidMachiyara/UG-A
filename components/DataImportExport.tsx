@@ -625,7 +625,7 @@ export const DataImportExport: React.FC = () => {
                         const partnerDataForSave = {
                             ...partnerData,
                             code: csvId, // Store CSV id as code field
-                            balance: 0, // Save with 0, balance comes from ledger
+                            balance: partner.openingBalance || 0, // Save actual balance for Balance Sheet accuracy
                             createdAt: serverTimestamp(),
                             updatedAt: serverTimestamp()
                         };
