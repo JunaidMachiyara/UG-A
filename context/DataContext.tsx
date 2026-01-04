@@ -2318,62 +2318,134 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const fcyAmt = partner.balance * rate;
                     const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
                     if (partner.type === 'CUSTOMER') {
-                        // Debit the individual customer's account (not generic AR)
-                        entries = [
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: docRef.id,
-                                accountName: partner.name,
-                                debit: partner.balance,
-                                credit: 0,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            },
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
-                                debit: 0,
-                                credit: partner.balance,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            }
-                        ];
-                    } else {
-                        // Suppliers, Vendors, etc. (credit balance)
+                        // Customer opening balance logic:
+                        // Positive balance (they owe us): Debit AR, Credit Equity
+                        // Negative balance (we owe them/credit balance): Credit AR, Debit Equity
                         const absBalance = Math.abs(partner.balance);
-                        entries = [
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: openingEquityId,
-                                accountName: 'Opening Equity',
-                                debit: absBalance,
-                                credit: 0,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            },
-                            {
-                                ...commonProps,
-                                date,
-                                transactionId: `OB-${docRef.id}`,
-                                transactionType: TransactionType.OPENING_BALANCE,
-                                accountId: docRef.id,
-                                accountName: partner.name,
-                                debit: 0,
-                                credit: absBalance,
-                                narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
-                            }
-                        ];
+                        
+                        if (partner.balance >= 0) {
+                            // Positive balance: Customer owes us
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id,
+                                    accountName: partner.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        } else {
+                            // Negative balance: Credit balance (we owe them or they overpaid)
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id,
+                                    accountName: partner.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance (Credit) - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance (Credit) - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        }
+                    } else {
+                        // Supplier/Vendor/Sub Supplier opening balance logic:
+                        // Negative balance (we owe them): Debit Capital, Credit Supplier (liability)
+                        // Positive balance (they owe us - advance): Debit Supplier (asset), Credit Capital
+                        const absBalance = Math.abs(partner.balance);
+                        
+                        if (partner.balance < 0) {
+                            // Negative balance: Accounts Payable (Liability)
+                            // Post to partner account ID (not Accounts Payable account) to avoid duplication in Balance Sheet
+                            // Balance Sheet calculates "Creditors (Accounts Payable)" from supplier balances directly
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id, // Use partner ID, not Accounts Payable account
+                                    accountName: partner.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        } else {
+                            // Positive balance: Advance to Supplier (Asset)
+                            // Debit Supplier Account (asset), Credit Capital
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: openingEquityId,
+                                    accountName: 'Opening Equity',
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${docRef.id}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: docRef.id, // Use partner ID as asset account
+                                    accountName: partner.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${partner.name}`,
+                                    factoryId: currentFactory?.id || ''
+                                }
+                            ];
+                        }
                     }
                     postTransaction(entries);
                 }
@@ -2556,46 +2628,71 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         ];
                     }
                 } else {
-                    // Supplier/Vendor/Sub Supplier: Credit Accounts Payable, Debit equity
+                    // Supplier/Vendor/Sub Supplier opening balance logic:
+                    // Negative balance (we owe them): Debit Capital, Credit Supplier (liability)
+                    // Positive balance (they owe us - advance): Debit Supplier (asset), Credit Capital
                     const absBalance = Math.abs(newBalance);
                     
-                    // Find Accounts Payable account (for Suppliers/Sub Suppliers)
-                    const apAccount = state.accounts.find(a => 
-                        a.name.includes('Accounts Payable') || 
-                        a.code === '201' ||
-                        (a.type === AccountType.LIABILITY && a.name.toLowerCase().includes('payable'))
-                    );
-                    
-                    if (!apAccount) {
-                        throw new Error('CRITICAL: Accounts Payable account not found! Please create it in Setup > Chart of Accounts (Code: 201, Type: LIABILITY)');
+                    if (newBalance < 0) {
+                        // Negative balance: Accounts Payable (Liability)
+                        // Post to partner account ID (not Accounts Payable account) to avoid duplication in Balance Sheet
+                        // Balance Sheet calculates "Creditors (Accounts Payable)" from supplier balances directly
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id, // Use partner ID, not Accounts Payable account
+                                accountName: existingPartner.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
+                        // Positive balance: Advance to Supplier (Asset)
+                        // Debit Supplier Account (asset), Credit Capital
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id, // Use partner ID as asset account
+                                accountName: existingPartner.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingPartner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
                     }
-                    
-                    entries = [
-                        {
-                            ...commonProps,
-                            date,
-                            transactionId: `OB-${id}`,
-                            transactionType: TransactionType.OPENING_BALANCE,
-                            accountId: openingEquityId,
-                            accountName: 'Opening Equity',
-                            debit: absBalance,
-                            credit: 0,
-                            narration: `Opening Balance - ${existingPartner.name}`,
-                            factoryId: currentFactory?.id || ''
-                        },
-                        {
-                            ...commonProps,
-                            date,
-                            transactionId: `OB-${id}`,
-                            transactionType: TransactionType.OPENING_BALANCE,
-                            accountId: apAccount.id, // Use Accounts Payable account, not partner ID
-                            accountName: apAccount.name,
-                            debit: 0,
-                            credit: absBalance,
-                            narration: `Opening Balance - ${existingPartner.name}`,
-                            factoryId: currentFactory?.id || ''
-                        }
-                    ];
                 }
                 await postTransaction(entries);
                 console.log('✅ Opening balance entries created');

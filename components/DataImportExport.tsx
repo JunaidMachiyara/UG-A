@@ -841,50 +841,42 @@ export const DataImportExport: React.FC = () => {
                                     
                                     let entries: Omit<LedgerEntry, 'id'>[] = [];
                                     if (partner.type === 'CUSTOMER') {
-                                        entries = [
-                                            {
-                                                ...commonProps,
-                                                date,
-                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                transactionType: TransactionType.OPENING_BALANCE,
-                                                accountId: savedPartner.id, // Use Firestore document ID
-                                                accountName: partner.name,
-                                                debit: partner.openingBalance,
-                                                credit: 0,
-                                                narration: `Opening Balance - ${partner.name}`,
-                                                factoryId: currentFactory?.id || ''
-                                            },
-                                            {
-                                                ...commonProps,
-                                                date,
-                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                transactionType: TransactionType.OPENING_BALANCE,
-                                                accountId: openingEquityId,
-                                                accountName: capitalAccount.name,
-                                                debit: 0,
-                                                credit: partner.openingBalance,
-                                                narration: `Opening Balance - ${partner.name}`,
-                                                factoryId: currentFactory?.id || ''
-                                            }
-                                        ];
-                                    } else {
-                                        // Suppliers, Vendors, etc.
+                                        // Customer opening balance logic:
+                                        // Positive balance (they owe us): Debit AR, Credit Equity
+                                        // Negative balance (we owe them/credit balance): Credit AR, Debit Equity
                                         const absBalance = Math.abs(partner.openingBalance);
-                                        if (partner.openingBalance < 0) {
-                                            // Negative: Accounts Payable
+                                        
+                                        if (partner.openingBalance >= 0) {
+                                            // Positive balance: Customer owes us
                                             entries = [
-                                            {
-                                                ...commonProps,
-                                                date,
-                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                transactionType: TransactionType.OPENING_BALANCE,
-                                                accountId: openingEquityId,
-                                                accountName: capitalAccount.name,
-                                                debit: absBalance,
-                                                credit: 0,
-                                                narration: `Opening Balance - ${partner.name}`,
-                                                factoryId: currentFactory?.id || ''
-                                            },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: savedPartner.id, // Use Firestore document ID
+                                                    accountName: partner.name,
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: capitalAccount.name,
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        } else {
+                                            // Negative balance: Credit balance (we owe them or they overpaid)
+                                            entries = [
                                                 {
                                                     ...commonProps,
                                                     date,
@@ -894,25 +886,75 @@ export const DataImportExport: React.FC = () => {
                                                     accountName: partner.name,
                                                     debit: 0,
                                                     credit: absBalance,
+                                                    narration: `Opening Balance (Credit) - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: capitalAccount.name,
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance (Credit) - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                }
+                                            ];
+                                        }
+                                    } else {
+                                        // Supplier/Vendor/Sub Supplier opening balance logic:
+                                        // Negative balance (we owe them): Debit Capital, Credit Supplier (liability)
+                                        // Positive balance (they owe us - advance): Debit Supplier (asset), Credit Capital
+                                        const absBalance = Math.abs(partner.openingBalance);
+                                        
+                                        if (partner.openingBalance < 0) {
+                                            // Negative balance: Accounts Payable (Liability)
+                                            // Post to partner account ID (not Accounts Payable account) to avoid duplication in Balance Sheet
+                                            // Balance Sheet calculates "Creditors (Accounts Payable)" from supplier balances directly
+                                            entries = [
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: capitalAccount.name,
+                                                    debit: absBalance,
+                                                    credit: 0,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: savedPartner.id, // Use partner ID, not Accounts Payable account
+                                                    accountName: partner.name,
+                                                    debit: 0,
+                                                    credit: absBalance,
                                                     narration: `Opening Balance - ${partner.name}`,
                                                     factoryId: currentFactory?.id || ''
                                                 }
                                             ];
                                         } else {
-                                            // Positive: Advance to Supplier
+                                            // Positive balance: Advance to Supplier (Asset)
+                                            // Debit Supplier Account (asset), Credit Capital
                                             entries = [
-                                            {
-                                                ...commonProps,
-                                                date,
-                                                transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
-                                                transactionType: TransactionType.OPENING_BALANCE,
-                                                accountId: openingEquityId,
-                                                accountName: capitalAccount.name,
-                                                debit: 0,
-                                                credit: absBalance,
-                                                narration: `Opening Balance - ${partner.name}`,
-                                                factoryId: currentFactory?.id || ''
-                                            },
+                                                {
+                                                    ...commonProps,
+                                                    date,
+                                                    transactionId: `OB-${csvId}`, // Use CSV code for transaction ID
+                                                    transactionType: TransactionType.OPENING_BALANCE,
+                                                    accountId: openingEquityId,
+                                                    accountName: capitalAccount.name,
+                                                    debit: 0,
+                                                    credit: absBalance,
+                                                    narration: `Opening Balance - ${partner.name}`,
+                                                    factoryId: currentFactory?.id || ''
+                                                },
                                                 {
                                                     ...commonProps,
                                                     date,
