@@ -772,9 +772,13 @@ export const Dashboard: React.FC = () => {
                                                 .map(factory => (
                                                     <button
                                                         key={factory.id}
-                                                        onClick={() => {
-                                                            switchFactory(factory.id);
+                                                        onClick={async () => {
+                                                            await switchFactory(factory.id);
                                                             setShowFactorySwitcher(false);
+                                                            // Auto-refresh the app when factory changes
+                                                            setTimeout(() => {
+                                                                window.location.reload();
+                                                            }, 100);
                                                         }}
                                                         className="w-full text-left px-2 py-1.5 text-[10px] hover:bg-indigo-50 first:rounded-t-lg last:rounded-b-lg"
                                                     >

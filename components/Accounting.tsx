@@ -820,7 +820,7 @@ export const Accounting: React.FC = () => {
             // This ensures worth is always correct, even if no adjustments exist
             if (!adjustedItemKeys.has(item.key)) {
                 // For non-adjusted items, calculate worth from weight and cost
-                item.worth = item.weightInHand * item.avgCostPerKg;
+            item.worth = item.weightInHand * item.avgCostPerKg;
             } else {
                 // For adjusted items, worth was already set correctly during adjustment
                 // Don't overwrite it - it may differ from weight * avgCostPerKg if adjustment worth was specified
@@ -1255,8 +1255,8 @@ export const Accounting: React.FC = () => {
                 adjustments: Object.entries(finalAdjustments).map(([itemId, adj]) => {
                     const adjustment = adj as ItemAdjustment;
                     return {
-                        itemId,
-                        itemCode: state.items.find(i => i.id === itemId)?.code || 'NOT FOUND',
+                    itemId,
+                    itemCode: state.items.find(i => i.id === itemId)?.code || 'NOT FOUND',
                         adjustmentQty: adjustment.adjustmentQty,
                         adjustmentWorth: adjustment.adjustmentWorth,
                         hasQty: adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0,
@@ -1624,10 +1624,10 @@ export const Accounting: React.FC = () => {
             // Fallback for backward compatibility
             if (!adjustmentAccount) {
                 const found = state.accounts.find(a => 
-                    a.name.includes('Inventory Adjustment') || 
-                    a.name.includes('Write-off') ||
-                    a.code === '503'
-                );
+                a.name.includes('Inventory Adjustment') || 
+                a.name.includes('Write-off') ||
+                a.code === '503'
+            );
                 if (found && found.type === AccountType.ASSET) {
                     return alert(`❌ CRITICAL ERROR: Inventory Adjustment account "${found.name}" is an ASSET account.\n\nThis will cause Balance Sheet imbalance. The account should be:\n- Type: EXPENSE (recommended) or EQUITY\n- Code: 503\n\nPlease update the account type in Setup > Chart of Accounts.`);
                 }
@@ -1950,8 +1950,8 @@ export const Accounting: React.FC = () => {
             // Try EQUITY first (preferred for balancing), then LIABILITY
             let discrepancyAccount = state.accounts.find(a => 
                 (a.name.includes('Discrepancy') || 
-                 a.name.includes('Suspense') ||
-                 a.name.includes('Balancing Discrepancy') ||
+                a.name.includes('Suspense') ||
+                a.name.includes('Balancing Discrepancy') ||
                  a.code === '505') &&
                 a.type === AccountType.EQUITY
             );
@@ -1973,11 +1973,20 @@ export const Accounting: React.FC = () => {
             
             const isEquityAccount = discrepancyAccount.type === AccountType.EQUITY;
             
+            // Determine if the target account is a liability account
+            const isLiabilityAccount = account && account.type === AccountType.LIABILITY;
+            // For partners, check if it's a supplier-like partner (negative balance = liability)
+            const isSupplierPartner = partner && [PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.SUB_SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type);
+            const isLiabilityEntity = isLiabilityAccount || isSupplierPartner;
+            
             console.log('🔍 BD Entry Creation:', {
                 entityName,
                 entityId: bdAccountId,
                 adjustmentType: bdAdjustmentType,
                 amount: baseAmount,
+                isLiabilityAccount,
+                isSupplierPartner,
+                isLiabilityEntity,
                 discrepancyAccount: {
                     id: discrepancyAccount.id,
                     name: discrepancyAccount.name,
@@ -1990,25 +1999,60 @@ export const Accounting: React.FC = () => {
             const bdDate = new Date().toISOString().split('T')[0];
             
             if (bdAdjustmentType === 'INCREASE') {
-                // Increase: Debit account/partner (increases asset or decreases liability), Credit Discrepancy
-                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                if (isEquityAccount) {
-                    // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                // INCREASE logic:
+                // For ASSETS: Debit asset (increases), Credit Discrepancy
+                // For LIABILITIES: Credit liability (increases), Debit Discrepancy (decreases discrepancy)
+                // For PARTNERS (Customers): Debit partner (increases asset), Credit Discrepancy
+                // For PARTNERS (Suppliers): Credit partner (increases liability), Debit Discrepancy
+                
+                if (isLiabilityEntity) {
+                    // LIABILITY: Credit liability account (increases liability), Debit Discrepancy (decreases discrepancy)
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    if (isEquityAccount) {
+                        // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    } else {
+                        // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
                 } else {
-                    // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    // ASSET or CUSTOMER: Debit account/partner (increases asset), Credit Discrepancy
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    if (isEquityAccount) {
+                        // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    } else {
+                        // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
                 }
             } else {
-                // Decrease: Credit account/partner (decreases asset or increases liability), Debit Discrepancy
-                // When we decrease an asset, we need to decrease equity (debit) or decrease liability (debit) to balance
-                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                if (isEquityAccount) {
-                    // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                // DECREASE logic:
+                // For ASSETS: Credit asset (decreases), Debit Discrepancy
+                // For LIABILITIES: Debit liability (decreases), Credit Discrepancy (increases discrepancy)
+                // For PARTNERS (Customers): Credit partner (decreases asset), Debit Discrepancy
+                // For PARTNERS (Suppliers): Debit partner (decreases liability), Credit Discrepancy
+                
+                if (isLiabilityEntity) {
+                    // LIABILITY: Debit liability account (decreases liability), Credit Discrepancy (increases discrepancy)
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    if (isEquityAccount) {
+                        // If Discrepancy is EQUITY: Credit Discrepancy (increases equity) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    } else {
+                        // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
                 } else {
-                    // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    // ASSET or CUSTOMER: Credit account/partner (decreases asset), Debit Discrepancy
+                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    if (isEquityAccount) {
+                        // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    } else {
+                        // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
                 }
             }
             
@@ -2134,7 +2178,7 @@ export const Accounting: React.FC = () => {
                 totalCredits: entries.reduce((sum, e) => sum + (e.credit || 0), 0)
             });
         }
-        
+
         await postTransaction(entries);
             console.log('✅ Transaction posted successfully:', voucherNo);
         } catch (error: any) {
@@ -3399,8 +3443,8 @@ export const Accounting: React.FC = () => {
                                                             </>
                                                         ) : (
                                                             <>
-                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
-                                                                <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Quantity</th>
+                                                        <th className="px-4 py-3 text-right font-bold text-slate-700 bg-yellow-50">Adjustment Worth (USD)</th>
                                                             </>
                                                         )}
                                                     </tr>
@@ -3517,98 +3561,98 @@ export const Accounting: React.FC = () => {
                                                                 ) : (
                                                                     <>
                                                                         <td className="px-4 py-3 text-right font-mono text-slate-700">{currentQty.toFixed(2)}</td>
-                                                                        <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
-                                                                        <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                            <div className="flex items-center justify-end gap-1">
-                                                                                <input 
-                                                                                    type="number" 
-                                                                                    className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                                    value={adjustment.adjustmentQty === '' || adjustment.adjustmentQty === null || adjustment.adjustmentQty === undefined ? '' : adjustment.adjustmentQty} 
-                                                                                    onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
-                                                                                    onBlur={e => {
-                                                                                        const val = e.target.value.trim();
-                                                                                        if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
-                                                                                            alert(`Invalid quantity for ${item.code}. Clearing field.`);
-                                                                                            setIaItemAdjustments(prev => ({
-                                                                                                ...prev,
-                                                                                                [item.id]: {
-                                                                                                    ...prev[item.id],
-                                                                                                    itemId: item.id,
-                                                                                                    adjustmentQty: '',
-                                                                                                    adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
-                                                                                                }
-                                                                                            }));
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-700">${currentWorth.toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <div className="flex items-center justify-end gap-1">
+                                                                        <input 
+                                                                            type="number" 
+                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                            value={adjustment.adjustmentQty === '' || adjustment.adjustmentQty === null || adjustment.adjustmentQty === undefined ? '' : adjustment.adjustmentQty} 
+                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentQty', e.target.value)}
+                                                                            onBlur={e => {
+                                                                                const val = e.target.value.trim();
+                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                    alert(`Invalid quantity for ${item.code}. Clearing field.`);
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: '',
+                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
                                                                                         }
-                                                                                    }}
-                                                                                    placeholder="0"
-                                                                                />
-                                                                                {(adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0) && (
-                                                                                    <button
-                                                                                        onClick={() => {
-                                                                                            setIaItemAdjustments(prev => ({
-                                                                                                ...prev,
-                                                                                                [item.id]: {
-                                                                                                    ...prev[item.id],
-                                                                                                    itemId: item.id,
-                                                                                                    adjustmentQty: '',
-                                                                                                    adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
-                                                                                                }
-                                                                                            }));
-                                                                                        }}
-                                                                                        className="text-red-500 hover:text-red-700 p-1"
-                                                                                        title="Clear adjustment quantity"
-                                                                                    >
-                                                                                        <X size={14} />
-                                                                                    </button>
-                                                                                )}
-                                                                            </div>
-                                                                        </td>
-                                                                        <td className="px-4 py-3 text-right bg-yellow-50">
-                                                                            <div className="flex items-center justify-end gap-1">
-                                                                                <input 
-                                                                                    type="number" 
-                                                                                    step="0.01"
-                                                                                    className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                                                                                    value={adjustment.adjustmentWorth === '' || adjustment.adjustmentWorth === null || adjustment.adjustmentWorth === undefined ? '' : adjustment.adjustmentWorth} 
-                                                                                    onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
-                                                                                    onBlur={e => {
-                                                                                        const val = e.target.value.trim();
-                                                                                        if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
-                                                                                            alert(`Invalid worth for ${item.code}. Clearing field.`);
-                                                                                            setIaItemAdjustments(prev => ({
-                                                                                                ...prev,
-                                                                                                [item.id]: {
-                                                                                                    ...prev[item.id],
-                                                                                                    itemId: item.id,
-                                                                                                    adjustmentQty: prev[item.id]?.adjustmentQty || '',
-                                                                                                    adjustmentWorth: ''
-                                                                                                }
-                                                                                            }));
+                                                                                    }));
+                                                                                }
+                                                                            }}
+                                                                            placeholder="0"
+                                                                        />
+                                                                        {(adjustment.adjustmentQty !== '' && adjustment.adjustmentQty !== null && adjustment.adjustmentQty !== undefined && adjustment.adjustmentQty !== 0) && (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: '',
+                                                                                            adjustmentWorth: prev[item.id]?.adjustmentWorth || ''
                                                                                         }
-                                                                                    }}
-                                                                                    placeholder="0.00"
-                                                                                />
-                                                                                {(adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0) && (
-                                                                                    <button
-                                                                                        onClick={() => {
-                                                                                            setIaItemAdjustments(prev => ({
-                                                                                                ...prev,
-                                                                                                [item.id]: {
-                                                                                                    ...prev[item.id],
-                                                                                                    itemId: item.id,
-                                                                                                    adjustmentQty: prev[item.id]?.adjustmentQty || '',
-                                                                                                    adjustmentWorth: ''
-                                                                                                }
-                                                                                            }));
-                                                                                        }}
-                                                                                        className="text-red-500 hover:text-red-700 p-1"
-                                                                                        title="Clear adjustment worth"
-                                                                                    >
-                                                                                        <X size={14} />
-                                                                                    </button>
-                                                                                )}
-                                                                            </div>
-                                                                        </td>
+                                                                                    }));
+                                                                                }}
+                                                                                className="text-red-500 hover:text-red-700 p-1"
+                                                                                title="Clear adjustment quantity"
+                                                                            >
+                                                                                <X size={14} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right bg-yellow-50">
+                                                                    <div className="flex items-center justify-end gap-1">
+                                                                        <input 
+                                                                            type="number" 
+                                                                            step="0.01"
+                                                                            className="w-24 px-2 py-1 border border-slate-300 rounded text-right font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                                                            value={adjustment.adjustmentWorth === '' || adjustment.adjustmentWorth === null || adjustment.adjustmentWorth === undefined ? '' : adjustment.adjustmentWorth} 
+                                                                            onChange={e => updateItemAdjustment(item.id, 'adjustmentWorth', e.target.value)}
+                                                                            onBlur={e => {
+                                                                                const val = e.target.value.trim();
+                                                                                if (val && (isNaN(parseFloat(val)) || val === '-' || val === '.')) {
+                                                                                    alert(`Invalid worth for ${item.code}. Clearing field.`);
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                            adjustmentWorth: ''
+                                                                                        }
+                                                                                    }));
+                                                                                }
+                                                                            }}
+                                                                            placeholder="0.00"
+                                                                        />
+                                                                        {(adjustment.adjustmentWorth !== '' && adjustment.adjustmentWorth !== null && adjustment.adjustmentWorth !== undefined && adjustment.adjustmentWorth !== 0) && (
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setIaItemAdjustments(prev => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: {
+                                                                                            ...prev[item.id],
+                                                                                            itemId: item.id,
+                                                                                            adjustmentQty: prev[item.id]?.adjustmentQty || '',
+                                                                                            adjustmentWorth: ''
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                                className="text-red-500 hover:text-red-700 p-1"
+                                                                                title="Clear adjustment worth"
+                                                                            >
+                                                                                <X size={14} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
                                                                     </>
                                                                 )}
                                                             </tr>
@@ -4668,6 +4712,12 @@ export const Accounting: React.FC = () => {
                                                     const isIncrease = adjustmentNeeded > 0;
                                                     const adjustmentAmount = Math.abs(adjustmentNeeded);
                                                     
+                                                    // Determine if the target account is a liability account
+                                                    const isLiabilityAccount = account && account.type === AccountType.LIABILITY;
+                                                    // For partners, check if it's a supplier-like partner (negative balance = liability)
+                                                    const isSupplierPartner = partner && [PartnerType.SUPPLIER, PartnerType.VENDOR, PartnerType.SUB_SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(partner.type);
+                                                    const isLiabilityEntity = isLiabilityAccount || isSupplierPartner;
+                                                    
                                                     // Generate voucher number
                                                     const bdDate = new Date().toISOString().split('T')[0];
                                                     const timestamp = Date.now();
@@ -4683,45 +4733,20 @@ export const Accounting: React.FC = () => {
                                                     const reason = `CSV Bulk Adjustment: Target Balance ${csvCurrentBalance.toFixed(2)}, System Balance ${systemBalance.toFixed(2)}`;
 
                                                     if (isIncrease) {
-                                                        // Increase: Debit account/partner (increases asset or decreases liability), Credit Discrepancy
-                                                        entries.push({ 
-                                                            date: bdDate, 
-                                                            transactionId: voucherNo, 
-                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                            accountId: entityId, 
-                                                            accountName: entityName, 
-                                                            currency, 
-                                                            exchangeRate, 
-                                                            fcyAmount, 
-                                                            debit: baseAmount, 
-                                                            credit: 0, 
-                                                            narration: `Balance Increase: ${entityName} - ${reason}`, 
-                                                            factoryId: state.currentFactory?.id || '' 
-                                                        });
-                                                        if (isEquityAccount) {
-                                                            // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                        // INCREASE logic:
+                                                        // For ASSETS: Debit asset (increases), Credit Discrepancy
+                                                        // For LIABILITIES: Credit liability (increases), Debit Discrepancy (decreases discrepancy)
+                                                        // For PARTNERS (Customers): Debit partner (increases asset), Credit Discrepancy
+                                                        // For PARTNERS (Suppliers): Credit partner (increases liability), Debit Discrepancy
+                                                        
+                                                        if (isLiabilityEntity) {
+                                                            // LIABILITY: Credit liability account (increases liability), Debit Discrepancy (decreases discrepancy)
                                                             entries.push({ 
                                                                 date: bdDate, 
                                                                 transactionId: voucherNo, 
                                                                 transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                                accountId: discrepancyAccount.id, 
-                                                                accountName: discrepancyAccount.name, 
-                                                                currency, 
-                                                                exchangeRate, 
-                                                                fcyAmount, 
-                                                                debit: baseAmount, 
-                                                                credit: 0, 
-                                                                narration: `Balance Increase: ${entityName} - ${reason}`, 
-                                                                factoryId: state.currentFactory?.id || '' 
-                                                            });
-                                                        } else {
-                                                            // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
-                                                            entries.push({ 
-                                                                date: bdDate, 
-                                                                transactionId: voucherNo, 
-                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                                accountId: discrepancyAccount.id, 
-                                                                accountName: discrepancyAccount.name, 
+                                                                accountId: entityId, 
+                                                                accountName: entityName, 
                                                                 currency, 
                                                                 exchangeRate, 
                                                                 fcyAmount, 
@@ -4730,32 +4755,104 @@ export const Accounting: React.FC = () => {
                                                                 narration: `Balance Increase: ${entityName} - ${reason}`, 
                                                                 factoryId: state.currentFactory?.id || '' 
                                                             });
+                                                            if (isEquityAccount) {
+                                                                // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: baseAmount, 
+                                                                    credit: 0, 
+                                                                    narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            } else {
+                                                                // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: baseAmount, 
+                                                                    credit: 0, 
+                                                                    narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            }
+                                                        } else {
+                                                            // ASSET or CUSTOMER: Debit account/partner (increases asset), Credit Discrepancy
+                                                            entries.push({ 
+                                                                date: bdDate, 
+                                                                transactionId: voucherNo, 
+                                                                transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                accountId: entityId, 
+                                                                accountName: entityName, 
+                                                                currency, 
+                                                                exchangeRate, 
+                                                                fcyAmount, 
+                                                                debit: baseAmount, 
+                                                                credit: 0, 
+                                                                narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                factoryId: state.currentFactory?.id || '' 
+                                                            });
+                                                            if (isEquityAccount) {
+                                                                // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: baseAmount, 
+                                                                    credit: 0, 
+                                                                    narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            } else {
+                                                                // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: 0, 
+                                                                    credit: baseAmount, 
+                                                                    narration: `Balance Increase: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            }
                                                         }
                                                     } else {
-                                                        // Decrease: Credit account/partner (decreases asset or increases liability), Debit Discrepancy
-                                                        // When we decrease an asset, we need to decrease equity (debit) or decrease liability (debit) to balance
-                                                        entries.push({ 
-                                                            date: bdDate, 
-                                                            transactionId: voucherNo, 
-                                                            transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                            accountId: entityId, 
-                                                            accountName: entityName, 
-                                                            currency, 
-                                                            exchangeRate, 
-                                                            fcyAmount, 
-                                                            debit: 0, 
-                                                            credit: baseAmount, 
-                                                            narration: `Balance Decrease: ${entityName} - ${reason}`, 
-                                                            factoryId: state.currentFactory?.id || '' 
-                                                        });
-                                                        if (isEquityAccount) {
-                                                            // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                        // DECREASE logic:
+                                                        // For ASSETS: Credit asset (decreases), Debit Discrepancy
+                                                        // For LIABILITIES: Debit liability (decreases), Credit Discrepancy (increases discrepancy)
+                                                        // For PARTNERS (Customers): Credit partner (decreases asset), Debit Discrepancy
+                                                        // For PARTNERS (Suppliers): Debit partner (decreases liability), Credit Discrepancy
+                                                        
+                                                        if (isLiabilityEntity) {
+                                                            // LIABILITY: Debit liability account (decreases liability), Credit Discrepancy (increases discrepancy)
                                                             entries.push({ 
                                                                 date: bdDate, 
                                                                 transactionId: voucherNo, 
                                                                 transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                                accountId: discrepancyAccount.id, 
-                                                                accountName: discrepancyAccount.name, 
+                                                                accountId: entityId, 
+                                                                accountName: entityName, 
                                                                 currency, 
                                                                 exchangeRate, 
                                                                 fcyAmount, 
@@ -4764,22 +4861,88 @@ export const Accounting: React.FC = () => {
                                                                 narration: `Balance Decrease: ${entityName} - ${reason}`, 
                                                                 factoryId: state.currentFactory?.id || '' 
                                                             });
+                                                            if (isEquityAccount) {
+                                                                // If Discrepancy is EQUITY: Credit Discrepancy (increases equity) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: 0, 
+                                                                    credit: baseAmount, 
+                                                                    narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            } else {
+                                                                // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: 0, 
+                                                                    credit: baseAmount, 
+                                                                    narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            }
                                                         } else {
-                                                            // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                                                            // ASSET or CUSTOMER: Credit account/partner (decreases asset), Debit Discrepancy
                                                             entries.push({ 
                                                                 date: bdDate, 
                                                                 transactionId: voucherNo, 
                                                                 transactionType: TransactionType.BALANCING_DISCREPANCY, 
-                                                                accountId: discrepancyAccount.id, 
-                                                                accountName: discrepancyAccount.name, 
+                                                                accountId: entityId, 
+                                                                accountName: entityName, 
                                                                 currency, 
                                                                 exchangeRate, 
                                                                 fcyAmount, 
-                                                                debit: baseAmount, 
-                                                                credit: 0, 
+                                                                debit: 0, 
+                                                                credit: baseAmount, 
                                                                 narration: `Balance Decrease: ${entityName} - ${reason}`, 
                                                                 factoryId: state.currentFactory?.id || '' 
                                                             });
+                                                            if (isEquityAccount) {
+                                                                // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: baseAmount, 
+                                                                    credit: 0, 
+                                                                    narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            } else {
+                                                                // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
+                                                                entries.push({ 
+                                                                    date: bdDate, 
+                                                                    transactionId: voucherNo, 
+                                                                    transactionType: TransactionType.BALANCING_DISCREPANCY, 
+                                                                    accountId: discrepancyAccount.id, 
+                                                                    accountName: discrepancyAccount.name, 
+                                                                    currency, 
+                                                                    exchangeRate, 
+                                                                    fcyAmount, 
+                                                                    debit: baseAmount, 
+                                                                    credit: 0, 
+                                                                    narration: `Balance Decrease: ${entityName} - ${reason}`, 
+                                                                    factoryId: state.currentFactory?.id || '' 
+                                                                });
+                                                            }
                                                         }
                                                     }
 

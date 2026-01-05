@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
 import { useData } from '../context/DataContext';
 import { Plus, Trash2, Edit2, Search, ChevronDown, ChevronUp, Upload, FileSpreadsheet, Users, Building, Package, CreditCard, Briefcase, Calendar, Box, Layers, Tag, Grid, X, Download } from 'lucide-react';
@@ -26,6 +26,7 @@ export interface FieldDef {
     readOnly?: boolean; 
     compute?: (formData: any, allData: any[]) => any; 
     hidden?: (formData: any) => boolean;
+    disabled?: boolean | ((formData: any) => boolean); // Support disabled condition
 }
 
 export interface ColumnDef {
@@ -271,16 +272,24 @@ export const GenericForm: React.FC<{
                 const isHidden = field.hidden ? field.hidden(formData) : false;
                 if (isHidden) return null;
 
+                // Calculate options - this will re-run on every render when formData changes
+                // IMPORTANT: Options function receives (formData, allData) - formData first, then data array
                 const resolvedOptions = typeof field.options === 'function' 
-                    ? field.options(data, formData) 
+                    ? field.options(formData, data) 
                     : field.options;
                 
                 // Map options to {id, name} for EntitySelector
-                const entityOptions = resolvedOptions?.map(opt => 
-                    typeof opt === 'string' 
-                        ? { id: opt, name: opt } 
-                        : { id: String(opt.value), name: opt.label }
-                );
+                // Filter out any info-only options (value === '__info__')
+                const entityOptions = resolvedOptions
+                    ?.filter(opt => {
+                        if (typeof opt === 'string') return true;
+                        return opt.value !== '__info__';
+                    })
+                    ?.map(opt => 
+                        typeof opt === 'string' 
+                            ? { id: opt, name: opt } 
+                            : { id: String(opt.value), name: opt.label }
+                    );
 
                 return (
                     <div key={field.name}>
@@ -289,11 +298,14 @@ export const GenericForm: React.FC<{
                         </label>
                         {field.type === 'select' && entityOptions ? (
                             <EntitySelector 
+                                key={`${field.name}-${JSON.stringify(formData.type)}-${entityOptions.length}`} // Force re-render when type or options change
                                 entities={entityOptions}
                                 selectedId={String(formData[field.name] || '')}
                                 onSelect={(id) => handleChange(field.name, id)}
-                                placeholder={`Select ${field.label}...`}
-                                disabled={field.readOnly}
+                                placeholder={field.name === 'parentAccountId' && !formData.type 
+                                    ? '⚠️ Select Type first to see parent accounts' 
+                                    : `Select ${field.label}...`}
+                                disabled={field.readOnly || (typeof field.disabled === 'function' ? field.disabled(formData) : field.disabled || false)}
                             />
                         ) : (
                             <input
@@ -328,6 +340,21 @@ export const GenericForm: React.FC<{
                         {/* Show hint for Account Type = LIABILITY in Chart of Accounts */}
                         {field.name === 'type' && formData[field.name] === 'LIABILITY' && config.entityKey === 'accounts' && (
                             <p className="text-[10px] text-red-600 mt-1">2030-2099: AVAILABLE (70 codes) Reserved for Other Payables</p>
+                        )}
+                        {/* Show hint for Parent Account field */}
+                        {field.name === 'parentAccountId' && config.entityKey === 'accounts' && formData.type && (
+                            <p className="text-[10px] text-slate-500 mt-1">
+                                💡 <strong>Creating a child account?</strong> Select a parent account from the list above, or choose "(None - Top Level Account)" to create a parent account.
+                                {(() => {
+                                    const sameTypeAccounts = data.filter((a: any) => 
+                                        a && a.type === formData.type && a.id !== formData.id && (!a.parentAccountId || a.parentAccountId === '')
+                                    );
+                                    if (sameTypeAccounts.length === 0) {
+                                        return ' No parent accounts of this type exist yet. Create a parent account first (leave Parent Account as "None"), then create child accounts.';
+                                    }
+                                    return '';
+                                })()}
+                            </p>
                         )}
                     </div>
                 );
@@ -1231,16 +1258,47 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 label: 'Parent Account (Optional - for grouping)', 
                 type: 'select', 
                 options: (formData, allData) => {
+                    // Check if type is selected (handle both string and enum values)
+                    // Debug: Log to see what we're getting
+                    console.log('🔍 Parent Account Options - formData:', formData, 'type:', formData?.type, 'hasType:', !!formData?.type);
+                    
+                    const accountType = formData?.type;
+                    const hasType = accountType && accountType !== '' && accountType !== null && accountType !== undefined;
+                    
+                    // If no type selected, show hint message
+                    if (!hasType) {
+                        console.log('⚠️ No type selected, showing hint message');
+                        return [{ label: '⚠️ Select Type first to see parent accounts', value: '' }];
+                    }
+                    
+                    console.log('✅ Type selected:', accountType, 'proceeding to filter accounts');
+                    
+                    // Always include "(None - Top Level Account)" as first option
+                    const baseOptions = [{ label: '(None - Top Level Account)', value: '' }];
+                    
                     // Filter accounts by same type and factory, exclude current account (if editing)
-                    const sameTypeAccounts = allData.filter((a: any) => 
-                        a.type === formData.type && 
-                        a.id !== formData.id &&
-                        !a.parentAccountId // Only show accounts that are not already children
-                    );
-                    return [{ label: '(None - Top Level Account)', value: '' }, ...sameTypeAccounts.map((a: any) => ({ label: `${a.code} - ${a.name}`, value: a.id }))];
+                    const sameTypeAccounts = allData.filter((a: any) => {
+                        if (!a) return false;
+                        // Compare types (handle both string and enum)
+                        const aType = a.type;
+                        const typeMatches = aType === accountType || String(aType) === String(accountType);
+                        return typeMatches && 
+                               a.id !== formData.id &&
+                               (!a.parentAccountId || a.parentAccountId === ''); // Only show accounts that are not already children
+                    });
+                    
+                    // Map to options format
+                    const parentOptions = sameTypeAccounts.map((a: any) => ({ 
+                        label: `${a.code} - ${a.name}`, 
+                        value: a.id 
+                    }));
+                    
+                    // Return options (even if empty, user can still select "None")
+                    return [...baseOptions, ...parentOptions];
                 },
                 required: false,
-                hidden: (formData) => !formData.type // Hide until type is selected
+                hidden: false, // Always show the field
+                disabled: (formData) => !formData || !formData.type // Disable until type is selected
             },
             { 
                 name: 'currency', 

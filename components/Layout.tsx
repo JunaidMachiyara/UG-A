@@ -363,9 +363,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                                             {factories.map(factory => (
                                                 <button
                                                     key={factory.id}
-                                                    onClick={() => {
-                                                        switchFactory(factory.id);
+                                                    onClick={async () => {
+                                                        await switchFactory(factory.id);
                                                         setShowHeaderFactorySwitcher(false);
+                                                        // Auto-refresh the app when factory changes
+                                                        setTimeout(() => {
+                                                            window.location.reload();
+                                                        }, 100);
                                                     }}
                                                     className={`w-full text-left px-3 py-2 rounded-md hover:bg-indigo-50 transition-colors ${
                                                         factory.id === currentFactory.id ? 'bg-indigo-100 font-semibold' : ''

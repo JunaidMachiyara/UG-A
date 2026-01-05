@@ -797,7 +797,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <AlertTriangle className="text-red-600" size={24} />
                     <h3 className="text-lg font-bold text-red-900">Factory Reset Utility</h3>
-                </div>
+                        </div>
                 
                 <div className="bg-white border border-red-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-red-800 mb-2">
@@ -809,7 +809,7 @@ export const AdminModule: React.FC = () => {
                         <li>Reset Cash and Bank accounts to $0</li>
                         <li>Reset Customer and Supplier balances to $0</li>
                         <li>Reset Stock (Items and Original Stock) to 0</li>
-                    </ul>
+                            </ul>
                     <p className="text-xs text-red-600 mt-3 font-semibold">
                         This action CANNOT be undone. Only proceed if you are absolutely certain.
                     </p>
@@ -824,7 +824,7 @@ export const AdminModule: React.FC = () => {
                     <Database className="text-blue-600" size={24} />
                     <h3 className="text-lg font-bold text-blue-900">Data Backup & Restore Utility</h3>
                 </div>
-                
+
                 <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-blue-800 mb-2">
                         <strong>📦 Backup & Restore:</strong> Create a complete backup of all factory data or restore from a previous backup.
@@ -834,10 +834,10 @@ export const AdminModule: React.FC = () => {
                         <li>Restore will replace all existing data for the selected factory</li>
                         <li>Backups are factory-specific and cannot be restored to a different factory</li>
                     </ul>
-                </div>
+                    </div>
 
                 <DataBackupRestoreUtility />
-            </div>
+                    </div>
 
             {/* FIX: Recalculate Supplier Balances from Ledger Entries */}
             <div className="bg-green-50 border-2 border-green-300 rounded-xl p-6 mt-8">
@@ -845,7 +845,7 @@ export const AdminModule: React.FC = () => {
                     <RefreshCw className="text-green-600" size={24} />
                     <h3 className="text-lg font-bold text-green-900">✅ FIX: Recalculate Supplier Balances from Ledger</h3>
                 </div>
-                
+
                 <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-green-800 mb-2 font-bold">
                         This will recalculate ALL supplier balances from ledger entries and ensure they're stored correctly.
@@ -853,15 +853,15 @@ export const AdminModule: React.FC = () => {
                     <p className="text-sm text-green-700 mb-2">
                         <strong>Key Fix:</strong> Supplier balances should be NEGATIVE when we owe them (credit balance in ledger).
                         This utility uses the EXACT same calculation logic as the system's reducer.
-                    </p>
-                </div>
+                        </p>
+                    </div>
 
-                <button
-                    onClick={async () => {
+                    <button
+                        onClick={async () => {
                         if (!currentFactory?.id) {
                             alert('Please select a factory first');
-                            return;
-                        }
+                                return;
+                            }
 
                         const confirmFix = confirm(
                             'This will recalculate ALL supplier balances from ledger entries.\n\n' +
@@ -961,7 +961,7 @@ export const AdminModule: React.FC = () => {
                                 
                                 setTimeout(() => window.location.reload(), 2000);
                             }
-                        } catch (error: any) {
+                            } catch (error: any) {
                             alert(`❌ Error fixing balances: ${error.message}`);
                             console.error('Error fixing supplier balances:', error);
                         }
@@ -969,7 +969,7 @@ export const AdminModule: React.FC = () => {
                     className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold"
                 >
                     ✅ Fix All Supplier Balances from Ledger
-                </button>
+                    </button>
             </div>
 
             {/* DIAGNOSE: Check Supplier Balances in Balance Sheet */}
@@ -977,7 +977,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <AlertTriangle className="text-yellow-600" size={24} />
                     <h3 className="text-lg font-bold text-yellow-900">🔍 Diagnose: Supplier Balances in Balance Sheet</h3>
-                </div>
+                    </div>
                 
                 <div className="bg-white border border-yellow-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-yellow-800 mb-2">
@@ -985,7 +985,7 @@ export const AdminModule: React.FC = () => {
                     </p>
                 </div>
 
-                <button
+                    <button
                     onClick={() => {
                         const supplierTypes = [
                             PartnerType.SUPPLIER,
@@ -1031,16 +1031,16 @@ export const AdminModule: React.FC = () => {
                     className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-semibold mb-3"
                 >
                     🔍 Check Supplier Balances
-                </button>
+                    </button>
             </div>
 
             {/* EMERGENCY: Fix Partner Balances - Use System's Own Calculation */}
             <div className="bg-red-50 border-2 border-red-300 rounded-xl p-6 mt-8">
                 <div className="flex items-center gap-3 mb-4">
-                    <AlertTriangle className="text-red-600" size={24} />
+                        <AlertTriangle className="text-red-600" size={24} />
                     <h3 className="text-lg font-bold text-red-900">⚠️ EMERGENCY FIX: Restore Partner Balances</h3>
                 </div>
-                
+
                 <div className="bg-white border border-red-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-red-800 mb-2 font-bold">
                         If balances were incorrectly updated, use one of these options:
@@ -1050,10 +1050,10 @@ export const AdminModule: React.FC = () => {
                         <li><strong>If no backup:</strong> Refresh the page (F5) to reload from Firebase, then manually fix balances in Setup &gt; Business Partners</li>
                         <li><strong>Or use the button below:</strong> This will trigger the system&apos;s own balance calculation (same as when ledger loads)</li>
                     </ol>
-                </div>
+                            </div>
 
                 <div className="flex gap-3">
-                    <button
+                                    <button
                         onClick={() => {
                             alert('Please refresh the page (F5 or Ctrl+R) to reload all data from Firebase.\n\nAfter refresh, you may need to manually correct partner balances in Setup > Business Partners.');
                             window.location.reload();
@@ -1061,14 +1061,14 @@ export const AdminModule: React.FC = () => {
                         className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold"
                     >
                         🔄 Refresh Page (Reload from Firebase)
-                    </button>
+                                    </button>
                     
-                    <button
-                        onClick={async () => {
-                            if (!currentFactory?.id) {
+                                    <button
+                                        onClick={async () => {
+                                                if (!currentFactory?.id) {
                                 alert('Please select a factory first');
-                                return;
-                            }
+                                                    return;
+                                                }
 
                             const confirmFix = confirm(
                                 'This will trigger the system to recalculate partner balances using the EXACT same logic as when ledger entries load.\n\n' +
@@ -1086,7 +1086,7 @@ export const AdminModule: React.FC = () => {
                                       'If balances are still wrong after refresh, you may need to manually fix them in Setup > Business Partners.');
                                 
                                 window.location.reload();
-                            } catch (error: any) {
+                                            } catch (error: any) {
                                 alert(`❌ Error: ${error.message}`);
                                 console.error('Error:', error);
                             }
@@ -1094,7 +1094,7 @@ export const AdminModule: React.FC = () => {
                         className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold"
                     >
                         🔧 Trigger System Recalculation
-                    </button>
+                                    </button>
                 </div>
             </div>
 
@@ -1103,7 +1103,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <AlertTriangle className="text-gray-600" size={24} />
                     <h3 className="text-lg font-bold text-gray-700">⚠️ DISABLED: Recalculate Partner Balances</h3>
-                </div>
+                    </div>
                 
                 <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-red-800 mb-2 font-bold">
@@ -1111,9 +1111,9 @@ export const AdminModule: React.FC = () => {
                     </p>
                     <p className="text-sm text-gray-700">
                         Please use the "Reload All Partners from Firebase" utility above instead.
-                    </p>
+                        </p>
+                    </div>
                 </div>
-            </div>
 
             {/* Find and Fix Orphaned Purchase Ledger Entries */}
             <div className="bg-purple-50 border-2 border-purple-300 rounded-xl p-6 mt-8">
@@ -1126,11 +1126,11 @@ export const AdminModule: React.FC = () => {
                     <p className="text-sm text-purple-800 mb-2">
                         This utility finds purchase ledger entries (PI-*) where only one side exists (orphaned entries).
                         This can happen if a purchase was deleted but only one ledger entry was removed.
-                    </p>
-                </div>
+                        </p>
+                    </div>
 
-                <button
-                    onClick={async () => {
+                    <button
+                        onClick={async () => {
                         try {
                             // Find all PI- transactions
                             const piTransactions = new Set<string>();
@@ -1193,15 +1193,15 @@ export const AdminModule: React.FC = () => {
                                         const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
                                         await Promise.all(deletePromises);
                                         deletedCount += snapshot.docs.length;
-                                    } catch (error: any) {
+                                                    } catch (error: any) {
                                         console.error(`Error deleting entry ${entry.transactionId}:`, error);
                                     }
                                 }
 
                                 alert(`✅ Deleted ${deletedCount} orphaned purchase ledger entry/entries.\n\nPlease refresh the page to see updated Balance Sheet.`);
                                 setTimeout(() => window.location.reload(), 1000);
-                            }
-                        } catch (error: any) {
+                                                }
+                                            } catch (error: any) {
                             alert(`❌ Error: ${error.message}`);
                             console.error('Error finding orphaned entries:', error);
                         }
@@ -1209,7 +1209,7 @@ export const AdminModule: React.FC = () => {
                     className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-semibold"
                 >
                     Find & Delete Orphaned Purchase Entries
-                </button>
+                    </button>
             </div>
 
             {/* Delete Partners by Type Utility Section */}
@@ -1218,7 +1218,7 @@ export const AdminModule: React.FC = () => {
                     <Users className="text-orange-600" size={24} />
                     <h3 className="text-lg font-bold text-orange-900">Delete Partners by Type</h3>
                 </div>
-                
+
                 <div className="bg-white border border-orange-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-orange-800 mb-2">
                         <strong>⚠️ DESTRUCTIVE OPERATION:</strong> This utility will permanently delete all partners of the selected type for the selected factory:
@@ -1227,14 +1227,14 @@ export const AdminModule: React.FC = () => {
                         <li>Delete ALL partners of the selected type (Supplier, Customer, Vendor, or All Types)</li>
                         <li>Delete associated opening balance ledger entries</li>
                         <li>This action CANNOT be undone</li>
-                    </ul>
+                            </ul>
                     <p className="text-xs text-orange-600 mt-3 font-semibold">
                         Only proceed if you are absolutely certain. Make sure to backup your data first.
-                    </p>
-                </div>
+                        </p>
+                    </div>
 
                 <DeletePartnersByTypeUtility />
-            </div>
+                    </div>
                 </>
             )}
         </div>
@@ -1298,7 +1298,7 @@ const FactoryResetUtility: React.FC = () => {
         const accountsSnapshot = await getDocs(accountsQuery);
         
         let updated = 0;
-        const batch = writeBatch(db);
+                                const batch = writeBatch(db);
         
         accountsSnapshot.docs.forEach(doc => {
             const account = doc.data();
@@ -1310,7 +1310,7 @@ const FactoryResetUtility: React.FC = () => {
         });
         
         if (updated > 0) {
-            await batch.commit();
+                                        await batch.commit();
             addLog('success', `✅ Reset ${updated} Cash/Bank account balances to $0.`);
         } else {
             addLog('info', 'No Cash/Bank accounts found to reset.');
@@ -1319,7 +1319,7 @@ const FactoryResetUtility: React.FC = () => {
         // Reset Partner balances
         addLog('info', 'Resetting partner balances...');
         const partnersQuery = query(collection(db, 'partners'), where('factoryId', '==', factoryId));
-        const partnersSnapshot = await getDocs(partnersQuery);
+                                const partnersSnapshot = await getDocs(partnersQuery);
         
         updated = 0;
         const partnerBatch = writeBatch(db);
@@ -1387,18 +1387,18 @@ const FactoryResetUtility: React.FC = () => {
 
         if (!isArmed) {
             alert('Please ARM the utility first by toggling the switch.');
-            return;
-        }
+                                return;
+                            }
 
         const factory = factories.find(f => f.id === selectedFactoryId);
         if (!factory) {
             alert('Factory not found.');
-            return;
-        }
+                                return;
+                            }
 
         if (!confirm(`⚠️ FINAL CONFIRMATION:\n\nYou are about to DELETE ALL DATA for factory:\n"${factory.name}"\n\nThis action CANNOT be undone!\n\nClick OK to proceed or Cancel to abort.`)) {
-            return;
-        }
+                                return;
+                            }
 
         setIsProcessing(true);
         setLogs([]);
@@ -1433,7 +1433,7 @@ const FactoryResetUtility: React.FC = () => {
             setIsArmed(false);
             setIsProcessing(false);
 
-        } catch (error: any) {
+                            } catch (error: any) {
             addLog('error', `❌ Error during reset: ${error?.message || 'Unknown error'}`);
             console.error('Factory Reset Error:', error);
             setIsProcessing(false);
@@ -1484,7 +1484,7 @@ const FactoryResetUtility: React.FC = () => {
                         placeholder="Enter PIN (7860)"
                         disabled={isProcessing || !selectedFactoryId}
                     />
-                </div>
+                            </div>
 
                 <div className="flex items-center justify-between bg-white border border-slate-300 rounded-lg p-4">
                     <div>
@@ -1494,7 +1494,7 @@ const FactoryResetUtility: React.FC = () => {
                         <p className="text-xs text-slate-500">
                             Toggle this switch to enable the Execute button
                         </p>
-                    </div>
+                                </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                         <input
                             type="checkbox"
@@ -1549,11 +1549,11 @@ const FactoryResetUtility: React.FC = () => {
                             }`}
                         >
                             <span className="text-slate-500">[{log.time}]</span> {log.message}
-                        </div>
+                    </div>
                     ))}
                 </div>
             )}
-        </div>
+                    </div>
     );
 };
 
@@ -1615,10 +1615,10 @@ const DeletePartnersByTypeUtility: React.FC = () => {
             if (allEntries.length > 0) {
                 // Delete in batches
                 for (let i = 0; i < allEntries.length; i += BATCH_SIZE) {
-                    const batch = writeBatch(db);
+                                const batch = writeBatch(db);
                     const batchEntries = allEntries.slice(i, i + BATCH_SIZE);
                     batchEntries.forEach(doc => batch.delete(doc.ref));
-                    await batch.commit();
+                                        await batch.commit();
                 }
                 return allEntries.length;
             }
@@ -1646,20 +1646,20 @@ const DeletePartnersByTypeUtility: React.FC = () => {
 
         if (pinCode !== SUPERVISOR_PIN) {
             addLog('error', '❌ Invalid PIN code.');
-            return;
-        }
+                                return;
+                            }
 
         if (!isArmed) {
             addLog('error', '❌ Please arm the utility by toggling the switch.');
-            return;
-        }
+                                return;
+                            }
 
         const partnersCount = getPartnersCount();
         if (partnersCount === 0) {
             const typeLabel = selectedPartnerType === 'ALL' ? 'partners' : `${selectedPartnerType} partners`;
             addLog('warning', `⚠️ No ${typeLabel} found for the selected factory.`);
-            return;
-        }
+                                return;
+                            }
 
         setIsProcessing(true);
         setLogs([]);
@@ -1686,7 +1686,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
 
             // Delete partners in batches
             for (let i = 0; i < partnersToDelete.length; i += BATCH_SIZE) {
-                const batch = writeBatch(db);
+                                const batch = writeBatch(db);
                 const batchPartners = partnersToDelete.slice(i, i + BATCH_SIZE);
                 
                 for (const partner of batchPartners) {
@@ -1711,7 +1711,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                 }
 
                 try {
-                    await batch.commit();
+                                    await batch.commit();
                     addLog('success', `✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}: Deleted ${batchPartners.length} partner(s)`);
                 } catch (error: any) {
                     const errorMsg = `Error committing batch ${Math.floor(i / BATCH_SIZE) + 1}: ${error?.message || 'Unknown error'}`;
@@ -1773,7 +1773,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                         <option value="" disabled>No factories available</option>
                     )}
                 </select>
-            </div>
+                            </div>
 
             {/* Partner Type Selector */}
             <div>
@@ -1807,7 +1807,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
             </div>
 
             {/* Security PIN */}
-            <div>
+                    <div>
                 <label className="block text-sm font-bold text-slate-700 mb-2">
                     Security PIN <span className="text-red-500">*</span>
                 </label>
@@ -1822,7 +1822,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                     }}
                     disabled={!selectedFactoryId || !selectedPartnerType || isProcessing}
                 />
-            </div>
+                </div>
 
             {/* Arming Toggle */}
             <div className="flex items-center gap-3 bg-slate-100 p-4 rounded-lg">
@@ -1838,10 +1838,10 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                         Arm Utility (Enable Delete Button)
                     </span>
                 </label>
-            </div>
+                    </div>
 
             {/* Execute Button */}
-            <button
+                    <button
                 onClick={executeDelete}
                 disabled={!isReady}
                 className={`w-full py-4 rounded-lg font-bold text-lg transition-all ${
@@ -1860,15 +1860,15 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                         <Trash2 size={20} />
                         Delete {partnersCount > 0 ? `${partnersCount} ` : ''}{selectedPartnerType === 'ALL' ? 'All Partners' : selectedPartnerType || 'Partners'}
                     </span>
-                )}
-            </button>
+                        )}
+                    </button>
 
             {/* Terminal/Logging UI */}
             {logs.length > 0 && (
                 <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-sm max-h-96 overflow-y-auto">
                     <div className="flex items-center gap-2 mb-2 text-slate-400 text-xs">
                         <span>Terminal Output</span>
-                    </div>
+                            </div>
                     {logs.map((log, idx) => (
                         <div
                             key={idx}
@@ -1885,9 +1885,9 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                             <span className="text-slate-500">[{log.time}]</span> {log.message}
                         </div>
                     ))}
-                </div>
-            )}
-        </div>
+                                </div>
+                            )}
+                        </div>
     );
 };
 
@@ -1943,14 +1943,14 @@ const DataBackupRestoreUtility: React.FC = () => {
     const backupFactoryData = async () => {
         if (!selectedFactoryId) {
             alert('Please select a factory to backup.');
-            return;
-        }
+                                return;
+                            }
 
         const factory = factories.find(f => f.id === selectedFactoryId);
         if (!factory) {
             alert('Factory not found.');
-            return;
-        }
+                                return;
+                            }
 
         setIsBackingUp(true);
         setLogs([]);
@@ -1978,7 +1978,7 @@ const DataBackupRestoreUtility: React.FC = () => {
                     }));
                     backupData.collections[coll.name] = data;
                     addLog('success', `✅ Backed up ${data.length} ${coll.description}`);
-                } catch (error: any) {
+                                    } catch (error: any) {
                     addLog('error', `❌ Error backing up ${coll.description}: ${error?.message || 'Unknown error'}`);
                 }
             }
@@ -1999,7 +1999,7 @@ const DataBackupRestoreUtility: React.FC = () => {
             addLog('info', `File downloaded: ${link.download}`);
             setIsBackingUp(false);
 
-        } catch (error: any) {
+                            } catch (error: any) {
             addLog('error', `❌ Backup failed: ${error?.message || 'Unknown error'}`);
             console.error('Backup Error:', error);
             setIsBackingUp(false);
@@ -2010,19 +2010,19 @@ const DataBackupRestoreUtility: React.FC = () => {
     const restoreFactoryData = async () => {
         if (!selectedFactoryId) {
             addLog('error', '❌ Please select a factory to restore.');
-            return;
-        }
+                                return;
+                            }
 
         if (!backupFile) {
             addLog('error', '❌ Please select a backup file to restore.');
-            return;
-        }
+                                return;
+                            }
 
         const factory = factories.find(f => f.id === selectedFactoryId);
         if (!factory) {
             addLog('error', '❌ Factory not found.');
-            return;
-        }
+                                return;
+                            }
 
         // Use in-page confirmation instead of browser confirm
         addLog('warning', `⚠️ WARNING: This will REPLACE ALL existing data for factory "${factory.name}".`);
@@ -2057,7 +2057,7 @@ const DataBackupRestoreUtility: React.FC = () => {
             addLog('info', `Backup Date: ${backupData.backupDate || 'Unknown'}`);
             addLog('info', `Backup Factory: ${backupData.factoryName || backupData.factoryId}`);
 
-            const BATCH_SIZE = 500;
+                                    const BATCH_SIZE = 500;
             let totalRestored = 0;
 
             // Restore each collection
@@ -2122,7 +2122,7 @@ const DataBackupRestoreUtility: React.FC = () => {
             setIsRestoring(false);
             setBackupFile(null);
 
-        } catch (error: any) {
+                            } catch (error: any) {
             addLog('error', `❌ Restore failed: ${error?.message || 'Unknown error'}`);
             console.error('Restore Error:', error);
             setIsRestoring(false);
@@ -2190,7 +2190,7 @@ const DataBackupRestoreUtility: React.FC = () => {
                         <span className="flex items-center justify-center gap-2">
                             <Download size={18} />
                             Create Backup
-                        </span>
+                                </span>
                     )}
                 </button>
             </div>
@@ -2233,8 +2233,8 @@ const DataBackupRestoreUtility: React.FC = () => {
                             {!backupFile && <span className="ml-2">• Select a backup file</span>}
                             <div className="mt-1 text-xs text-slate-600">
                                 Debug: Factory={selectedFactoryId ? '✓' : '✗'}, File={backupFile ? '✓' : '✗'}
-                            </div>
-                        </div>
+                </div>
+                    </div>
                     )}
                     <button
                         onClick={restoreFactoryData}
@@ -2278,9 +2278,9 @@ const DataBackupRestoreUtility: React.FC = () => {
                             }`}
                         >
                             <span className="text-slate-500">[{log.time}]</span> {log.message}
-                        </div>
-                    ))}
                 </div>
+                    ))}
+            </div>
             )}
         </div>
     );
