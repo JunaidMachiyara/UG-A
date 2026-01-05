@@ -1227,6 +1227,22 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
             },
             { name: 'name', label: 'Account Name', type: 'text', required: true },
             { 
+                name: 'parentAccountId', 
+                label: 'Parent Account (Optional - for grouping)', 
+                type: 'select', 
+                options: (formData, allData) => {
+                    // Filter accounts by same type and factory, exclude current account (if editing)
+                    const sameTypeAccounts = allData.filter((a: any) => 
+                        a.type === formData.type && 
+                        a.id !== formData.id &&
+                        !a.parentAccountId // Only show accounts that are not already children
+                    );
+                    return [{ label: '(None - Top Level Account)', value: '' }, ...sameTypeAccounts.map((a: any) => ({ label: `${a.code} - ${a.name}`, value: a.id }))];
+                },
+                required: false,
+                hidden: (formData) => !formData.type // Hide until type is selected
+            },
+            { 
                 name: 'currency', 
                 label: 'Currency (for Bank/Cash accounts)', 
                 type: 'select', 

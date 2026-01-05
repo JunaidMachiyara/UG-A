@@ -1224,7 +1224,7 @@ export const AdminModule: React.FC = () => {
                         <strong>⚠️ DESTRUCTIVE OPERATION:</strong> This utility will permanently delete all partners of the selected type for the selected factory:
                     </p>
                     <ul className="list-disc list-inside text-sm text-orange-700 space-y-1 ml-4">
-                        <li>Delete ALL partners of the selected type (Supplier, Customer, or Vendor)</li>
+                        <li>Delete ALL partners of the selected type (Supplier, Customer, Vendor, or All Types)</li>
                         <li>Delete associated opening balance ledger entries</li>
                         <li>This action CANNOT be undone</li>
                     </ul>
@@ -1562,7 +1562,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
     const { state } = useData();
     const { currentFactory, factories } = useAuth();
     const [selectedFactoryId, setSelectedFactoryId] = useState<string>(currentFactory?.id || '');
-    const [selectedPartnerType, setSelectedPartnerType] = useState<PartnerType | ''>('');
+    const [selectedPartnerType, setSelectedPartnerType] = useState<PartnerType | 'ALL' | ''>('');
     const [pinCode, setPinCode] = useState('');
     const [isArmed, setIsArmed] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -1580,6 +1580,9 @@ const DeletePartnersByTypeUtility: React.FC = () => {
     // Get partners count for selected type and factory
     const getPartnersCount = () => {
         if (!selectedFactoryId || !selectedPartnerType) return 0;
+        if (selectedPartnerType === 'ALL') {
+            return state.partners.filter(p => p.factoryId === selectedFactoryId).length;
+        }
         return state.partners.filter(p => 
             p.factoryId === selectedFactoryId && p.type === selectedPartnerType
         ).length;
@@ -1636,7 +1639,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
             return;
         }
 
-        if (!selectedPartnerType) {
+        if (!selectedPartnerType || selectedPartnerType === '') {
             addLog('error', '❌ Please select a partner type.');
             return;
         }
@@ -1653,13 +1656,15 @@ const DeletePartnersByTypeUtility: React.FC = () => {
 
         const partnersCount = getPartnersCount();
         if (partnersCount === 0) {
-            addLog('warning', `⚠️ No ${selectedPartnerType} partners found for the selected factory.`);
+            const typeLabel = selectedPartnerType === 'ALL' ? 'partners' : `${selectedPartnerType} partners`;
+            addLog('warning', `⚠️ No ${typeLabel} found for the selected factory.`);
             return;
         }
 
         setIsProcessing(true);
         setLogs([]);
-        addLog('info', `🚀 Starting deletion of ${partnersCount} ${selectedPartnerType} partner(s)...`);
+        const typeLabel = selectedPartnerType === 'ALL' ? 'partner(s)' : `${selectedPartnerType} partner(s)`;
+        addLog('info', `🚀 Starting deletion of ${partnersCount} ${typeLabel}...`);
         addLog('warning', 'This is a destructive operation. All selected partners will be permanently deleted.');
 
         try {
@@ -1667,11 +1672,13 @@ const DeletePartnersByTypeUtility: React.FC = () => {
             const factoryName = factory?.name || selectedFactoryId;
 
             // Get all partners of the selected type for the selected factory
-            const partnersToDelete = state.partners.filter(p => 
-                p.factoryId === selectedFactoryId && p.type === selectedPartnerType
-            );
+            const partnersToDelete = selectedPartnerType === 'ALL'
+                ? state.partners.filter(p => p.factoryId === selectedFactoryId)
+                : state.partners.filter(p => 
+                    p.factoryId === selectedFactoryId && p.type === selectedPartnerType
+                );
 
-            addLog('info', `Found ${partnersToDelete.length} ${selectedPartnerType} partner(s) to delete.`);
+            addLog('info', `Found ${partnersToDelete.length} ${selectedPartnerType === 'ALL' ? 'partner(s)' : selectedPartnerType + ' partner(s)'} to delete.`);
 
             let deletedCount = 0;
             let deletedOpeningBalances = 0;
@@ -1714,7 +1721,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
             }
 
             addLog('success', `🎉 Deletion completed!`);
-            addLog('info', `✅ Deleted ${deletedCount} ${selectedPartnerType} partner(s)`);
+            addLog('info', `✅ Deleted ${deletedCount} ${selectedPartnerType === 'ALL' ? 'partner(s)' : selectedPartnerType + ' partner(s)'}`);
             if (deletedOpeningBalances > 0) {
                 addLog('info', `✅ Deleted ${deletedOpeningBalances} opening balance ledger entries`);
             }
@@ -1783,13 +1790,18 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                     disabled={!selectedFactoryId || isProcessing}
                 >
                     <option value="">-- Select Partner Type --</option>
+                    <option value="ALL">All Partners (All Types)</option>
                     <option value={PartnerType.SUPPLIER}>Supplier</option>
                     <option value={PartnerType.CUSTOMER}>Customer</option>
                     <option value={PartnerType.VENDOR}>Vendor</option>
+                    <option value={PartnerType.SUB_SUPPLIER}>Sub Supplier</option>
+                    <option value={PartnerType.FREIGHT_FORWARDER}>Freight Forwarder</option>
+                    <option value={PartnerType.CLEARING_AGENT}>Clearing Agent</option>
+                    <option value={PartnerType.COMMISSION_AGENT}>Commission Agent</option>
                 </select>
                 {selectedPartnerType && partnersCount > 0 && (
                     <p className="text-sm text-orange-700 mt-2 font-semibold">
-                        ⚠️ Found {partnersCount} {selectedPartnerType} partner(s) to delete
+                        ⚠️ Found {partnersCount} {selectedPartnerType === 'ALL' ? 'partner(s)' : selectedPartnerType + ' partner(s)'} to delete
                     </p>
                 )}
             </div>
@@ -1846,7 +1858,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                 ) : (
                     <span className="flex items-center justify-center gap-2">
                         <Trash2 size={20} />
-                        Delete {partnersCount > 0 ? `${partnersCount} ` : ''}{selectedPartnerType || 'Partners'}
+                        Delete {partnersCount > 0 ? `${partnersCount} ` : ''}{selectedPartnerType === 'ALL' ? 'All Partners' : selectedPartnerType || 'Partners'}
                     </span>
                 )}
             </button>

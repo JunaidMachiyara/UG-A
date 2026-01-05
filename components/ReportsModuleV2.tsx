@@ -1211,7 +1211,7 @@ const LedgerDetailModal: React.FC<{
     isOpen: boolean;
     onClose: () => void;
     title: string;
-    type: 'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome';
+    type: 'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome' | 'accountBreakdown';
     accountId?: string;
     state: any;
 }> = ({ isOpen, onClose, title, type, accountId, state }) => {
@@ -1289,6 +1289,17 @@ const LedgerDetailModal: React.FC<{
                 .filter((a: any) => a.type === AccountType.EXPENSE && (a.balance || 0) !== 0)
                 .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0), type: 'expense' }));
             return [...revenueAccounts, ...expenseAccounts].sort((a: any, b: any) => b.balance - a.balance);
+        }
+        if (type === 'accountBreakdown' && accountId) {
+            // Get child accounts for the parent account
+            const childAccounts = state.accounts
+                .filter((a: any) => a.parentAccountId === accountId)
+                .map((a: any) => ({ 
+                    name: `${a.code} - ${a.name}`, 
+                    balance: a.balance || 0 
+                }))
+                .sort((a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance));
+            return childAccounts;
         }
         return [];
     }, [type, state.partners, state.accounts]);
@@ -1400,12 +1411,57 @@ const BalanceSheet: React.FC = () => {
     const { state } = useData();
     const [modalOpen, setModalOpen] = useState(false);
     const [modalTitle, setModalTitle] = useState('');
-    const [modalType, setModalType] = useState<'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome'>('account');
+    const [modalType, setModalType] = useState<'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome' | 'accountBreakdown'>('account');
     const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
     
-    const assets = state.accounts.filter(a => a.type === AccountType.ASSET);
-    const liabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
-    const equity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+    // Helper function to aggregate parent-child accounts
+    const aggregateParentChildAccounts = (accounts: any[]) => {
+        // Separate parent and child accounts
+        // BACKWARD COMPATIBILITY: Existing accounts don't have parentAccountId field (undefined)
+        // Treat undefined, null, and empty string as "no parent" (top-level account)
+        const parentAccounts = accounts.filter(a => !a.parentAccountId || a.parentAccountId === '');
+        const childAccounts = accounts.filter(a => a.parentAccountId && a.parentAccountId !== '');
+        
+        // Create a map of parent ID to children
+        const parentToChildren = new Map<string, any[]>();
+        childAccounts.forEach(child => {
+            if (!parentToChildren.has(child.parentAccountId!)) {
+                parentToChildren.set(child.parentAccountId!, []);
+            }
+            parentToChildren.get(child.parentAccountId!)!.push(child);
+        });
+        
+        // Calculate aggregated totals for parents
+        const aggregatedAccounts = parentAccounts.map(parent => {
+            const children = parentToChildren.get(parent.id) || [];
+            const childrenTotal = children.reduce((sum, child) => sum + (child.balance || 0), 0);
+            const aggregatedBalance = (parent.balance || 0) + childrenTotal;
+            return {
+                ...parent,
+                balance: aggregatedBalance, // Use aggregated balance for display
+                hasChildren: children.length > 0,
+                childrenCount: children.length
+            };
+        });
+        
+        return {
+            displayAccounts: aggregatedAccounts,
+            parentToChildrenMap: parentToChildren
+        };
+    };
+    
+    const allAssets = state.accounts.filter(a => a.type === AccountType.ASSET);
+    const allLiabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
+    const allEquity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+    
+    // Aggregate parent-child accounts for each category
+    const assetsAggregated = aggregateParentChildAccounts(allAssets);
+    const liabilitiesAggregated = aggregateParentChildAccounts(allLiabilities);
+    const equityAggregated = aggregateParentChildAccounts(allEquity);
+    
+    const assets = assetsAggregated.displayAccounts;
+    const liabilities = liabilitiesAggregated.displayAccounts;
+    const equity = equityAggregated.displayAccounts;
     
     // DEBUG: Check for Discrepancy account in each category
     const discrepancyInAssets = assets.find(a => a.name.includes('Discrepancy') || a.code === '505');
@@ -1687,10 +1743,24 @@ const BalanceSheet: React.FC = () => {
     });
 
     const handleAccountClick = (accountId: string, accountName: string) => {
-        setModalTitle(accountName);
-        setModalType('account');
-        setSelectedAccountId(accountId);
-        setModalOpen(true);
+        // Check if this account has children (aggregated account)
+        const account = state.accounts.find(a => a.id === accountId);
+        const hasChildren = account && !account.parentAccountId && 
+            state.accounts.some(a => a.parentAccountId === accountId);
+        
+        if (hasChildren) {
+            // Show breakdown modal for parent account
+            setModalTitle(`${accountName} - Breakdown`);
+            setModalType('accountBreakdown');
+            setSelectedAccountId(accountId);
+            setModalOpen(true);
+        } else {
+            // Show regular account ledger
+            setModalTitle(accountName);
+            setModalType('account');
+            setSelectedAccountId(accountId);
+            setModalOpen(true);
+        }
     };
 
     const handleAggregatedClick = (title: string, type: 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome') => {

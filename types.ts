@@ -146,6 +146,7 @@ export interface Account {
     balance: number; // In USD (Base Currency)
     currency?: Currency; // For Bank/Cash accounts in foreign currency
     factoryId: string; // Factory assignment
+    parentAccountId?: string; // Optional - link to parent account for grouping/aggregation
 }
 
 export interface Partner {
