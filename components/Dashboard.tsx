@@ -529,8 +529,21 @@ export const Dashboard: React.FC = () => {
 
     // Enhanced Financial Metrics
     const metrics = useMemo(() => {
-        const cash = state.accounts.find(a => a.code === '1001')?.balance || 0;
-        const bank = state.accounts.find(a => a.code === '1010')?.balance || 0;
+        // CASH: Sum of all ASSET accounts whose name contains "cash" (case-insensitive)
+        const cash = state.accounts
+            .filter(a => 
+                a.type === AccountType.ASSET && 
+                (a.name || '').toLowerCase().includes('cash')
+            )
+            .reduce((sum, a) => sum + (a.balance || 0), 0);
+
+        // BANK: Sum of all ASSET accounts whose name contains "bank" (case-insensitive)
+        const bank = state.accounts
+            .filter(a => 
+                a.type === AccountType.ASSET && 
+                (a.name || '').toLowerCase().includes('bank')
+            )
+            .reduce((sum, a) => sum + (a.balance || 0), 0);
         
         // Accounts Receivable: Use same calculation as Balance Sheet - sum of positive customer balances (Debtors)
         // This matches the "Debtors (Accounts Receivable)" value from the Balance Sheet

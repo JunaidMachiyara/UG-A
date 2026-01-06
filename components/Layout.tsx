@@ -578,9 +578,39 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                         <div className="hidden md:block">{getStatusIndicator()}</div>
                         <div className="hidden lg:flex items-center gap-4">
                             <div className="h-4 w-px bg-slate-300"></div>
-                            <span className="text-xs md:text-sm text-slate-500">Cash: <span className="text-emerald-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Cash'))?.balance || 0).toLocaleString()}</span></span>
+                            {/* Cash account 1003 - show account name */}
+                            {(() => {
+                                const cash1003 = state.accounts.find(a => a.code === '1003');
+                                return (
+                                    <span className="text-xs md:text-sm text-slate-500">
+                                        {(cash1003?.name || 'Cash 1003') + ': '}
+                                        <span className="text-emerald-600 font-mono font-medium">
+                                            {(cash1003?.balance || 0).toLocaleString()}
+                                        </span>
+                                    </span>
+                                );
+                            })()}
                             <div className="h-4 w-px bg-slate-300"></div>
-                            <span className="text-xs md:text-sm text-slate-500">Bank: <span className="text-blue-600 font-mono font-medium">${(state.accounts.find(a=>a.name.includes('Bank'))?.balance || 0).toLocaleString()}</span></span>
+                            {/* Cash account 1002 - show account name */}
+                            {(() => {
+                                const cash1002 = state.accounts.find(a => a.code === '1002');
+                                return (
+                                    <span className="text-xs md:text-sm text-slate-500">
+                                        {(cash1002?.name || 'Cash 1002') + ': '}
+                                        <span className="text-emerald-600 font-mono font-medium">
+                                            {(cash1002?.balance || 0).toLocaleString()}
+                                        </span>
+                                    </span>
+                                );
+                            })()}
+                            <div className="h-4 w-px bg-slate-300"></div>
+                            {/* Bank */}
+                            <span className="text-xs md:text-sm text-slate-500">
+                                Bank:{' '}
+                                <span className="text-blue-600 font-mono font-medium">
+                                    ${(state.accounts.find(a => a.name.includes('Bank'))?.balance || 0).toLocaleString()}
+                                </span>
+                            </span>
                         </div>
                         {/* User Info & Actions - Desktop */}
                         <div className="hidden lg:flex items-center gap-2 pl-4 border-l border-slate-300">

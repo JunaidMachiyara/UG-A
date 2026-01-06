@@ -23,7 +23,7 @@ export interface FieldDef {
     required?: boolean;
     defaultValue?: any | ((data: any[]) => any); 
     placeholder?: string;
-    readOnly?: boolean; 
+    readOnly?: boolean | ((formData: any) => boolean); // Support readOnly condition 
     compute?: (formData: any, allData: any[]) => any; 
     hidden?: (formData: any) => boolean;
     disabled?: boolean | ((formData: any) => boolean); // Support disabled condition
@@ -170,6 +170,20 @@ export const GenericForm: React.FC<{
             if (existingItem) {
                 alert(`❌ Item Code "${newCode}" already exists! Please use a unique code.`);
                 return;
+            }
+        }
+        
+        // Check for duplicate account code when adding new or editing (if code changed)
+        if (config.entityKey === 'accounts') {
+            const newCode = formData.code;
+            if (newCode && newCode.trim() !== '') {
+                const existingAccount = data.find((account: any) => 
+                    account.code === newCode && account.id !== formData.id
+                );
+                if (existingAccount) {
+                    alert(`❌ Account Code "${newCode}" already exists! Please use a unique code.\n\nExisting account: ${existingAccount.name}`);
+                    return;
+                }
             }
         }
         
@@ -333,7 +347,7 @@ export const GenericForm: React.FC<{
                                 }}
                                 placeholder={field.placeholder}
                                 required={field.required}
-                                disabled={field.readOnly}
+                                disabled={typeof field.readOnly === 'function' ? field.readOnly(formData) : (field.readOnly || false)}
                                 step={field.name === 'balance' ? 'any' : undefined}
                             />
                         )}
@@ -354,6 +368,16 @@ export const GenericForm: React.FC<{
                                     }
                                     return '';
                                 })()}
+                            </p>
+                        )}
+                        {/* Show hint for Opening Balance field */}
+                        {field.name === 'balance' && config.entityKey === 'accounts' && (
+                            <p className="text-[10px] text-slate-500 mt-1">
+                                {formData.id ? (
+                                    <>📊 <strong>Read-only:</strong> Balance is calculated from ledger entries. To adjust, use Balance Discrepancy.</>
+                                ) : (
+                                    <>💡 <strong>New Account:</strong> Enter opening balance here. A ledger entry will be created automatically (Debit/Credit based on account type).</>
+                                )}
                             </p>
                         )}
                     </div>
@@ -1327,7 +1351,14 @@ const ChartOfAccountsManager: React.FC<{ data: any[] }> = ({ data }) => {
                 options: Object.keys(EXCHANGE_RATES),
                 defaultValue: 'USD'
             },
-            { name: 'balance', label: 'Opening Balance (Read-only - calculated from ledger)', type: 'number', defaultValue: 0, readOnly: true }
+            { 
+                name: 'balance', 
+                label: 'Opening Balance', 
+                type: 'number', 
+                defaultValue: 0, 
+                readOnly: (formData) => !!formData.id, // Read-only when editing existing account, editable when creating new
+                placeholder: 'Enter opening balance (0 if none)'
+            }
         ],
         onSave: (data) => addAccount(data),
         onUpdate: async (id: string, data: any) => {

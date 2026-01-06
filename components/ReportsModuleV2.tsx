@@ -1787,9 +1787,17 @@ const BalanceSheet: React.FC = () => {
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
                     <div className="space-y-2">
                         {assets.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
-                            <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
-                                <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
-                                <span className="font-mono font-medium">{(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            <div 
+                                key={a.id} 
+                                className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded"
+                                onClick={() => handleAccountClick(a.id, a.name)}
+                            >
+                                <span className="text-slate-600 hover:text-blue-600">
+                                    {a.name}
+                                </span>
+                                <span className="font-mono font-medium">
+                                    {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                </span>
                             </div>
                         ))}
                         {totalCustomersAR > 0 && (
@@ -1818,9 +1826,17 @@ const BalanceSheet: React.FC = () => {
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Liabilities</h4>
                             <div className="space-y-2">
                                 {regularLiabilities.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
-                                    <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
-                                        <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
-                                        <span className="font-mono font-medium">{Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                    <div 
+                                        key={a.id} 
+                                        className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded"
+                                        onClick={() => handleAccountClick(a.id, a.name)}
+                                    >
+                                        <span className="text-slate-600 hover:text-blue-600">
+                                            {a.name}
+                                        </span>
+                                        <span className="font-mono font-medium">
+                                            {Math.abs(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                        </span>
                                     </div>
                                 ))}
                                 {/* Display Discrepancy account separately with correct sign handling */}
@@ -1863,8 +1879,14 @@ const BalanceSheet: React.FC = () => {
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Equity</h4>
                             <div className="space-y-2">
                                 {equity.filter(a => a && a.balance !== undefined && (a.balance || 0) !== 0).map(a => (
-                                    <div key={a.id} className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded" onClick={() => handleAccountClick(a.id, a.name)}>
-                                        <span className="text-slate-600 hover:text-blue-600">{a.name}</span>
+                                    <div 
+                                        key={a.id} 
+                                        className="flex justify-between text-sm cursor-pointer hover:bg-slate-50 px-2 py-1 rounded"
+                                        onClick={() => handleAccountClick(a.id, a.name)}
+                                    >
+                                        <span className="text-slate-600 hover:text-blue-600">
+                                            {a.name}
+                                        </span>
                                         {/* FIXED: Show actual balance (can be negative for items with negative cost) */}
                                         <span className={`font-mono font-medium ${(a?.balance || 0) < 0 ? 'text-red-600' : ''}`}>
                                             {(a?.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}

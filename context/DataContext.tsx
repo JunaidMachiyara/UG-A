@@ -5002,9 +5002,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         
         // Extract opening balance before removing it from accountData
+        // CRITICAL: Preserve negative values - don't use Math.abs() here
         const openingBalance = account.balance !== undefined && account.balance !== null && !isNaN(account.balance)
             ? Number(account.balance)
             : 0;
+        
+        // DEBUG: Log opening balance to help diagnose issues
+        console.log('🔍 addAccount - Opening Balance:', {
+            accountName: account.name,
+            accountCode: account.code,
+            accountType: account.type,
+            openingBalance: openingBalance,
+            rawBalance: account.balance,
+            isNegative: openingBalance < 0
+        });
         
         // Remove id field - Firebase generates it
         // Set balance to 0 in Firebase - actual balance will come from ledger entries
@@ -5184,7 +5195,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     // Post opening balance entries
                     if (entries.length > 0) {
                         await postTransaction(entries);
-                        console.log(`✅ Opening balance entries created for account ${account.name}: ${openingBalance}`);
+                        console.log(`✅ Opening balance entries created for account ${account.name}:`, {
+                            openingBalance: openingBalance,
+                            entries: entries.map(e => ({
+                                accountId: e.accountId,
+                                accountName: e.accountName,
+                                debit: e.debit,
+                                credit: e.credit,
+                                transactionId: e.transactionId
+                            }))
+                        });
+                        
+                        // Wait a moment for Firebase to sync ledger entries before recalculating balance
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+                        // Verify ledger entries were created by checking the ledger
+                        const ledgerEntries = state.ledger.filter((e: any) => e.transactionId === `OB-${accountId}`);
+                        console.log('🔍 Verification - Ledger entries for opening balance:', {
+                            transactionId: `OB-${accountId}`,
+                            foundEntries: ledgerEntries.length,
+                            entries: ledgerEntries.map((e: any) => ({
+                                accountId: e.accountId,
+                                debit: e.debit,
+                                credit: e.credit
+                            }))
+                        });
+                    } else {
+                        console.warn('⚠️ No opening balance entries created - entries array is empty');
                     }
                 }
             }
