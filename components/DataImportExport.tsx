@@ -35,9 +35,9 @@ const CSV_TEMPLATES = {
         ['item-001', 'Cotton Yarn 20s', 'cat-raw', 'sec-a', 'Bales', '200', '2.50', '3.00', '1000', '1000']
     ],
     partners: [
-        ['id', 'name', 'type', 'country', 'defaultCurrency', 'balance', 'divisionId', 'subDivisionId'],
-        ['', 'ABC Textiles', 'CUSTOMER', 'USA', 'USD', '5000', 'div-1', 'subdiv-1'],
-        ['', 'XYZ Suppliers', 'SUPPLIER', 'UAE', 'AED', '0', 'div-1', '']
+        ['id', 'code', 'name', 'type', 'country', 'defaultCurrency', 'balance', 'divisionId', 'subDivisionId'],
+        ['', 'CUST-001', 'ABC Textiles', 'CUSTOMER', 'USA', 'USD', '5000', 'div-1', 'subdiv-1'],
+        ['', 'SUP-001', 'XYZ Suppliers', 'SUPPLIER', 'UAE', 'AED', '0', 'div-1', '']
     ],
     accounts: [
         ['id', 'name', 'type', 'balance', 'description'],
@@ -1111,24 +1111,34 @@ export const DataImportExport: React.FC = () => {
                     }
                     
                     // Validate supplier exists
+                    // Accepts: Supplier Code (preferred), Supplier Name, or Firebase ID
                     const supplierIdFromCSV = row.supplierId.trim();
                     const supplier = state.partners.find(p => 
-                        p.id === supplierIdFromCSV || (p as any).code === supplierIdFromCSV
+                        p.id === supplierIdFromCSV || 
+                        (p as any).code === supplierIdFromCSV ||
+                        p.name === supplierIdFromCSV
                     );
                     if (!supplier) {
-                        errors.push(`Row ${index + 2}: Supplier with ID/Code "${supplierIdFromCSV}" not found. Please create supplier first or use the correct Code from Business Partners (CODE column).`);
+                        errors.push(`Row ${index + 2}: Supplier "${supplierIdFromCSV}" not found. Please use Supplier Code (from Business Partners CODE column), Supplier Name, or create the supplier first.`);
                         continue;
                     }
                     // Use the supplier's Firebase ID (not the CSV value which might be a code)
                     const supplierId = supplier.id;
                     
                     // Validate original type exists
-                    const originalTypeId = row.originalTypeId.trim();
-                    const originalTypeObj = state.originalTypes.find(t => t.id === originalTypeId);
+                    // Accepts: Original Type Code (preferred), Original Type Name, or Firebase ID
+                    const originalTypeIdFromCSV = row.originalTypeId.trim();
+                    const originalTypeObj = state.originalTypes.find(t => 
+                        t.id === originalTypeIdFromCSV || 
+                        t.code === originalTypeIdFromCSV ||
+                        t.name === originalTypeIdFromCSV
+                    );
                     if (!originalTypeObj) {
-                        errors.push(`Row ${index + 2}: Original Type with ID "${originalTypeId}" not found. Please create original type first.`);
+                        errors.push(`Row ${index + 2}: Original Type "${originalTypeIdFromCSV}" not found. Please use Original Type Code (from Setup), Original Type Name, or create the original type first.`);
                         continue;
                     }
+                    // Use the Original Type's Firebase ID (not the CSV value which might be a code)
+                    const originalTypeId = originalTypeObj.id;
                     const originalTypeName = originalTypeObj.name;
                     
                     // Validate subSupplier if provided (optional)
@@ -2402,6 +2412,7 @@ export const DataImportExport: React.FC = () => {
             case 'partners':
                 data = state.partners.map(p => ({
                     id: p.id,
+                    code: p.code || '', // Include partner code in export
                     name: p.name,
                     type: p.type,
                     country: p.country,

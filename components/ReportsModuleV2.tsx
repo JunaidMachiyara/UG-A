@@ -2673,7 +2673,7 @@ const ProductionYield: React.FC = () => {
     const [startDate, setStartDate] = useState(`${new Date().getFullYear()}-01-01`);
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [priceBasis, setPriceBasis] = useState<'COST' | 'SALES'>('COST');
-    const [workingCostRate, setWorkingCostRate] = useState<number>(0.25);
+    const [workingCostRate, setWorkingCostRate] = useState<number>(0.17);
     const [groupBy, setGroupBy] = useState<'CATEGORY' | 'SECTION'>('CATEGORY');
     const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
     const [sortColumn, setSortColumn] = useState<'name' | 'weight' | 'value' | null>(null);
@@ -2725,9 +2725,14 @@ const ProductionYield: React.FC = () => {
                 : (state.sections.find(s => s.id === item.section)?.name || item.section || 'No Section');
             
             if (!grouped[groupKey]) grouped[groupKey] = { name: groupKey, weight: 0, value: 0, packages: 0, items: [] };
-            // Fix NaN issue: Check if salePrice is NaN, undefined, or null, and fallback to avgCost or 0
+            // CRITICAL FIX: Use productionPrice from production entry if available (matches Produced Production screen logic)
+            // Priority: productionPrice (from entry) > priceBasis logic (avgCost or salePrice)
             let unitValue: number;
-            if (priceBasis === 'COST') {
+            // First check if production entry has productionPrice set (from CSV or form)
+            if (p.productionPrice !== undefined && p.productionPrice !== null && !isNaN(p.productionPrice)) {
+                unitValue = p.productionPrice;
+            } else if (priceBasis === 'COST') {
+                // Fallback to item.avgCost when priceBasis is COST
                 unitValue = item.avgCost || 0;
             } else {
                 // For SALES basis: Check if salePrice is valid (not NaN, undefined, or null)
@@ -2918,6 +2923,7 @@ const ProductionYield: React.FC = () => {
                                                     )}
                                                 </div>
                                             </th>
+                                            <th className="px-4 py-2 text-right">Rate/Kg</th>
                                             <th className="px-4 py-2 text-right">% Share</th>
                                             <th 
                                                 className="px-4 py-2 text-right cursor-pointer hover:bg-slate-100 select-none"
@@ -2933,17 +2939,21 @@ const ProductionYield: React.FC = () => {
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                        {sortedInputs.map((i, idx) => (
-                                            <tr key={idx} className="hover:bg-slate-50">
-                                                <td className="px-4 py-2 font-medium text-slate-700">{i.name}</td>
-                                                <td className="px-4 py-2 text-right">{i.weight.toLocaleString()}</td>
-                                                <td className="px-4 py-2 text-right font-mono text-slate-600">{i.percentage.toFixed(2)}%</td>
-                                                <td className="px-4 py-2 text-right font-mono">${i.value.toLocaleString()}</td>
-                                            </tr>
-                                        ))}
+                                        {sortedInputs.map((i, idx) => {
+                                            const ratePerKg = i.weight > 0 ? i.value / i.weight : 0;
+                                            return (
+                                                <tr key={idx} className="hover:bg-slate-50">
+                                                    <td className="px-4 py-2 font-medium text-slate-700">{i.name}</td>
+                                                    <td className="px-4 py-2 text-right">{i.weight.toLocaleString()}</td>
+                                                    <td className="px-4 py-2 text-right font-mono text-slate-600">${ratePerKg.toFixed(3)}</td>
+                                                    <td className="px-4 py-2 text-right font-mono text-slate-600">{i.percentage.toFixed(2)}%</td>
+                                                    <td className="px-4 py-2 text-right font-mono">${i.value.toLocaleString()}</td>
+                                                </tr>
+                                            );
+                                        })}
                                         {sortedInputs.length === 0 && (
                                             <tr>
-                                                <td colSpan={4} className="p-4 text-center text-slate-400">
+                                                <td colSpan={5} className="p-4 text-center text-slate-400">
                                                     No original openings found for the selected date range.
                                                 </td>
                                             </tr>

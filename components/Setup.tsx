@@ -691,6 +691,7 @@ export const useSetupConfigs = () => {
         addPort,
         addWarehouse,
         addOriginalType,
+        updateOriginalType,
         addOriginalProduct,
         addCategory,
         addSection
@@ -968,6 +969,14 @@ export const useSetupConfigs = () => {
             { name: 'packingSize', label: 'Standard Weight (Kg)', type: 'number', required: true }
         ],
         onSave: (data) => addOriginalType(data),
+        onUpdate: async (id: string, data: any) => {
+            try {
+                await updateOriginalType(id, data);
+            } catch (error: any) {
+                alert(`Failed to update original type: ${error.message || error}`);
+                throw error;
+            }
+        },
         onDelete: (id) => deleteEntity('originalTypes', id)
     };
 

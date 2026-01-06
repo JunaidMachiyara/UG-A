@@ -4952,6 +4952,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .then(() => console.log('✅ OriginalType saved'))
             .catch((error) => console.error('❌ Error saving originalType:', error));
     };
+    
+    const updateOriginalType = async (id: string, type: Partial<OriginalType>): Promise<void> => {
+        const typeWithFactory = { ...type, factoryId: currentFactory?.id || '' };
+        dispatch({ type: 'UPDATE_ENTITY', payload: { type: 'originalTypes', id, data: typeWithFactory } });
+        const { id: _, ...typeData } = typeWithFactory;
+        await updateDoc(doc(db, 'originalTypes', id), { ...typeData, updatedAt: serverTimestamp() });
+        console.log('✅ OriginalType updated');
+    };
     const addOriginalProduct = (prod: OriginalProduct) => {
         const prodWithFactory = { ...prod, factoryId: currentFactory?.id || '' };
         dispatch({ type: 'ADD_ORIGINAL_PRODUCT', payload: prodWithFactory });
@@ -5856,6 +5864,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             sendMessage,
             markChatRead,
             addOriginalType,
+            updateOriginalType,
             addOriginalProduct,
             addCategory,
             addSection,

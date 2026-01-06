@@ -193,7 +193,12 @@ const YieldWidget = () => {
         const outputWeight = production.reduce((s, p) => s + p.weightProduced, 0);
         const outputValue = production.reduce((s, p) => {
             const item = state.items.find(i => i.id === p.itemId);
-            return s + (p.qtyProduced * (item?.avgCost || 0)); // Cost Basis
+            // CRITICAL FIX: Use productionPrice from production entry if available (matches Production Yield report logic)
+            // Priority: productionPrice (from entry) > item.avgCost
+            const unitPrice = (p.productionPrice !== undefined && p.productionPrice !== null && !isNaN(p.productionPrice))
+                ? p.productionPrice
+                : (item?.avgCost || 0);
+            return s + (p.qtyProduced * unitPrice); // Cost Basis
         }, 0);
 
         const yieldPct = inputWeight > 0 ? (outputWeight / inputWeight) * 100 : 0;
@@ -509,7 +514,12 @@ export const Dashboard: React.FC = () => {
         const workingCost = totalRawMaterialKg * workingCostPerKg; // Adjustable working cost per kg
         const totalProductionValue = productions.reduce((sum, p) => {
             const item = state.items.find(i => i.id === p.itemId);
-            const productionValue = p.qtyProduced * (item?.avgCost || 0);
+            // CRITICAL FIX: Use productionPrice from production entry if available (matches Production Yield report logic)
+            // Priority: productionPrice (from entry) > item.avgCost
+            const unitPrice = (p.productionPrice !== undefined && p.productionPrice !== null && !isNaN(p.productionPrice))
+                ? p.productionPrice
+                : (item?.avgCost || 0);
+            const productionValue = p.qtyProduced * unitPrice;
             return sum + productionValue;
         }, 0);
         const netProfitLoss = totalProductionValue - (rawMaterialCost + workingCost);
