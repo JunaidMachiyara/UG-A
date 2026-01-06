@@ -906,23 +906,85 @@ export const DataEntry: React.FC = () => {
 
     const batchesForSelection = useMemo(() => {
         if (!ooSupplier || !ooType) return [];
+        
+        const currentFactoryId = state.currentFactory?.id;
+        
+        // Debug logging
+        const allPurchases = state.purchases;
+        
+        // Filter by factory first (if factory is selected)
+        const factoryFilteredPurchases = currentFactoryId 
+            ? allPurchases.filter(p => !p.factoryId || p.factoryId === currentFactoryId)
+            : allPurchases;
+        
+        const matchingPurchases = factoryFilteredPurchases.filter(p => {
+            // Check supplier match
+            if (p.supplierId !== ooSupplier) return false;
+            
+            // For multi-item purchases, check if any item matches the selected type and product (if selected)
+            if (p.items && p.items.length > 0) {
+                return p.items.some(item => {
+                    // Try both ID and name matching for flexibility
+                    const itemTypeId = item.originalTypeId;
+                    const itemTypeName = item.originalType;
+                    const typeMatches = itemTypeId === ooType || itemTypeName === ooType;
+                    const productMatches = !ooProduct || item.originalProductId === ooProduct;
+                    return typeMatches && productMatches;
+                });
+            }
+            // For legacy single-item purchases, check top-level fields
+            const purchaseTypeId = p.originalTypeId;
+            const purchaseTypeName = p.originalType;
+            const typeMatches = purchaseTypeId === ooType || purchaseTypeName === ooType;
+            const productMatches = !ooProduct || p.originalProductId === ooProduct;
+            return typeMatches && productMatches;
+        });
+        
+        if (matchingPurchases.length === 0 && allPurchases.length > 0) {
+            console.log('🔍 Batch Selection Debug - No Matching Purchases:', {
+                ooSupplier,
+                ooType,
+                ooProduct,
+                currentFactoryId,
+                totalPurchases: allPurchases.length,
+                factoryFilteredPurchases: factoryFilteredPurchases.length,
+                purchasesWithSupplier: factoryFilteredPurchases.filter(p => p.supplierId === ooSupplier).length,
+                samplePurchase: factoryFilteredPurchases.find(p => p.supplierId === ooSupplier),
+                samplePurchaseItems: factoryFilteredPurchases.find(p => p.supplierId === ooSupplier)?.items,
+                allSupplierIds: [...new Set(factoryFilteredPurchases.map(p => p.supplierId))],
+                allTypeIds: [...new Set(factoryFilteredPurchases.flatMap(p => 
+                    p.items?.map(i => i.originalTypeId || i.originalType) || [p.originalTypeId || p.originalType]
+                ).filter(Boolean))],
+                // Show detailed comparison for first purchase with matching supplier
+                detailedComparison: (() => {
+                    const sample = factoryFilteredPurchases.find(p => p.supplierId === ooSupplier);
+                    if (!sample) return null;
+                    if (sample.items && sample.items.length > 0) {
+                        return {
+                            purchaseId: sample.id,
+                            batchNumber: sample.batchNumber,
+                            items: sample.items.map(item => ({
+                                originalTypeId: item.originalTypeId,
+                                originalType: item.originalType,
+                                matchesType: (item.originalTypeId === ooType || item.originalType === ooType),
+                                ooType
+                            }))
+                        };
+                    }
+                    return {
+                        purchaseId: sample.id,
+                        batchNumber: sample.batchNumber,
+                        originalTypeId: sample.originalTypeId,
+                        originalType: sample.originalType,
+                        matchesType: (sample.originalTypeId === ooType || sample.originalType === ooType),
+                        ooType
+                    };
+                })()
+            });
+        }
+        
         // Only show batches with remaining stock > 0.01 (strict by purchase ID)
-        return state.purchases
-            .filter(p => {
-                if (p.supplierId !== ooSupplier) return false;
-                // For multi-item purchases, check if any item matches the selected type and product (if selected)
-                if (p.items && p.items.length > 0) {
-                    return p.items.some(item => {
-                        const typeMatches = (item.originalTypeId || item.originalType) === ooType;
-                        const productMatches = !ooProduct || item.originalProductId === ooProduct;
-                        return typeMatches && productMatches;
-                    });
-                }
-                // For legacy single-item purchases, check top-level fields
-                const typeMatches = (p.originalTypeId || p.originalType) === ooType;
-                const productMatches = !ooProduct || p.originalProductId === ooProduct;
-                return typeMatches && productMatches;
-            })
+        const batchesWithStock = matchingPurchases
             .filter(p => {
                 // Calculate opened and sold for this purchase
                 const opened = state.originalOpenings
@@ -944,10 +1006,37 @@ export const DataEntry: React.FC = () => {
                 }
                 
                 const remaining = weightPurchased - opened - sold - directSold;
+                
+                // Debug log for batches with no remaining stock
+                if (remaining <= 0.01 && matchingPurchases.length > 0) {
+                    console.log(`⚠️ Batch ${p.batchNumber} filtered out (no remaining stock):`, {
+                        batchNumber: p.batchNumber,
+                        weightPurchased,
+                        opened,
+                        sold,
+                        directSold,
+                        remaining
+                    });
+                }
+                
                 return remaining > 0.01;
-            })
+            });
+        
+        if (matchingPurchases.length > 0 && batchesWithStock.length === 0) {
+            console.log('🔍 Batch Selection Debug - All Batches Consumed:', {
+                matchingPurchasesCount: matchingPurchases.length,
+                batchesWithStockCount: batchesWithStock.length,
+                sampleBatch: matchingPurchases[0] ? {
+                    batchNumber: matchingPurchases[0].batchNumber,
+                    weightPurchased: matchingPurchases[0].weightPurchased,
+                    items: matchingPurchases[0].items
+                } : null
+            });
+        }
+        
+        return batchesWithStock
             .map(p => ({ id: p.batchNumber, name: p.batchNumber }));
-    }, [ooSupplier, ooType, ooProduct, state.purchases, state.originalOpenings, state.salesInvoices, state.directSales]);
+    }, [ooSupplier, ooType, ooProduct, state.purchases, state.originalOpenings, state.salesInvoices, state.directSales, state.currentFactory?.id]);
 
     const availableStockInfo = useMemo(() => {
         if (!ooSupplier || !ooType) return { qty: 0, weight: 0, avgCost: 0 };
@@ -1124,7 +1213,8 @@ export const DataEntry: React.FC = () => {
             qtyOpened: qtyVal,
             weightOpened: finalWeight,
             costPerKg: availableStockInfo.avgCost,
-            totalValue: finalWeight * availableStockInfo.avgCost
+            totalValue: finalWeight * availableStockInfo.avgCost,
+            factoryId: state.currentFactory?.id || ''
         };
         
         // Add to staging cart instead of immediate save
@@ -1894,6 +1984,7 @@ export const DataEntry: React.FC = () => {
             containerNumber: bpContainer,
             divisionId: bpDivision,
             subDivisionId: bpSubDivision,
+            factoryId: state.currentFactory?.id || '',
             currency: bpCurrency,
             exchangeRate: bpExchangeRate,
             items: bpCart,
@@ -3513,8 +3604,9 @@ export const DataEntry: React.FC = () => {
                                                     if (!purSupplier) return false;
                                                     // Match by ID (new format) or by name (legacy format)
                                                     const selectedSupplier = state.partners.find(s => s.id === purSupplier);
-                                                    return p.parentSupplier === purSupplier || 
-                                                           (selectedSupplier && p.parentSupplier === selectedSupplier.name);
+                                                    const parentId = p.parentSupplierId || (p as any).parentSupplier;
+                                                    return parentId === purSupplier || 
+                                                           (selectedSupplier && parentId === selectedSupplier.name);
                                                 })}
                                                 selectedId={purSubSupplierId}
                                                 onSelect={setPurSubSupplierId}

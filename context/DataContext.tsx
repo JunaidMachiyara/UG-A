@@ -223,9 +223,12 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             console.log('✅ LOADED LEDGER ENTRIES FROM FIREBASE:', action.payload.length);
             
             // 🚀 PERFORMANCE OPTIMIZATION: Create index maps to avoid O(n*m) filtering
-            // Index ledger entries by accountId for fast lookup
+            // EXCLUDE reporting-only entries from balance calculations (sub-suppliers are reporting-only)
+            // Index ledger entries by accountId for fast lookup (only accounting entries)
             const accountEntriesMap = new Map<string, { debit: number; credit: number }>();
             action.payload.forEach(entry => {
+                // Skip reporting-only entries when calculating account balances
+                if (entry.isReportingOnly) return;
                 const accountId = entry.accountId;
                 const current = accountEntriesMap.get(accountId) || { debit: 0, credit: 0 };
                 accountEntriesMap.set(accountId, {
@@ -235,6 +238,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             });
             
             // Recalculate account balances using the index (O(m) instead of O(n*m))
+            // Only includes accounting entries (excludes reporting-only)
             const updatedAccounts = state.accounts.map(acc => {
                 const totals = accountEntriesMap.get(acc.id) || { debit: 0, credit: 0 };
                 let newBalance = 0;
@@ -247,20 +251,21 @@ const dataReducer = (state: AppState, action: Action): AppState => {
             });
             
             // 🚀 PERFORMANCE OPTIMIZATION: Index entries by partnerId and transactionId for fast lookup
-            // Index by partnerId (for direct partner entries)
+            // EXCLUDE reporting-only entries from partner balance calculations (sub-suppliers are reporting-only)
+            // Index by partnerId (for direct partner entries) - only accounting entries
             const partnerEntriesMap = new Map<string, { debit: number; credit: number }>();
-            // Index by transactionId (for opening balance entries)
+            // Index by transactionId (for opening balance entries) - includes all entries for lookup
             const transactionEntriesMap = new Map<string, LedgerEntry[]>();
             action.payload.forEach(entry => {
-                // Index by partnerId
-                if (entry.accountId) {
+                // Index by partnerId (only accounting entries for balance calculation)
+                if (entry.accountId && !entry.isReportingOnly) {
                     const current = partnerEntriesMap.get(entry.accountId) || { debit: 0, credit: 0 };
                     partnerEntriesMap.set(entry.accountId, {
                         debit: current.debit + (entry.debit || 0),
                         credit: current.credit + (entry.credit || 0)
                     });
                 }
-                // Index by transactionId (for opening balance lookups)
+                // Index by transactionId (for opening balance lookups) - include all entries
                 if (entry.transactionId) {
                     const existing = transactionEntriesMap.get(entry.transactionId) || [];
                     transactionEntriesMap.set(entry.transactionId, [...existing, entry]);
@@ -295,8 +300,9 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                     let openingBalance = 0;
                     const obEntries1 = transactionEntriesMap.get(obTransactionId1) || [];
                     const obEntries2 = obTransactionId2 ? (transactionEntriesMap.get(obTransactionId2) || []) : [];
+                    // Filter out reporting-only entries from opening balance calculation (sub-suppliers are reporting-only)
                     const openingBalanceEntries = [...obEntries1, ...obEntries2].filter(e => 
-                        e.transactionType === TransactionType.OPENING_BALANCE
+                        e.transactionType === TransactionType.OPENING_BALANCE && !e.isReportingOnly
                     );
                     
                     if (openingBalanceEntries.length > 0) {
@@ -423,9 +429,12 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 ...e,
                 id: generateId()
             }));
+            // Update Account balances - EXCLUDE reporting-only entries (sub-suppliers are reporting-only)
             const updatedAccounts = state.accounts.map(acc => {
-                const debitSum = newEntries.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + e.debit, 0);
-                const creditSum = newEntries.filter(e => e.accountId === acc.id).reduce((sum, e) => sum + e.credit, 0);
+                // Filter out reporting-only entries when updating account balances
+                const accountingEntries = newEntries.filter(e => e.accountId === acc.id && !e.isReportingOnly);
+                const debitSum = accountingEntries.reduce((sum, e) => sum + e.debit, 0);
+                const creditSum = accountingEntries.reduce((sum, e) => sum + e.credit, 0);
                 let newBalance = acc.balance;
                 if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
                     newBalance = acc.balance + debitSum - creditSum;
@@ -435,9 +444,12 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                 return { ...acc, balance: newBalance };
             });
             // Update Partner balances from AR/AP accounts
+            // EXCLUDE reporting-only entries from balance updates (sub-suppliers are reporting-only)
             const updatedPartners = state.partners.map(partner => {
-                const partnerDebitSum = newEntries.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + e.debit, 0);
-                const partnerCreditSum = newEntries.filter(e => e.accountId === partner.id).reduce((sum, e) => sum + e.credit, 0);
+                // Filter out reporting-only entries when updating balances
+                const accountingEntries = newEntries.filter(e => e.accountId === partner.id && !e.isReportingOnly);
+                const partnerDebitSum = accountingEntries.reduce((sum, e) => sum + e.debit, 0);
+                const partnerCreditSum = accountingEntries.reduce((sum, e) => sum + e.credit, 0);
                 
                 let newPartnerBalance = partner.balance;
                 // For Customers (AR), a debit increases their balance (they owe us more) - positive
@@ -701,6 +713,11 @@ interface DataContextType {
     addGuaranteeCheque: (cheque: GuaranteeCheque) => void;
     updateGuaranteeCheque: (cheque: GuaranteeCheque) => void;
     addCustomsDocument: (doc: CustomsDocument) => void;
+    cleanupOrphanedLedger: () => Promise<void>;
+    markSubSupplierEntriesAsReportingOnly: () => Promise<void>;
+    alignBalance: (entityId: string, entityType: 'partner' | 'account', targetBalance: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }>;
+    alignFinishedGoodsStock: () => Promise<void>;
+    alignOriginalStock: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -2192,6 +2209,61 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
             });
         
+        // Add sub-supplier reporting entries (for reporting/analytics only - does not affect accounting)
+        // Process items array if it exists (multi-item purchase)
+        if (purchaseWithFactory.items && purchaseWithFactory.items.length > 0) {
+            purchaseWithFactory.items.forEach(item => {
+                if (item.subSupplierId) {
+                    const subSupplier = state.partners.find(p => p.id === item.subSupplierId);
+                    if (subSupplier) {
+                        // Reporting-only entry for sub-supplier
+                        entries.push({
+                            date: purchaseWithFactory.date,
+                            transactionId,
+                            transactionType: TransactionType.PURCHASE_INVOICE,
+                            accountId: item.subSupplierId,
+                            accountName: subSupplier.name,
+                            currency: purchaseWithFactory.currency,
+                            exchangeRate: purchaseWithFactory.exchangeRate,
+                            fcyAmount: item.totalCostFCY,
+                            debit: 0,
+                            credit: item.totalCostUSD,
+                            narration: `Purchase (via ${supplierName}): ${item.originalType}`,
+                            factoryId: purchaseWithFactory.factoryId,
+                            isReportingOnly: true // Mark as reporting-only entry
+                        });
+                        console.log(`📊 Added sub-supplier reporting entry: ${subSupplier.name} - ${item.totalCostUSD}`);
+                    } else {
+                        console.warn(`⚠️ Sub-supplier not found: ${item.subSupplierId}`);
+                    }
+                }
+            });
+        }
+        // Legacy single-item purchase with sub-supplier (backward compatibility)
+        else if (purchaseWithFactory.subSuppliers && purchaseWithFactory.subSuppliers.length > 0) {
+            // For legacy purchases, use first sub-supplier (if any)
+            const subSupplierId = purchaseWithFactory.subSuppliers[0];
+            const subSupplier = state.partners.find(p => p.id === subSupplierId);
+            if (subSupplier) {
+                entries.push({
+                    date: purchaseWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.PURCHASE_INVOICE,
+                    accountId: subSupplierId,
+                    accountName: subSupplier.name,
+                    currency: purchaseWithFactory.currency,
+                    exchangeRate: purchaseWithFactory.exchangeRate,
+                    fcyAmount: purchaseWithFactory.totalCostFCY,
+                    debit: 0,
+                    credit: materialCostUSD,
+                    narration: `Purchase (via ${supplierName}): ${purchaseWithFactory.originalType}`,
+                    factoryId: purchaseWithFactory.factoryId,
+                    isReportingOnly: true // Mark as reporting-only entry
+                });
+                console.log(`📊 Added sub-supplier reporting entry (legacy): ${subSupplier.name} - ${materialCostUSD}`);
+            }
+        }
+        
         console.log('📊 Purchase Ledger Entries:', {
             transactionId,
             entriesCount: entries.length,
@@ -2253,19 +2325,137 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 alert('Failed to save bundle purchase: ' + error.message);
             });
 
-        // Create journal entries
-        const apId = '201'; const inventoryAssetId = '105'; const transactionId = `BUN-${bundle.batchNumber}`; const entries: Omit<LedgerEntry, 'id'>[] = [];
-        const materialCostUSD = bundle.items.reduce((sum, item) => sum + item.totalUSD, 0); const materialCostFCY = bundle.items.reduce((sum, item) => sum + item.totalFCY, 0);
-        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: materialCostUSD, debit: materialCostUSD, credit: 0, narration: `Bundle Purchase Material: ${bundle.batchNumber}`, factoryId: bundle.factoryId });
-        entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: bundle.currency, exchangeRate: bundle.exchangeRate, fcyAmount: materialCostFCY, debit: 0, credit: materialCostUSD, narration: `Bundle Purchase: ${state.partners.find(p=>p.id===bundle.supplierId)?.name}`, factoryId: bundle.factoryId });
+        // Create journal entries - Look up accounts dynamically (like addPurchase does)
+        const inventoryAccount = state.accounts.find(a => 
+            a.name.includes('Inventory - Finished Goods') || 
+            a.name.includes('Finished Goods') ||
+            a.code === '105' || 
+            a.code === '1202'
+        );
+        const supplier = state.partners.find(p => p.id === bundle.supplierId);
+        
+        if (!inventoryAccount) {
+            const errorMsg = `❌ CRITICAL ERROR: Cannot create bundle purchase entry.\n\n` +
+                `Required account not found: Inventory - Finished Goods\n\n` +
+                `Please create this account in Setup > Chart of Accounts.\n\n` +
+                `Bundle purchase will NOT be saved.`;
+            console.error(errorMsg);
+            alert(errorMsg);
+            return;
+        }
+        
+        if (!supplier) {
+            const errorMsg = `❌ CRITICAL ERROR: Cannot create bundle purchase entry.\n\n` +
+                `Supplier not found: ${bundle.supplierId}\n\n` +
+                `Please ensure the supplier exists in Setup > Business Partners.\n\n` +
+                `Bundle purchase will NOT be saved.`;
+            console.error(errorMsg);
+            alert(errorMsg);
+            return;
+        }
+        
+        const transactionId = `BUN-${bundle.batchNumber}`;
+        const entries: Omit<LedgerEntry, 'id'>[] = [];
+        const materialCostUSD = bundle.items.reduce((sum, item) => sum + item.totalUSD, 0);
+        const materialCostFCY = bundle.items.reduce((sum, item) => sum + item.totalFCY, 0);
+        
+        // Debit: Inventory - Finished Goods (Asset increases)
+        entries.push({ 
+            date: bundle.date, 
+            transactionId, 
+            transactionType: TransactionType.PURCHASE_INVOICE, 
+            accountId: inventoryAccount.id, 
+            accountName: 'Inventory - Finished Goods', 
+            currency: 'USD', 
+            exchangeRate: 1, 
+            fcyAmount: materialCostUSD, 
+            debit: materialCostUSD, 
+            credit: 0, 
+            narration: `Bundle Purchase Material: ${bundle.batchNumber}`, 
+            factoryId: bundle.factoryId 
+        });
+        
+        // Credit: Supplier Account (Liability increases - we owe them)
+        entries.push({ 
+            date: bundle.date, 
+            transactionId, 
+            transactionType: TransactionType.PURCHASE_INVOICE, 
+            accountId: bundle.supplierId, 
+            accountName: supplier.name, 
+            currency: bundle.currency, 
+            exchangeRate: bundle.exchangeRate, 
+            fcyAmount: materialCostFCY, 
+            debit: 0, 
+            credit: materialCostUSD, 
+            narration: `Bundle Purchase: ${supplier.name}`, 
+            factoryId: bundle.factoryId 
+        });
             // ...existing code...
+        // Additional costs (freight, clearing, etc.) - capitalize to inventory, credit to providers
         bundle.additionalCosts.forEach(cost => {
-            const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown';
-            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: inventoryAssetId, accountName: 'Inventory - Finished Goods', currency: 'USD', exchangeRate: 1, fcyAmount: cost.amountUSD, debit: cost.amountUSD, credit: 0, narration: `${cost.costType} (Capitalized): ${providerName}`, factoryId: bundle.factoryId });
-            entries.push({ date: bundle.date, transactionId, transactionType: TransactionType.PURCHASE_INVOICE, accountId: apId, accountName: 'Accounts Payable', currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amountFCY, debit: 0, credit: cost.amountUSD, narration: `${cost.costType}: ${providerName}`, factoryId: bundle.factoryId });
-                    // ...existing code...
+            const provider = state.partners.find(p => p.id === cost.providerId);
+            if (!provider) {
+                console.warn(`⚠️ Provider not found for cost ${cost.costType}: ${cost.providerId}`);
+                return;
+            }
+            
+            // Debit: Inventory - Finished Goods (capitalize additional costs)
+            entries.push({ 
+                date: bundle.date, 
+                transactionId, 
+                transactionType: TransactionType.PURCHASE_INVOICE, 
+                accountId: inventoryAccount.id, 
+                accountName: 'Inventory - Finished Goods', 
+                currency: 'USD', 
+                exchangeRate: 1, 
+                fcyAmount: cost.amountUSD, 
+                debit: cost.amountUSD, 
+                credit: 0, 
+                narration: `${cost.costType} (Capitalized): ${provider.name}`, 
+                factoryId: bundle.factoryId 
+            });
+            
+            // Credit: Provider Account (Liability increases - we owe them)
+            entries.push({ 
+                date: bundle.date, 
+                transactionId, 
+                transactionType: TransactionType.PURCHASE_INVOICE, 
+                accountId: cost.providerId, 
+                accountName: provider.name, 
+                currency: cost.currency, 
+                exchangeRate: cost.exchangeRate, 
+                fcyAmount: cost.amountFCY, 
+                debit: 0, 
+                credit: cost.amountUSD, 
+                narration: `${cost.costType}: ${provider.name}`, 
+                factoryId: bundle.factoryId 
+            });
         });
         postTransaction(entries);
+        
+        // Update stock for each item in the bundle purchase
+        bundle.items.forEach(bundleItem => {
+            const item = state.items.find(i => i.id === bundleItem.itemId);
+            if (item) {
+                // Update local state
+                dispatch({ type: 'UPDATE_STOCK', payload: { itemId: bundleItem.itemId, qtyChange: bundleItem.qty } });
+                
+                // Update Firebase
+                const itemRef = doc(db, 'items', bundleItem.itemId);
+                updateDoc(itemRef, { 
+                    stockQty: item.stockQty + bundleItem.qty,
+                    updatedAt: serverTimestamp()
+                })
+                .then(() => {
+                    console.log(`✅ Updated stock for ${item.name}: +${bundleItem.qty} (new total: ${item.stockQty + bundleItem.qty})`);
+                })
+                .catch((error) => {
+                    console.error(`❌ Error updating stock for ${item.name}:`, error);
+                });
+            } else {
+                console.warn(`⚠️ Item not found for bundle purchase: ${bundleItem.itemId}`);
+            }
+        });
     };
     const addPartner = (partner: Partner) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
@@ -2384,6 +2574,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         // Supplier/Vendor/Sub Supplier opening balance logic:
                         // Negative balance (we owe them): Debit Capital, Credit Supplier (liability)
                         // Positive balance (they owe us - advance): Debit Supplier (asset), Credit Capital
+                        // NOTE: For SUB_SUPPLIER, ALL entries are reporting-only (do not affect accounting/balance sheet)
+                        const isSubSupplier = partner.type === PartnerType.SUB_SUPPLIER;
                         const absBalance = Math.abs(partner.balance);
                         
                         if (partner.balance < 0) {
@@ -2401,7 +2593,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 debit: absBalance,
                                 credit: 0,
                                 narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
+                                factoryId: currentFactory?.id || '',
+                                isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                             },
                             {
                                 ...commonProps,
@@ -2413,7 +2606,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 debit: 0,
                                 credit: absBalance,
                                 narration: `Opening Balance - ${partner.name}`,
-                                factoryId: currentFactory?.id || ''
+                                factoryId: currentFactory?.id || '',
+                                isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                             }
                         ];
                         } else {
@@ -2430,7 +2624,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                     debit: 0,
                                     credit: absBalance,
                                     narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
+                                    factoryId: currentFactory?.id || '',
+                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                 },
                                 {
                                     ...commonProps,
@@ -2442,9 +2637,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                     debit: absBalance,
                                     credit: 0,
                                     narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
+                                    factoryId: currentFactory?.id || '',
+                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                 }
                             ];
+                        }
+                        
+                        // Log if sub-supplier entries are marked as reporting-only
+                        if (isSubSupplier) {
+                            console.log(`📊 Sub-supplier opening balance entries marked as reporting-only: ${partner.name} - Balance: ${partner.balance}`);
                         }
                     }
                     postTransaction(entries);
@@ -2733,24 +2934,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const addItem = (item: Item, openingStock: number = 0) => {
-                // Post ledger entries for opening stock if present
-        if (openingStock > 0 && item.avgCost > 0) {
+        // Post ledger entries for opening stock if present
+        if (openingStock > 0 && item.avgCost && item.avgCost > 0) {
             const prevYear = new Date().getFullYear() - 1;
             const date = `${prevYear}-12-31`;
             const stockValue = openingStock * item.avgCost;
-            // Use centralized account mapping
-            const finishedGoodsId = getAccountId('105'); // Inventory - Finished Goods
-            const capitalId = getAccountId('301'); // Capital
+            
+            // Find accounts from state (similar to postSalesInvoice)
+            const finishedGoodsAccount = state.accounts.find(a => 
+                a.name.includes('Inventory - Finished Goods') || 
+                a.name.includes('Finished Goods') ||
+                a.code === '105' || 
+                a.code === '1202'
+            );
+            
+            const capitalAccount = state.accounts.find(a => 
+                a.name.includes("Owner's Capital") || 
+                a.name.includes('Owner Capital') ||
+                a.name.includes('Capital') ||
+                a.code === '301'
+            );
+            
+            // Validate accounts exist
+            if (!finishedGoodsAccount) {
+                console.error('❌ Error: Inventory - Finished Goods account not found. Please create it in Setup > Chart of Accounts (Code: 105).');
+                alert('Error: Inventory - Finished Goods account not found. Please create it in Setup > Chart of Accounts (Code: 105).');
+                return; // Don't create item if accounts are missing
+            }
+            
+            if (!capitalAccount) {
+                console.error('❌ Error: Owner\'s Capital account not found. Please create it in Setup > Chart of Accounts (Code: 301).');
+                alert('Error: Owner\'s Capital account not found. Please create it in Setup > Chart of Accounts (Code: 301).');
+                return; // Don't create item if accounts are missing
+            }
+            
             // Generate unique transactionId with timestamp to allow separate deletion of each entry
             const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
             const transactionId = `OB-STK-${item.code || item.id}-${uniqueId}`;
+            
             const entries = [
                 {
                     date,
                     transactionId: transactionId,
                     transactionType: TransactionType.OPENING_BALANCE,
-                    accountId: finishedGoodsId,
-                    accountName: 'Inventory - Finished Goods',
+                    accountId: finishedGoodsAccount.id,
+                    accountName: finishedGoodsAccount.name,
                     currency: 'USD',
                     exchangeRate: 1,
                     fcyAmount: stockValue,
@@ -2763,8 +2991,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     date,
                     transactionId: transactionId,
                     transactionType: TransactionType.OPENING_BALANCE,
-                    accountId: capitalId,
-                    accountName: 'Capital',
+                    accountId: capitalAccount.id,
+                    accountName: capitalAccount.name,
                     currency: 'USD',
                     exchangeRate: 1,
                     fcyAmount: stockValue,
@@ -2774,7 +3002,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     factoryId: currentFactory?.id || ''
                 }
             ];
+            
+            console.log(`📦 Creating opening stock ledger entries for ${item.name}:`, {
+                openingStock,
+                avgCost: item.avgCost,
+                stockValue,
+                finishedGoodsAccount: finishedGoodsAccount.name,
+                capitalAccount: capitalAccount.name,
+                transactionId
+            });
+            
             postTransaction(entries);
+        } else if (openingStock > 0 && (!item.avgCost || item.avgCost <= 0)) {
+            console.warn(`⚠️ Opening stock (${openingStock}) specified but avgCost is missing or zero. Ledger entries will not be created.`);
         }
         const itemWithFactory = {
             ...item,
@@ -3868,6 +4108,58 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             narration: `Material Cost: ${supplierName}`,
             factoryId: purchaseWithFactory.factoryId
         });
+
+        // Add sub-supplier reporting entries (for reporting/analytics only - does not affect accounting)
+        // Process items array if it exists (multi-item purchase)
+        if (purchaseWithFactory.items && purchaseWithFactory.items.length > 0) {
+            purchaseWithFactory.items.forEach(item => {
+                if (item.subSupplierId) {
+                    const subSupplier = state.partners.find(p => p.id === item.subSupplierId);
+                    if (subSupplier) {
+                        // Reporting-only entry for sub-supplier
+                        entries.push({
+                            date: purchaseWithFactory.date,
+                            transactionId,
+                            transactionType: TransactionType.PURCHASE_INVOICE,
+                            accountId: item.subSupplierId,
+                            accountName: subSupplier.name,
+                            currency: purchaseWithFactory.currency,
+                            exchangeRate: purchaseWithFactory.exchangeRate,
+                            fcyAmount: item.totalCostFCY,
+                            debit: 0,
+                            credit: item.totalCostUSD,
+                            narration: `Purchase (via ${supplierName}): ${item.originalType}`,
+                            factoryId: purchaseWithFactory.factoryId,
+                            isReportingOnly: true // Mark as reporting-only entry
+                        });
+                        console.log(`📊 Added sub-supplier reporting entry (update): ${subSupplier.name} - ${item.totalCostUSD}`);
+                    }
+                }
+            });
+        }
+        // Legacy single-item purchase with sub-supplier (backward compatibility)
+        else if (purchaseWithFactory.subSuppliers && purchaseWithFactory.subSuppliers.length > 0) {
+            const subSupplierId = purchaseWithFactory.subSuppliers[0];
+            const subSupplier = state.partners.find(p => p.id === subSupplierId);
+            if (subSupplier) {
+                entries.push({
+                    date: purchaseWithFactory.date,
+                    transactionId,
+                    transactionType: TransactionType.PURCHASE_INVOICE,
+                    accountId: subSupplierId,
+                    accountName: subSupplier.name,
+                    currency: purchaseWithFactory.currency,
+                    exchangeRate: purchaseWithFactory.exchangeRate,
+                    fcyAmount: purchaseWithFactory.totalCostFCY,
+                    debit: 0,
+                    credit: materialCostUSD,
+                    narration: `Purchase (via ${supplierName}): ${purchaseWithFactory.originalType}`,
+                    factoryId: purchaseWithFactory.factoryId,
+                    isReportingOnly: true // Mark as reporting-only entry
+                });
+                console.log(`📊 Added sub-supplier reporting entry (update, legacy): ${subSupplier.name} - ${materialCostUSD}`);
+            }
+        }
 
         // Additional costs (freight, clearing etc.)
         purchaseWithFactory.additionalCosts.forEach(cost => {
@@ -5384,6 +5676,114 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => window.location.reload(), 1000);
     };
 
+    // Migration function: Mark existing sub-supplier entries as reporting-only
+    const markSubSupplierEntriesAsReportingOnly = async () => {
+        if (!currentFactory?.id) {
+            alert('No factory selected');
+            return;
+        }
+
+        if (!confirm('This will mark all existing sub-supplier ledger entries as reporting-only.\n\nThis will prevent them from affecting the Balance Sheet.\n\nContinue?')) {
+            return;
+        }
+
+        // Get all sub-suppliers
+        const subSuppliers = state.partners.filter(p => p.type === PartnerType.SUB_SUPPLIER);
+        if (subSuppliers.length === 0) {
+            alert('No sub-suppliers found.');
+            return;
+        }
+
+        console.log(`📊 Found ${subSuppliers.length} sub-suppliers to process`);
+
+        // Get all ledger entries for this factory
+        const ledgerQuery = query(collection(db, 'ledger'), where('factoryId', '==', currentFactory.id));
+        const snapshot = await getDocs(ledgerQuery);
+
+        const subSupplierIds = new Set(subSuppliers.map(s => s.id));
+        const subSupplierCodes = new Set(subSuppliers.map(s => (s as any).code).filter(Boolean));
+        
+        // Find entries that need to be marked as reporting-only:
+        // 1. Entries where accountId is a sub-supplier ID
+        // 2. Opening balance entries (OB-{subSupplierId} or OB-{subSupplierCode}) that affect Capital
+        const entriesToUpdate: Array<{ docId: string; entry: any }> = [];
+
+        snapshot.docs.forEach(docSnapshot => {
+            const entry = docSnapshot.data() as LedgerEntry;
+            
+            // Check if entry is for a sub-supplier (by accountId)
+            if (entry.accountId && subSupplierIds.has(entry.accountId)) {
+                if (!entry.isReportingOnly) {
+                    entriesToUpdate.push({ docId: docSnapshot.id, entry });
+                }
+            }
+            
+            // Check if entry is an opening balance for a sub-supplier (by transactionId)
+            if (entry.transactionId) {
+                const txId = entry.transactionId;
+                // Check OB-{subSupplierId} format
+                for (const subSupplierId of subSupplierIds) {
+                    if (txId === `OB-${subSupplierId}` && !entry.isReportingOnly) {
+                        entriesToUpdate.push({ docId: docSnapshot.id, entry });
+                        break;
+                    }
+                }
+                // Check OB-{subSupplierCode} format
+                for (const code of subSupplierCodes) {
+                    if (txId === `OB-${code}` && !entry.isReportingOnly) {
+                        entriesToUpdate.push({ docId: docSnapshot.id, entry });
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Remove duplicates (same docId)
+        const uniqueEntries = new Map<string, { docId: string; entry: any }>();
+        entriesToUpdate.forEach(item => {
+            if (!uniqueEntries.has(item.docId)) {
+                uniqueEntries.set(item.docId, item);
+            }
+        });
+
+        const finalEntriesToUpdate = Array.from(uniqueEntries.values());
+
+        if (finalEntriesToUpdate.length === 0) {
+            alert('No sub-supplier entries found that need updating.\n\nAll entries are already marked as reporting-only or no sub-supplier entries exist.');
+            return;
+        }
+
+        console.log(`📊 Found ${finalEntriesToUpdate.length} entries to mark as reporting-only`);
+
+        // Update entries in batches
+        const batch = writeBatch(db);
+        let batchCount = 0;
+        const maxBatchSize = 500; // Firestore limit
+
+        for (const { docId, entry } of finalEntriesToUpdate) {
+            const entryRef = doc(db, 'ledger', docId);
+            batch.update(entryRef, { isReportingOnly: true });
+            batchCount++;
+
+            if (batchCount >= maxBatchSize) {
+                await batch.commit();
+                console.log(`✅ Updated batch of ${batchCount} entries`);
+                batchCount = 0;
+            }
+        }
+
+        if (batchCount > 0) {
+            await batch.commit();
+            console.log(`✅ Updated final batch of ${batchCount} entries`);
+        }
+
+        alert(`Migration complete!\n\nMarked ${finalEntriesToUpdate.length} sub-supplier entries as reporting-only.\n\nThese entries will no longer affect the Balance Sheet.\n\nPage will refresh automatically...`);
+        console.log(`✅ Migration complete: marked ${finalEntriesToUpdate.length} entries as reporting-only`);
+
+        // Auto-refresh to reload clean data
+        setTimeout(() => window.location.reload(), 2000);
+    };
+
     return (
         <DataContext.Provider value={{
             state,
@@ -5454,6 +5854,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updateGuaranteeCheque,
             addCustomsDocument,
             cleanupOrphanedLedger,
+            markSubSupplierEntriesAsReportingOnly,
             alignBalance,
             alignFinishedGoodsStock,
             alignOriginalStock

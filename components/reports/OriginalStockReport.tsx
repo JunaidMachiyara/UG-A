@@ -285,7 +285,7 @@ export const OriginalStockReport: React.FC = () => {
                             <EntitySelector
                                 entities={state.partners.filter(p => 
                                     p.type === PartnerType.SUB_SUPPLIER && 
-                                    (selectedSupplier === '' || p.parentSupplier === selectedSupplier)
+                                    (selectedSupplier === '' || (p.parentSupplierId || (p as any).parentSupplier) === selectedSupplier)
                                 )}
                                 selectedId={selectedSubSupplier}
                                 onSelect={(id) => setSelectedSubSupplier(id || '')}

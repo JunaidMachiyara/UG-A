@@ -117,6 +117,7 @@ export interface Permission {
 // Interfaces for Inventory Classification
 export interface OriginalType {
     id: string;
+    code?: string; // Optional code for Original Type
     name: string; // e.g., "KSA Mix"
     packingType: PackingType; // e.g., Bale
     packingSize: number; // e.g., 45kg
@@ -124,6 +125,7 @@ export interface OriginalType {
 
 export interface OriginalProduct {
     id: string;
+    code?: string; // Optional code for Original Product
     originalTypeId: string; // Parent Link
     name: string; // e.g., "Mixed Rags"
 }
@@ -172,7 +174,7 @@ export interface Partner {
     creditLimit?: number;       // Customer
     taxId?: string;             // Supplier/Vendor
     commissionRate?: number;    // Commission Agent
-    parentSupplier?: string;    // Sub Supplier
+    parentSupplierId?: string; // Sub Supplier - links to main supplier (parent) for payment routing
     licenseNumber?: string;     // Clearing Agent
     scacCode?: string;          // Freight Forwarder
 }
@@ -343,6 +345,7 @@ export interface LedgerEntry {
     
     // System flags
     isAdjustment?: boolean; // True for system-generated balance adjustment entries
+    isReportingOnly?: boolean; // True for sub-supplier reporting entries (does not affect accounting/balance sheet)
 }
 
 export interface PurchaseAdditionalCost {
@@ -456,6 +459,7 @@ export interface OriginalOpening {
     weightOpened: number; // Kg
     costPerKg: number; // USD
     totalValue: number; // USD
+    factoryId: string; // Factory assignment
 }
 
 export interface ProductionEntry {

@@ -608,7 +608,7 @@ const HRModule: React.FC = () => {
 };
 
 const DataImporter: React.FC = () => {
-    const { cleanupOrphanedLedger } = useData();
+    const { cleanupOrphanedLedger, markSubSupplierEntriesAsReportingOnly } = useData();
     
     return (
         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 mb-6 text-white shadow-lg">
@@ -621,6 +621,17 @@ const DataImporter: React.FC = () => {
                     <p className="text-blue-100 text-sm opacity-90">Upload CSV files to import data or cleanup orphaned records.</p>
                 </div>
                 <div className="ml-auto flex gap-2">
+                    <button 
+                        onClick={() => {
+                            if (confirm('This will mark all existing sub-supplier ledger entries as reporting-only.\n\nThis will prevent them from affecting the Balance Sheet.\n\nContinue?')) {
+                                markSubSupplierEntriesAsReportingOnly();
+                            }
+                        }}
+                        className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition-colors"
+                        title="Mark existing sub-supplier entries as reporting-only (fixes Balance Sheet)"
+                    >
+                        <FileSpreadsheet size={16} /> Fix Sub-Suppliers
+                    </button>
                     <button 
                         onClick={() => {
                             if (confirm('This will delete all ledger entries for purchases/invoices that no longer exist. Continue?')) {
@@ -734,11 +745,12 @@ export const useSetupConfigs = () => {
                 hidden: (data) => ![PartnerType.SUPPLIER, PartnerType.VENDOR].includes(data.type)
             },
             { 
-                name: 'parentSupplier', 
+                name: 'parentSupplierId', 
                 label: 'Parent Supplier', 
                 type: 'select', 
-                options: (allData: any[]) => allData.filter(p => p.type === PartnerType.SUPPLIER).map(p => ({ label: p.name, value: p.id })),
-                hidden: (data) => data.type !== PartnerType.SUB_SUPPLIER
+                options: (formData: any, allData: any[]) => allData.filter((p: any) => p.type === PartnerType.SUPPLIER).map((p: any) => ({ label: p.name, value: p.id })),
+                hidden: (data) => data.type !== PartnerType.SUB_SUPPLIER,
+                placeholder: 'Select main supplier (required for sub-supplier)'
             },
             { 
                 name: 'commissionRate', 
@@ -780,10 +792,12 @@ export const useSetupConfigs = () => {
         title: 'Divisions (Business Units)',
         entityKey: 'divisions',
         columns: [
+            { header: 'Code', key: 'code', render: (r) => r.code ? <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200">{r.code}</span> : <span className="text-xs text-slate-400 italic">-</span> },
             { header: 'Name', key: 'name' },
             { header: 'Location/HQ', key: 'location' }
         ],
         fields: [
+            { name: 'code', label: 'Code (Optional)', type: 'text', placeholder: 'e.g. DIV-001' },
             { name: 'name', label: 'Division Name', type: 'text', required: true },
             { name: 'location', label: 'Location/HQ', type: 'text', required: false }
         ],
@@ -795,10 +809,12 @@ export const useSetupConfigs = () => {
         title: 'Sub-Divisions',
         entityKey: 'subDivisions',
         columns: [
+            { header: 'Code', key: 'code', render: (r) => r.code ? <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200">{r.code}</span> : <span className="text-xs text-slate-400 italic">-</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Division', key: 'divisionId', render: (r) => state.divisions.find(d => d.id === r.divisionId)?.name || r.divisionId }
         ],
         fields: [
+            { name: 'code', label: 'Code (Optional)', type: 'text', placeholder: 'e.g. SUBDIV-001' },
             { name: 'name', label: 'Sub-Division Name', type: 'text', required: true },
             { 
                 name: 'divisionId', 
@@ -916,11 +932,13 @@ export const useSetupConfigs = () => {
         title: 'Original Types',
         entityKey: 'originalTypes',
         columns: [
+            { header: 'Code', key: 'code', render: (r) => r.code ? <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200">{r.code}</span> : <span className="text-xs font-mono text-slate-400">{r.id.substring(0, 8)}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Packing', key: 'packingType' },
             { header: 'Size (Kg)', key: 'packingSize' }
         ],
         fields: [
+            { name: 'code', label: 'Code (Optional)', type: 'text', placeholder: 'e.g. OT-001' },
             { name: 'name', label: 'Type Name (e.g. KSA Mix)', type: 'text', required: true },
             { name: 'packingType', label: 'Packing', type: 'select', options: Object.values(PackingType), required: true },
             { name: 'packingSize', label: 'Standard Weight (Kg)', type: 'number', required: true }
@@ -933,10 +951,12 @@ export const useSetupConfigs = () => {
         title: 'Original Products',
         entityKey: 'originalProducts',
         columns: [
+            { header: 'Code', key: 'code', render: (r) => r.code ? <span className="text-xs font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200">{r.code}</span> : <span className="text-xs font-mono text-slate-400">{r.id.substring(0, 8)}</span> },
             { header: 'Name', key: 'name' },
             { header: 'Parent Type', key: 'originalTypeId', render: (r) => state.originalTypes.find(ot => ot.id === r.originalTypeId)?.name || r.originalTypeId }
         ],
         fields: [
+            { name: 'code', label: 'Code (Optional)', type: 'text', placeholder: 'e.g. OP-001' },
             { 
                 name: 'originalTypeId', 
                 label: 'Original Type', 

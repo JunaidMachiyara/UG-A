@@ -1248,8 +1248,9 @@ const LedgerDetailModal: React.FC<{
                 PartnerType.CLEARING_AGENT,
                 PartnerType.COMMISSION_AGENT
             ];
+            // Exclude sub-suppliers from aggregate creditors report (only show main suppliers)
             return state.partners
-                .filter((p: any) => supplierTypes.includes(p.type) && p.balance < 0)
+                .filter((p: any) => supplierTypes.includes(p.type) && p.balance < 0 && p.type !== PartnerType.SUB_SUPPLIER)
                 .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance) }))
                 .sort((a: any, b: any) => b.balance - a.balance);
         }
@@ -1276,8 +1277,9 @@ const LedgerDetailModal: React.FC<{
                 PartnerType.CLEARING_AGENT,
                 PartnerType.COMMISSION_AGENT
             ];
+            // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
             return state.partners
-                .filter((p: any) => supplierTypes.includes(p.type) && p.balance > 0)
+                .filter((p: any) => supplierTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER && p.balance > 0)
                 .map((p: any) => ({ name: p.name, balance: p.balance }))
                 .sort((a: any, b: any) => b.balance - a.balance);
         }
@@ -1517,13 +1519,21 @@ const BalanceSheet: React.FC = () => {
         PartnerType.COMMISSION_AGENT
     ];
     // For suppliers: negative balance = we owe them (Accounts Payable), positive balance = they owe us (Advances)
-    const positiveSuppliers = state.partners.filter(p => supplierLikeTypes.includes(p.type) && (p.balance || 0) > 0);
+    // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
+    const positiveSuppliers = state.partners.filter(p => 
+        supplierLikeTypes.includes(p.type) && 
+        p.type !== PartnerType.SUB_SUPPLIER && // Exclude sub-suppliers
+        (p.balance || 0) > 0
+    );
     const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0);
     
     // Suppliers with negative balance = Accounts Payable (we owe them)
     // Note: Supplier balances should be stored as NEGATIVE when we owe them (credit balance in ledger = negative in partner.balance)
+    // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
     const negativeSuppliers = state.partners.filter(p => {
         if (!supplierLikeTypes.includes(p.type)) return false;
+        // Exclude sub-suppliers from Balance Sheet creditors
+        if (p.type === PartnerType.SUB_SUPPLIER) return false;
         const balance = p.balance || 0;
         return balance < 0;
     });

@@ -541,8 +541,9 @@ export const Dashboard: React.FC = () => {
         
         // Accounts Payable: Use same calculation as Balance Sheet - sum of negative supplier balances (Creditors)
         // This matches the "Creditors (Accounts Payable)" value from the Balance Sheet
+        // EXCLUDE sub-suppliers from aggregate (only show main suppliers)
         const suppliersAP = state.partners
-            .filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0)
+            .filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance < 0 && p.type !== PartnerType.SUB_SUPPLIER)
             .reduce((sum, s) => sum + Math.abs(s.balance), 0);
         const payables = suppliersAP;
         
@@ -573,8 +574,13 @@ export const Dashboard: React.FC = () => {
             .reduce((sum, a) => sum + a.balance, 0);
         
         // - Positive supplier balances = Advances to Suppliers (Asset)
+        // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
         const supplierAdvances = state.partners
-            .filter(p => [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && p.balance > 0)
+            .filter(p => 
+                [PartnerType.SUPPLIER, PartnerType.FREIGHT_FORWARDER, PartnerType.CLEARING_AGENT, PartnerType.COMMISSION_AGENT].includes(p.type) && 
+                p.type !== PartnerType.SUB_SUPPLIER && // Exclude sub-suppliers
+                p.balance > 0
+            )
             .reduce((sum, s) => sum + s.balance, 0);
         
         // Total Current Assets = Account balances + Partner receivables + Supplier advances

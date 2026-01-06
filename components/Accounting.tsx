@@ -1031,8 +1031,48 @@ export const Accounting: React.FC = () => {
             const destPartner = state.partners.find(p => p.id === destId);
             const sourceName = sourceAccount?.name || 'Bank/Cash';
             const destName = destPartner?.name || destAccount?.name || 'Payee';
-            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: destId, accountName: destName, debit: baseAmount, credit: 0 });
-            entries.push({ ...common, transactionType: TransactionType.PAYMENT_VOUCHER, accountId: sourceId, accountName: sourceName, debit: 0, credit: baseAmount });
+            
+            // Check if payment is to a sub-supplier
+            const isSubSupplier = destPartner && destPartner.type === PartnerType.SUB_SUPPLIER && destPartner.parentSupplierId;
+            const actualPayeeId = isSubSupplier ? destPartner.parentSupplierId : destId;
+            const actualPayee = isSubSupplier 
+                ? state.partners.find(p => p.id === actualPayeeId) 
+                : destPartner;
+            const actualPayeeName = actualPayee?.name || destAccount?.name || 'Payee';
+            
+            // Normal accounting entry: Debit main supplier (or direct payee), Credit Cash/Bank
+            entries.push({ 
+                ...common, 
+                transactionType: TransactionType.PAYMENT_VOUCHER, 
+                accountId: actualPayeeId, 
+                accountName: actualPayeeName, 
+                debit: baseAmount, 
+                credit: 0,
+                narration: isSubSupplier ? `Payment to ${destName} (via ${actualPayeeName}) - ${description}` : `${description}`
+            });
+            entries.push({ 
+                ...common, 
+                transactionType: TransactionType.PAYMENT_VOUCHER, 
+                accountId: sourceId, 
+                accountName: sourceName, 
+                debit: 0, 
+                credit: baseAmount 
+            });
+            
+            // Reporting-only entry for sub-supplier (if payment is to sub-supplier)
+            if (isSubSupplier && destPartner) {
+                entries.push({
+                    ...common,
+                    transactionType: TransactionType.PAYMENT_VOUCHER,
+                    accountId: destId, // Sub-supplier ID
+                    accountName: destName, // Sub-supplier name
+                    debit: 0,
+                    credit: baseAmount,
+                    narration: `Payment (via ${actualPayeeName}) - ${description}`,
+                    isReportingOnly: true // Mark as reporting-only entry
+                });
+                console.log(`📊 Added sub-supplier reporting entry for payment: ${destName} - ${baseAmount}`);
+            }
         } else if (vType === 'EV') {
             if (!sourceId || !destId) return alert("Select Expense and Paid From");
             // Resolve actual account names
@@ -6199,7 +6239,7 @@ const StockAlignmentComponent: React.FC<{
         if (!selectedSupplierId) return [];
         return state.partners.filter((p: any) => 
             p.type === PartnerType.SUB_SUPPLIER && 
-            p.parentSupplier === selectedSupplierId
+            (p.parentSupplierId || (p as any).parentSupplier) === selectedSupplierId
         );
     }, [selectedSupplierId, state.partners]);
 

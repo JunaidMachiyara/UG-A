@@ -202,7 +202,13 @@ export const DataImportExport: React.FC = () => {
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
-                    if (!row.name) {
+                    
+                    // Skip completely empty rows (all fields are empty/whitespace)
+                    if (Object.keys(row).every(key => !row[key] || String(row[key]).trim() === '')) {
+                        continue;
+                    }
+                    
+                    if (!row.name || row.name.trim() === '') {
                         errors.push(`Row ${index + 2}: Missing required field 'name'`);
                         continue;
                     }
@@ -484,7 +490,13 @@ export const DataImportExport: React.FC = () => {
                 // Validate and prepare all partners first
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
-                    if (!row.name) {
+                    
+                    // Skip completely empty rows (all fields are empty/whitespace)
+                    if (Object.keys(row).every(key => !row[key] || String(row[key]).trim() === '')) {
+                        continue;
+                    }
+                    
+                    if (!row.name || row.name.trim() === '') {
                         errors.push(`Row ${index + 2}: Missing required field 'name'`);
                         continue;
                     }
@@ -568,7 +580,7 @@ export const DataImportExport: React.FC = () => {
                         creditLimit: row.creditLimit ? parseFloat(row.creditLimit) : undefined,
                         taxId: row.taxId || undefined,
                         commissionRate: row.commissionRate ? parseFloat(row.commissionRate) : undefined,
-                        parentSupplier: row.parentSupplier || undefined,
+                        parentSupplierId: row.parentSupplierId || row.parentSupplier || undefined,
                         licenseNumber: row.licenseNumber || undefined,
                         scacCode: row.scacCode || undefined,
                         factoryId: currentFactory?.id || '',
@@ -839,6 +851,9 @@ export const DataImportExport: React.FC = () => {
                                     const fcyAmt = partner.openingBalance * rate;
                                     const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
                                     
+                                    // NOTE: For SUB_SUPPLIER, ALL entries are reporting-only (do not affect accounting/balance sheet)
+                                    const isSubSupplier = partner.type === 'SUB_SUPPLIER';
+                                    
                                     let entries: Omit<LedgerEntry, 'id'>[] = [];
                                     if (partner.type === 'CUSTOMER') {
                                         // Customer opening balance logic:
@@ -924,7 +939,8 @@ export const DataImportExport: React.FC = () => {
                                                     debit: absBalance,
                                                     credit: 0,
                                                     narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
+                                                    factoryId: currentFactory?.id || '',
+                                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                                 },
                                                 {
                                                     ...commonProps,
@@ -936,7 +952,8 @@ export const DataImportExport: React.FC = () => {
                                                     debit: 0,
                                                     credit: absBalance,
                                                     narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
+                                                    factoryId: currentFactory?.id || '',
+                                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                                 }
                                             ];
                                         } else {
@@ -953,7 +970,8 @@ export const DataImportExport: React.FC = () => {
                                                     debit: 0,
                                                     credit: absBalance,
                                                     narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
+                                                    factoryId: currentFactory?.id || '',
+                                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                                 },
                                                 {
                                                     ...commonProps,
@@ -965,9 +983,15 @@ export const DataImportExport: React.FC = () => {
                                                     debit: absBalance,
                                                     credit: 0,
                                                     narration: `Opening Balance - ${partner.name}`,
-                                                    factoryId: currentFactory?.id || ''
+                                                    factoryId: currentFactory?.id || '',
+                                                    isReportingOnly: isSubSupplier // Mark as reporting-only for sub-suppliers
                                                 }
                                             ];
+                                        }
+                                        
+                                        // Log if sub-supplier entries are marked as reporting-only
+                                        if (isSubSupplier) {
+                                            console.log(`📊 Sub-supplier opening balance entries marked as reporting-only (CSV): ${partner.name} - Balance: ${partner.openingBalance}`);
                                         }
                                     }
                                     
@@ -1087,14 +1111,16 @@ export const DataImportExport: React.FC = () => {
                     }
                     
                     // Validate supplier exists
-                    const supplierId = row.supplierId.trim();
+                    const supplierIdFromCSV = row.supplierId.trim();
                     const supplier = state.partners.find(p => 
-                        p.id === supplierId || (p as any).code === supplierId
+                        p.id === supplierIdFromCSV || (p as any).code === supplierIdFromCSV
                     );
                     if (!supplier) {
-                        errors.push(`Row ${index + 2}: Supplier with ID/Code "${supplierId}" not found. Please create supplier first or use the correct Code from Business Partners (CODE column).`);
+                        errors.push(`Row ${index + 2}: Supplier with ID/Code "${supplierIdFromCSV}" not found. Please create supplier first or use the correct Code from Business Partners (CODE column).`);
                         continue;
                     }
+                    // Use the supplier's Firebase ID (not the CSV value which might be a code)
+                    const supplierId = supplier.id;
                     
                     // Validate original type exists
                     const originalTypeId = row.originalTypeId.trim();
@@ -1106,15 +1132,18 @@ export const DataImportExport: React.FC = () => {
                     const originalTypeName = originalTypeObj.name;
                     
                     // Validate subSupplier if provided (optional)
-                    let subSupplierId = row.subSupplierId?.trim();
-                    if (subSupplierId) {
+                    let subSupplierId: string | undefined = undefined;
+                    if (row.subSupplierId?.trim()) {
+                        const subSupplierIdFromCSV = row.subSupplierId.trim();
                         const subSupplier = state.partners.find(p => 
-                            p.id === subSupplierId || (p as any).code === subSupplierId
+                            p.id === subSupplierIdFromCSV || (p as any).code === subSupplierIdFromCSV
                         );
                         if (!subSupplier) {
-                            errors.push(`Row ${index + 2}: Sub Supplier with ID/Code "${subSupplierId}" not found. Please create sub supplier first or leave blank. Use the Code from Business Partners (CODE column).`);
+                            errors.push(`Row ${index + 2}: Sub Supplier with ID/Code "${subSupplierIdFromCSV}" not found. Please create sub supplier first or leave blank. Use the Code from Business Partners (CODE column).`);
                             continue;
                         }
+                        // Use the sub-supplier's Firebase ID (not the CSV value which might be a code)
+                        subSupplierId = subSupplier.id;
                     }
                     
                     // Validate originalProductId if provided (optional)
@@ -1210,19 +1239,15 @@ export const DataImportExport: React.FC = () => {
                     const landedCostPerKg = costPerKgFCY;
                     const totalLandedCost = weightPurchased * landedCostPerKg;
                     
+                    // Build purchase object without undefined values
                     const purchase: any = {
                         id: row.id || `PUR-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
                         batchNumber: batchNumber,
                         status: status,
                         date: uploadDate, // Use upload date
                         supplierId: supplierId,
-                        subSuppliers: subSupplierId ? [subSupplierId] : undefined,
                         originalTypeId: originalTypeId,
                         originalType: originalTypeName,
-                        originalProductId: originalProductId || undefined,
-                        containerNumber: containerNumber || undefined,
-                        divisionId: divisionId,
-                        subDivisionId: subDivisionId,
                         weightPurchased: weightPurchased,
                         qtyPurchased: qtyPurchased,
                         currency: 'USD' as any,
@@ -1232,17 +1257,37 @@ export const DataImportExport: React.FC = () => {
                         additionalCosts: [], // No additional costs for CSV imports
                         totalLandedCost: totalLandedCost,
                         landedCostPerKg: landedCostPerKg,
-                        items: originalProductId ? [{
+                        // Always create items array for consistency (even if no originalProductId)
+                        // This ensures the purchase structure is consistent and can be found by stock calculations
+                        items: [{
                             originalTypeId: originalTypeId,
                             originalType: originalTypeName,
-                            originalProductId: originalProductId,
                             weightPurchased: weightPurchased,
                             qtyPurchased: qtyPurchased,
                             costPerKgFCY: costPerKgFCY,
-                            totalCostFCY: totalCostFCY
-                        }] : [], // Single-type purchase with optional original product
+                            totalCostFCY: totalCostFCY,
+                            totalCostUSD: totalCostFCY // Add USD cost for consistency
+                        }],
                         factoryId: currentFactory?.id || ''
                     };
+                    
+                    // Only add optional fields if they have values (avoid undefined)
+                    if (subSupplierId) {
+                        purchase.subSuppliers = [subSupplierId];
+                    }
+                    if (originalProductId) {
+                        purchase.originalProductId = originalProductId;
+                        purchase.items[0].originalProductId = originalProductId;
+                    }
+                    if (containerNumber) {
+                        purchase.containerNumber = containerNumber;
+                    }
+                    if (divisionId) {
+                        purchase.divisionId = divisionId;
+                    }
+                    if (subDivisionId) {
+                        purchase.subDivisionId = subDivisionId;
+                    }
                     
                     // Store logistics data for Arrived/Cleared containers (receivedWeight for offloading)
                     if (receivedWeight > 0 && containerNumber) {
@@ -1267,11 +1312,37 @@ export const DataImportExport: React.FC = () => {
                         const { id, csvLogisticsData, ...purchaseData } = purchase;
                         const purchaseRef = doc(db, 'purchases', id);
                         
-                        // Remove undefined values
+                        // Remove undefined values (including nested objects/arrays)
                         const cleanedData: any = {};
                         Object.keys(purchaseData).forEach(key => {
-                            if (purchaseData[key] !== undefined) {
-                                cleanedData[key] = purchaseData[key];
+                            const value = purchaseData[key];
+                            if (value !== undefined) {
+                                // Handle arrays (like items array)
+                                if (Array.isArray(value)) {
+                                    cleanedData[key] = value.map(item => {
+                                        if (typeof item === 'object' && item !== null) {
+                                            const cleanedItem: any = {};
+                                            Object.keys(item).forEach(itemKey => {
+                                                if (item[itemKey] !== undefined) {
+                                                    cleanedItem[itemKey] = item[itemKey];
+                                                }
+                                            });
+                                            return cleanedItem;
+                                        }
+                                        return item;
+                                    });
+                                } else if (typeof value === 'object' && value !== null) {
+                                    // Handle nested objects
+                                    const cleanedObj: any = {};
+                                    Object.keys(value).forEach(objKey => {
+                                        if (value[objKey] !== undefined) {
+                                            cleanedObj[objKey] = value[objKey];
+                                        }
+                                    });
+                                    cleanedData[key] = cleanedObj;
+                                } else {
+                                    cleanedData[key] = value;
+                                }
                             }
                         });
                         
@@ -1284,10 +1355,31 @@ export const DataImportExport: React.FC = () => {
                     
                     try {
                         await batch.commit();
-                        console.log(`Γ£à Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPurchases.length / BATCH_SIZE)} committed: ${batchPurchases.length} purchases saved to Firebase`);
+                        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validPurchases.length / BATCH_SIZE)} committed: ${batchPurchases.length} purchases saved to Firebase`);
                         
-                        // Wait for Firebase listener to load purchases
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        // Log sample purchase structure for debugging
+                        if (batchPurchases.length > 0) {
+                            const sample = batchPurchases[0];
+                            console.log(`📦 Sample purchase structure (Batch ${Math.floor(i / BATCH_SIZE) + 1}):`, {
+                                batchNumber: sample.batchNumber,
+                                supplierId: sample.supplierId,
+                                originalTypeId: sample.originalTypeId,
+                                originalType: sample.originalType,
+                                itemsCount: sample.items?.length || 0,
+                                firstItem: sample.items?.[0] ? {
+                                    originalTypeId: sample.items[0].originalTypeId,
+                                    originalType: sample.items[0].originalType,
+                                    weightPurchased: sample.items[0].weightPurchased
+                                } : null,
+                                factoryId: sample.factoryId,
+                                weightPurchased: sample.weightPurchased,
+                                hasItems: !!(sample.items && sample.items.length > 0)
+                            });
+                        }
+                        
+                        // Wait for Firebase listener to load purchases (increased delay to ensure sync)
+                        // Note: Firebase real-time listeners should update state automatically, but we wait to ensure batch commit is complete
+                        await new Promise(resolve => setTimeout(resolve, 1500));
                         
                         // Create LogisticsEntry records for Arrived/Cleared containers (offloading data)
                         // This tracks receivedWeight vs invoicedWeight (purchase weight)
@@ -1347,7 +1439,9 @@ export const DataImportExport: React.FC = () => {
                             console.error(`❌ Failed to create ${logisticsEntriesFailed.length} logistics entries: ${logisticsEntriesFailed.join(', ')}`);
                         }
                         
-                        // Create opening balance ledger entries for Raw Material Inventory and Capital
+                        // Create opening balance ledger entries for Raw Material Inventory (Debit) and Owner's Capital (Credit)
+                        // NOTE: CSV imports are for OPENING STOCK - supplier balances already set as opening balances
+                        // So we credit Capital, NOT Supplier (unlike normal purchases which credit Supplier)
                         // BATCHED: Collect all entries first, then post in one batch for speed
                         
                         // Lookup Raw Material INVENTORY account dynamically (factory-specific, always correct)
@@ -1371,7 +1465,7 @@ export const DataImportExport: React.FC = () => {
                         if (!rawMaterialAccount || !capitalAccount) {
                             const missingAccounts = [];
                             if (!rawMaterialAccount) missingAccounts.push('Inventory - Raw Material (104 or 1200)');
-                            if (!capitalAccount) missingAccounts.push('Capital (301)');
+                            if (!capitalAccount) missingAccounts.push('Owner\'s Capital (301)');
                             console.error(`❌ Account lookup failed for purchase ledger entries: ${missingAccounts.join(', ')}`);
                             errors.push(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts. Ledger entries NOT created for ${batchPurchases.length} purchase(s).`);
                         } else {
@@ -1387,12 +1481,14 @@ export const DataImportExport: React.FC = () => {
                                     const stockValue = purchase.totalLandedCost || purchase.totalCostFCY || 0;
                                     
                                     if (stockValue <= 0) {
-                                        console.log(`ΓÜá∩╕Å Purchase ${purchase.batchNumber} has zero value, skipping ledger entries`);
+                                        console.log(`⚠️ Purchase ${purchase.batchNumber} has zero value, skipping ledger entries`);
                                         continue;
                                     }
                                     
                                     const transactionId = `OB-PUR-${purchase.id}`;
                                     
+                                    // Debit: Inventory - Raw Materials (Asset increases)
+                                    // Credit: Owner's Capital (Equity increases - opening stock)
                                     allLedgerEntries.push(
                                         {
                                             date: purchase.date,
@@ -1434,7 +1530,7 @@ export const DataImportExport: React.FC = () => {
                                 try {
                                     await postTransaction(allLedgerEntries);
                                     console.log(`✅ Created ${allLedgerEntries.length} ledger entries (${batchPurchases.length} purchase(s)) in one batch`);
-                                    console.log(`   - ${allLedgerEntries.length / 2} purchase(s) with opening stock ledger entries`);
+                                    console.log(`   - ${allLedgerEntries.length / 2} purchase(s) with opening stock ledger entries (Debit: Raw Material, Credit: Owner's Capital)`);
                                 } catch (error: any) {
                                     console.error(`❌ Error posting batch ledger entries:`, error);
                                     errors.push(`Failed to post ledger entries batch: ${error.message}. ${allLedgerEntries.length} ledger entries were prepared but NOT saved.`);
@@ -1457,9 +1553,27 @@ export const DataImportExport: React.FC = () => {
                             await new Promise(resolve => setTimeout(resolve, 200));
                         }
                     } catch (batchError: any) {
-                        console.error(`Γ¥î Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
+                        console.error(`❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, batchError);
                         errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} (rows ${i + 2}-${i + batchPurchases.length + 1}) failed: ${batchError.message}`);
                     }
+                }
+                
+                // Log purchase import summary (while validPurchases is still in scope)
+                if (validPurchases.length > 0) {
+                    console.log('📦 Purchase Import Summary:', {
+                        totalImported: validPurchases.length,
+                        samplePurchase: validPurchases[0] ? {
+                            batchNumber: validPurchases[0].batchNumber,
+                            supplierId: validPurchases[0].supplierId,
+                            originalTypeId: validPurchases[0].originalTypeId,
+                            originalType: validPurchases[0].originalType,
+                            itemsCount: validPurchases[0].items?.length || 0,
+                            firstItem: validPurchases[0].items?.[0],
+                            factoryId: validPurchases[0].factoryId,
+                            weightPurchased: validPurchases[0].weightPurchased
+                        } : null,
+                        note: 'Purchases should appear in Original Opening form after Firebase syncs (may take 1-2 seconds)'
+                    });
                 }
             }
             
@@ -1492,7 +1606,13 @@ export const DataImportExport: React.FC = () => {
                 // Validate and prepare all items first
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
-                    if (!row.name) {
+                    
+                    // Skip completely empty rows (all fields are empty/whitespace)
+                    if (Object.keys(row).every(key => !row[key] || String(row[key]).trim() === '')) {
+                        continue;
+                    }
+                    
+                    if (!row.name || row.name.trim() === '') {
                         errors.push(`Row ${index + 2}: Missing required field 'name'`);
                         continue;
                     }
@@ -1744,8 +1864,13 @@ export const DataImportExport: React.FC = () => {
                 for (let index = 0; index < parsedData.length; index++) {
                     const row = parsedData[index];
                     try {
+                        // Skip completely empty rows (all fields are empty/whitespace)
+                        if (Object.keys(row).every(key => !row[key] || String(row[key]).trim() === '')) {
+                            continue;
+                        }
+                        
                         // Basic validation - name is required, id can be auto-generated
-                        if (!row.name) {
+                        if (!row.name || row.name.trim() === '') {
                             errors.push(`Row ${index + 2}: Missing required field 'name'`);
                             continue;
                         }
@@ -1842,7 +1967,7 @@ export const DataImportExport: React.FC = () => {
                                     creditLimit: row.creditLimit ? parseFloat(row.creditLimit) : undefined,
                                     taxId: row.taxId || undefined,
                                     commissionRate: row.commissionRate ? parseFloat(row.commissionRate) : undefined,
-                                    parentSupplier: row.parentSupplier || undefined,
+                                    parentSupplierId: row.parentSupplierId || row.parentSupplier || undefined,
                                     licenseNumber: row.licenseNumber || undefined,
                                     scacCode: row.scacCode || undefined
                                 };
@@ -2180,6 +2305,22 @@ export const DataImportExport: React.FC = () => {
             }
             
             console.log(`✅ Successfully imported ${successCount} ${selectedEntity}${ledgerEntriesInfo}`);
+            
+            // For purchases, log sample purchase structure to help debug batch selection issues
+            if (selectedEntity === 'purchases' && successCount > 0) {
+                // Get sample data from parsed CSV (since validPurchases is out of scope here)
+                const sampleRow = parsedData[0];
+                console.log('📦 Purchase Import Summary:', {
+                    totalImported: successCount,
+                    sampleCSVRow: sampleRow ? {
+                        supplierId: sampleRow.supplierId,
+                        originalTypeId: sampleRow.originalTypeId,
+                        batchNumber: sampleRow.batchNumber,
+                        weightPurchased: sampleRow.weightPurchased
+                    } : null,
+                    note: 'Purchases should appear in Original Opening form after Firebase syncs (may take 1-2 seconds). Check console for "📦 Sample purchase structure" logs during import.'
+                });
+            }
 
             // Show detailed error message if ledger entries failed
             if (selectedEntity === 'partners' && errors.some(e => e.includes('not found in state') || e.includes('ledger entries NOT created'))) {
@@ -2190,7 +2331,10 @@ export const DataImportExport: React.FC = () => {
                 const logisticsErrors = errors.filter(e => e.includes('logistics entry') || e.includes('LogisticsEntry'));
                 if (ledgerErrors.length > 0 || logisticsErrors.length > 0) {
                     const allErrors = [...ledgerErrors, ...logisticsErrors];
-                    alert(`⚠️ IMPORT WARNING:\n\n${successCount} purchase(s) imported successfully.\n\nHowever, some issues occurred:\n\n${allErrors.slice(0, 3).join('\n')}${allErrors.length > 3 ? `\n... and ${allErrors.length - 3} more` : ''}\n\nPlease check the console for details and verify:\n- Ledger entries in Accounting > Ledger\n- Logistics entries in Logistics module`);
+                    alert(`⚠️ IMPORT WARNING:\n\n${successCount} purchase(s) imported successfully.\n\nHowever, some issues occurred:\n\n${allErrors.slice(0, 3).join('\n')}${allErrors.length > 3 ? `\n... and ${allErrors.length - 3} more` : ''}\n\nPlease check the console for details and verify:\n- Ledger entries in Accounting > Ledger\n- Logistics entries in Logistics module\n\nNote: Purchases may take 1-2 seconds to appear in Original Opening form. If batches don't show, try refreshing the page.`);
+                } else if (successCount > 0) {
+                    // Success message for purchases without errors
+                    alert(`✅ Successfully imported ${successCount} purchase(s)!\n\nPurchases are being saved to Firebase. They should appear in the Original Opening form within 1-2 seconds.\n\nIf batch numbers don't appear:\n1. Wait 2-3 seconds for Firebase to sync\n2. Refresh the page\n3. Check that Supplier and Original Type are selected correctly`);
                 }
             }
 
@@ -2711,3 +2855,4 @@ export const DataImportExport: React.FC = () => {
         </div>
     );
 };
+

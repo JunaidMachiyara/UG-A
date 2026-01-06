@@ -118,3 +118,4 @@ const totals = accountEntriesMap.get(acc.id) || { debit: 0, credit: 0 };
 
 All performance optimizations have been applied and tested. The app should now load significantly faster, especially for factories with large amounts of data.
 
+
