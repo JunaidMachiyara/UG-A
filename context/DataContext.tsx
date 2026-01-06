@@ -309,7 +309,7 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                             // If AP account is credited, we owe them (negative balance)
                             // If AP account is debited, we paid them (positive balance)
                             openingBalance = apEntry.credit > 0 ? -apEntry.credit : apEntry.debit;
-                        } else {
+                } else {
                             // Fallback: calculate from all opening balance entries
                             const obDebitSum = openingBalanceEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
                             const obCreditSum = openingBalanceEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
@@ -2325,33 +2325,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         
                         if (partner.balance >= 0) {
                             // Positive balance: Customer owes us
-                            entries = [
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${docRef.id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: docRef.id,
-                                    accountName: partner.name,
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: docRef.id,
+                                accountName: partner.name,
                                     debit: absBalance,
-                                    credit: 0,
-                                    narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                },
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${docRef.id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: openingEquityId,
-                                    accountName: 'Opening Equity',
-                                    debit: 0,
+                                credit: 0,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: 0,
                                     credit: absBalance,
-                                    narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                }
-                            ];
-                        } else {
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
+                    } else {
                             // Negative balance: Credit balance (we owe them or they overpaid)
                             entries = [
                                 {
@@ -2390,32 +2390,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             // Negative balance: Accounts Payable (Liability)
                             // Post to partner account ID (not Accounts Payable account) to avoid duplication in Balance Sheet
                             // Balance Sheet calculates "Creditors (Accounts Payable)" from supplier balances directly
-                            entries = [
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${docRef.id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
-                                    accountId: openingEquityId,
-                                    accountName: 'Opening Equity',
-                                    debit: absBalance,
-                                    credit: 0,
-                                    narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                },
-                                {
-                                    ...commonProps,
-                                    date,
-                                    transactionId: `OB-${docRef.id}`,
-                                    transactionType: TransactionType.OPENING_BALANCE,
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: openingEquityId,
+                                accountName: 'Opening Equity',
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${docRef.id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
                                     accountId: docRef.id, // Use partner ID, not Accounts Payable account
-                                    accountName: partner.name,
-                                    debit: 0,
-                                    credit: absBalance,
-                                    narration: `Opening Balance - ${partner.name}`,
-                                    factoryId: currentFactory?.id || ''
-                                }
-                            ];
+                                accountName: partner.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${partner.name}`,
+                                factoryId: currentFactory?.id || ''
+                            }
+                        ];
                         } else {
                             // Positive balance: Advance to Supplier (Asset)
                             // Debit Supplier Account (asset), Credit Capital
@@ -2553,18 +2553,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 
                 // Create new opening balance entries
-                console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
-                const prevYear = new Date().getFullYear() - 1;
-                const date = `${prevYear}-12-31`;
-                const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
-                let entries: Omit<LedgerEntry, 'id'>[] = [];
-                const currency = partner.defaultCurrency || existingPartner.defaultCurrency || 'USD';
-                const exchangeRates = getExchangeRates(state.currencies);
-                const rate = exchangeRates[currency] || 1;
-                const fcyAmt = newBalance * rate;
-                const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
-                
-                if (existingPartner.type === 'CUSTOMER') {
+                    console.log('📝 Creating opening balance entries for partner:', id, 'Balance:', newBalance);
+                    const prevYear = new Date().getFullYear() - 1;
+                    const date = `${prevYear}-12-31`;
+                    const openingEquityId = state.accounts.find(a => a.name.includes('Capital'))?.id || '301';
+                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                    const currency = partner.defaultCurrency || existingPartner.defaultCurrency || 'USD';
+                    const exchangeRates = getExchangeRates(state.currencies);
+                    const rate = exchangeRates[currency] || 1;
+                    const fcyAmt = newBalance * rate;
+                    const commonProps = { currency, exchangeRate: rate, fcyAmount: Math.abs(fcyAmt) };
+                    
+                    if (existingPartner.type === 'CUSTOMER') {
                         // Customer opening balance logic:
                         // Positive balance (they owe us): Debit AR, Credit Equity
                         // Negative balance (we owe them/credit balance): Credit AR, Debit Equity
@@ -2631,7 +2631,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     // Supplier/Vendor/Sub Supplier opening balance logic:
                     // Negative balance (we owe them): Debit Capital, Credit Supplier (liability)
                     // Positive balance (they owe us - advance): Debit Supplier (asset), Credit Capital
-                    const absBalance = Math.abs(newBalance);
+                        const absBalance = Math.abs(newBalance);
                     
                     if (newBalance < 0) {
                         // Negative balance: Accounts Payable (Liability)
@@ -2695,7 +2695,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                 }
                 await postTransaction(entries);
-                console.log('✅ Opening balance entries created');
+                    console.log('✅ Opening balance entries created');
                 
                 // Wait a moment for Firebase to sync the new entries
                 await new Promise(resolve => setTimeout(resolve, 500));
@@ -3159,7 +3159,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // Track cumulative WIP consumption across all productions in this batch
                 let cumulativeWipConsumedInBatch = 0;
                 
-                // Track skipped items to inform user
+                // Track skipped items (for ledger entries only - production entries will still be saved)
                 const skippedItems: Array<{ itemName: string; reason: string; qty: number }> = [];
                 
                 productionsWithFactory.forEach(prod => {
@@ -3171,7 +3171,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             reason: 'Item not found in system',
                             qty: prod.qtyProduced
                         });
-                        return;
+                        return; // Skip this production entry entirely (can't save without item)
                     }
                     
                     console.log('📦 Item found:', item.name, 'avgCost:', item.avgCost);
@@ -3181,22 +3181,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const finishedGoodsValue = prod.qtyProduced * productionPrice;
                     const totalKg = prod.weightProduced;
                     
-                    // Skip items with invalid values (NaN, undefined, or exactly 0)
+                    // Skip ledger entries for items with invalid values (NaN, undefined, or exactly 0)
                     // NOTE: Negative values are allowed (e.g., garbage items with negative cost)
                     // The ledger entry logic already handles negative values correctly
+                    // IMPORTANT: Production entries will still be saved to database for inventory tracking
+                    // Only ledger entries are skipped (can't create accounting entries with zero value)
                     if (productionPrice === undefined || productionPrice === null || isNaN(productionPrice) || finishedGoodsValue === 0) {
                         const reason = productionPrice === undefined || productionPrice === null
                             ? 'Production price is missing (undefined/null)' 
                             : isNaN(productionPrice) 
                             ? 'Production price is invalid (NaN)' 
                             : 'Production value is exactly zero';
-                        console.warn(`⚠️ Skipping production entry for ${prod.itemName}: ${reason} (Price: ${productionPrice}, Value: ${finishedGoodsValue})`);
+                        console.warn(`⚠️ Skipping ledger entry for ${prod.itemName}: ${reason} (Price: ${productionPrice}, Value: ${finishedGoodsValue}). Production entry will still be saved for inventory tracking.`);
                         skippedItems.push({
                             itemName: prod.itemName,
                             reason: reason,
                             qty: prod.qtyProduced
                         });
-                        return; // Skip this production entry
+                        return; // Skip ledger entry creation, but production entry will still be saved
                     }
                     
                     // Log if processing negative value item (for transparency)
@@ -3440,11 +3442,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         throw new Error(`Failed to post ledger entries: ${error.message || 'Unknown error'}`);
                     }
                 } else {
-                    console.warn('⚠️ WARNING: No ledger entries to post! This might indicate all production entries had zero or invalid values.');
+                    // No ledger entries to post (all items had zero/invalid values)
+                    console.warn('⚠️ WARNING: No ledger entries to post! All production entries had zero or invalid values.');
                     if (skippedItems.length > 0) {
                         (window as any).__skippedProductionItems = skippedItems;
                     }
-                    throw new Error('No ledger entries were created. Please check that production items have valid prices (avgCost or Production Price in CSV).');
+                    // Don't throw error - production entries will still be saved for inventory tracking
+                    // User will be notified about skipped ledger entries via the skippedItems message
+                    console.log('ℹ️ Production entries will still be saved to database for inventory tracking, but no ledger entries were created.');
                 }
             }
         }
@@ -3889,24 +3894,209 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Prevent double posting - check if entries already exist (check both state and Firebase)
         const transactionId = `INV-${invoice.invoiceNo}`;
         
-        // Check state first (fast check)
+        // Check state first (fast check) - but ALWAYS verify with Firebase before trusting state
         const existingEntriesInState = state.ledger.filter(e => e.transactionId === transactionId);
-        if (existingEntriesInState.length > 0) {
-            alert('⚠️ This invoice has already been posted! Ledger entries exist in current session.');
-            console.warn('Prevented double posting for:', invoice.invoiceNo, '- Found', existingEntriesInState.length, 'entries in state');
-            return;
-        }
+        // Don't trust state alone - always verify with Firebase to avoid false positives from stale state
         
         // Also check Firebase directly (more reliable, catches entries from other sessions)
         if (isFirestoreLoaded) {
             try {
                 const ledgerRef = collection(db, 'ledger');
-                const ledgerQuery = query(ledgerRef, where('transactionId', '==', transactionId));
+                // CRITICAL: Filter by both transactionId AND factoryId to ensure we only check entries for this factory
+                const ledgerQuery = query(
+                    ledgerRef, 
+                    where('transactionId', '==', transactionId),
+                    where('factoryId', '==', invoice.factoryId || currentFactory?.id || '')
+                );
                 const ledgerSnapshot = await getDocs(ledgerQuery);
                 if (!ledgerSnapshot.empty) {
-                    alert(`⚠️ This invoice has already been posted! Found ${ledgerSnapshot.size} ledger entries in database.\n\nPlease do not post the same invoice twice.`);
-                    console.warn('Prevented double posting for:', invoice.invoiceNo, '- Found', ledgerSnapshot.size, 'entries in Firebase');
-                    return;
+                    // If entries exist but invoice status is Unposted, sync the status instead of blocking
+                    if (invoice.status === 'Unposted') {
+                        console.log('🔄 Ledger entries exist in Firebase but invoice status is Unposted. Syncing status to Posted...');
+                        
+                        // Check if COGS entries exist - if not, create them
+                        const existingEntries = ledgerSnapshot.docs.map(doc => doc.data());
+                        const hasCOGSEntry = existingEntries.some(e => 
+                            e.narration?.includes('COGS') || 
+                            e.accountName?.includes('Cost of Goods') ||
+                            (e.transactionType === TransactionType.SALES_INVOICE && e.debit > 0 && e.accountName?.toLowerCase().includes('cogs'))
+                        );
+                        const hasInventoryReduction = existingEntries.some(e => 
+                            e.narration?.includes('Inventory Reduction') ||
+                            (e.accountName?.includes('Finished Goods') && e.credit > 0 && e.transactionType === TransactionType.SALES_INVOICE)
+                        );
+                        
+                        console.log('📊 Checking existing ledger entries for COGS:', {
+                            totalEntries: existingEntries.length,
+                            hasCOGSEntry,
+                            hasInventoryReduction,
+                            entries: existingEntries.map(e => ({
+                                accountName: e.accountName,
+                                debit: e.debit,
+                                credit: e.credit,
+                                narration: e.narration
+                            }))
+                        });
+                        
+                        // If COGS entries are missing, create them
+                        if (!hasCOGSEntry || !hasInventoryReduction) {
+                            console.log('⚠️ COGS entries missing. Creating them now...');
+                            
+                            // Lookup required accounts
+                            const cogsAccount = state.accounts.find(a => 
+                                a.name.includes('Cost of Goods Sold') || 
+                                a.name.includes('COGS') ||
+                                a.code === '5000'
+                            );
+                            const finishedGoodsAccount = state.accounts.find(a => 
+                                a.name.includes('Inventory - Finished Goods') || 
+                                a.name.includes('Finished Goods') ||
+                                a.code === '105' || 
+                                a.code === '1202'
+                            );
+                            
+                            if (!cogsAccount) {
+                                alert(`❌ COGS account not found! Cannot create missing COGS entries.\n\nPlease create an EXPENSE type account (Code: 5000, Name: "Cost of Goods Sold") in Setup > Chart of Accounts.`);
+            return;
+        }
+        
+                            if (!finishedGoodsAccount) {
+                                alert(`❌ Finished Goods Inventory account not found! Cannot create missing inventory reduction entries.\n\nPlease create an ASSET type account (Code: 105, Name: "Inventory - Finished Goods") in Setup > Chart of Accounts.`);
+                                return;
+                            }
+                            
+                            // Calculate COGS based on item avgCost
+                            const cogsBreakdown: Array<{ itemName: string; qty: number; avgCost: number; itemCOGS: number }> = [];
+                            const totalCOGS = invoice.items.reduce((sum, item) => {
+                                const itemDef = state.items.find(i => i.id === item.itemId);
+                                if (!itemDef) {
+                                    console.warn(`⚠️ Item not found for COGS calculation: ${item.itemId}`);
+                                    return sum;
+                                }
+                                const avgCost = itemDef.avgCost || 0;
+                                const itemCOGS = item.qty * avgCost;
+                                cogsBreakdown.push({
+                                    itemName: itemDef.name,
+                                    qty: item.qty,
+                                    avgCost: avgCost,
+                                    itemCOGS: itemCOGS
+                                });
+                                return sum + itemCOGS;
+                            }, 0);
+                            
+                            console.log('📊 COGS Calculation:', {
+                                totalCOGS,
+                                breakdown: cogsBreakdown,
+                                itemsWithZeroCost: cogsBreakdown.filter(b => b.avgCost === 0 || b.itemCOGS === 0)
+                            });
+                            
+                            if (totalCOGS > 0) {
+                                const missingEntries: Omit<LedgerEntry, 'id'>[] = [];
+                                
+                                if (!hasCOGSEntry) {
+                                    // Debit COGS (Expense increases)
+                                    missingEntries.push({ 
+                                        date: invoice.date, 
+                                        transactionId, 
+                                        transactionType: TransactionType.SALES_INVOICE, 
+                                        accountId: cogsAccount.id, 
+                                        accountName: 'Cost of Goods Sold', 
+                                        currency: 'USD', 
+                                        exchangeRate: 1, 
+                                        fcyAmount: totalCOGS, 
+                                        debit: totalCOGS, 
+                                        credit: 0, 
+                                        narration: `COGS: ${invoice.invoiceNo}`, 
+                                        factoryId: invoice.factoryId 
+                                    });
+                                    console.log('✅ Adding missing COGS entry:', totalCOGS);
+                                }
+                                
+                                if (!hasInventoryReduction) {
+                                    // Credit Finished Goods Inventory (Asset decreases)
+                                    missingEntries.push({ 
+                                        date: invoice.date, 
+                                        transactionId, 
+                                        transactionType: TransactionType.SALES_INVOICE, 
+                                        accountId: finishedGoodsAccount.id, 
+                                        accountName: 'Inventory - Finished Goods', 
+                                        currency: 'USD', 
+                                        exchangeRate: 1, 
+                                        fcyAmount: totalCOGS, 
+                                        debit: 0, 
+                                        credit: totalCOGS, 
+                                        narration: `Inventory Reduction: ${invoice.invoiceNo}`, 
+                                        factoryId: invoice.factoryId 
+                                    });
+                                    console.log('✅ Adding missing Inventory Reduction entry:', totalCOGS);
+                                }
+                                
+                                if (missingEntries.length > 0) {
+                                    console.log(`📝 Creating ${missingEntries.length} missing COGS/Inventory entries...`);
+                                    try {
+                                        await postTransaction(missingEntries);
+                                        console.log('✅ Missing COGS entries created successfully');
+                                    } catch (error) {
+                                        console.error('❌ Error creating missing COGS entries:', error);
+                                        alert(`❌ Error creating missing COGS entries: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                console.warn('⚠️ Cannot create COGS entries: Items have zero avgCost');
+                                const itemsWithZeroCost = cogsBreakdown.filter(b => b.avgCost === 0 || b.itemCOGS === 0);
+                                if (itemsWithZeroCost.length > 0) {
+                                    alert(`⚠️ Warning: Cannot create COGS entries because items have zero avgCost:\n\n${itemsWithZeroCost.map(b => `  • ${b.itemName}: AvgCost $${b.avgCost.toFixed(2)}`).join('\n')}\n\nPlease set avgCost for these items in Setup > Items.`);
+                                }
+                            }
+                        }
+                        
+                        // Update invoice status to Posted
+                        dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
+                        // Update status in Firestore - filter by both invoiceNo AND factoryId to ensure correct invoice
+                        try {
+                            const invoicesRef = collection(db, 'salesInvoices');
+                            const q = query(
+                                invoicesRef, 
+                                where('invoiceNo', '==', invoice.invoiceNo),
+                                where('factoryId', '==', invoice.factoryId || currentFactory?.id || '')
+                            );
+                            const snapshot = await getDocs(q);
+                            if (!snapshot.empty) {
+                                const docRef = snapshot.docs[0].ref;
+                                await updateDoc(docRef, { 
+                                    status: 'Posted',
+                                    updatedAt: serverTimestamp()
+                                });
+                                console.log('✅ Invoice status synced to Posted in Firestore:', invoice.invoiceNo);
+                                // Wait a moment for Firestore to sync
+                                await new Promise(resolve => setTimeout(resolve, 500));
+                                const cogsMessage = (!hasCOGSEntry || !hasInventoryReduction) ? '\n\n✅ Missing COGS entries have been created.' : '';
+                                alert(`✅ Invoice ${invoice.invoiceNo} status has been synced to Posted.\n\nFound ${ledgerSnapshot.size} ledger entries in database.${cogsMessage}`);
+                                return;
+                            } else {
+                                console.error('❌ Invoice not found in Firestore for sync:', invoice.invoiceNo, 'Factory:', invoice.factoryId);
+                                alert(`⚠️ Warning: Invoice ${invoice.invoiceNo} not found in database. Status sync may have failed.`);
+                            }
+                        } catch (error) {
+                            console.error('❌ Error syncing invoice status:', error);
+                            alert(`❌ Error syncing invoice status: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                        }
+                    } else {
+                        // Invoice is Posted and entries exist - prevent double posting
+                        alert(`⚠️ This invoice has already been posted! Found ${ledgerSnapshot.size} ledger entries in database.\n\nPlease do not post the same invoice twice.`);
+                        console.warn('Prevented double posting for:', invoice.invoiceNo, '- Found', ledgerSnapshot.size, 'entries in Firebase');
+                        return;
+                    }
+                } else {
+                    // CRITICAL: No entries found in Firebase
+                    console.log(`📊 Firebase check: No ledger entries found for transaction ${transactionId}`);
+                    // If invoice is Posted but no entries exist, create them now
+                    if (invoice.status === 'Posted') {
+                        console.log('⚠️ Invoice is Posted but NO ledger entries exist in Firebase. Will create missing entries in normal posting flow...');
+                        // Don't return - continue to normal posting flow to create entries
+                    }
+                    // If invoice is Unposted and no entries exist, continue to normal posting flow
                 }
             } catch (error) {
                 console.error('❌ Error checking for existing ledger entries:', error);
@@ -3914,18 +4104,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
+        // If we reach here, NO entries exist - proceed with normal posting flow
+        console.log('✅ No existing entries found. Proceeding with normal posting flow for invoice:', invoice.invoiceNo);
+        
         dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
         
         // Update status in Firestore (find by matching invoice data since we don't store Firebase doc ID)
+        // CRITICAL: Filter by both invoiceNo AND factoryId to ensure correct invoice
         if (isFirestoreLoaded) {
             try {
                 const invoicesRef = collection(db, 'salesInvoices');
-                const q = query(invoicesRef, where('invoiceNo', '==', invoice.invoiceNo));
+                const q = query(
+                    invoicesRef, 
+                    where('invoiceNo', '==', invoice.invoiceNo),
+                    where('factoryId', '==', invoice.factoryId || currentFactory?.id || '')
+                );
                 const snapshot = await getDocs(q);
                 if (!snapshot.empty) {
                     const docRef = snapshot.docs[0].ref;
-                    await updateDoc(docRef, { status: 'Posted' });
-                    console.log('✅ Invoice status updated to Posted in Firestore');
+                    await updateDoc(docRef, { 
+                        status: 'Posted',
+                        updatedAt: serverTimestamp()
+                    });
+                    console.log('✅ Invoice status updated to Posted in Firestore:', invoice.invoiceNo);
+                    // Wait a moment for Firestore to sync
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                } else {
+                    console.error('❌ Invoice not found in Firestore for status update:', invoice.invoiceNo, 'Factory:', invoice.factoryId);
                 }
             } catch (error) {
                 console.error('❌ Error updating invoice status:', error);
@@ -4219,13 +4424,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory
+        const cogsBreakdown: Array<{ itemName: string; qty: number; avgCost: number; itemCOGS: number }> = [];
         const totalCOGS = invoice.items.reduce((sum, item) => {
             const itemDef = state.items.find(i => i.id === item.itemId);
-            if (!itemDef) return sum;
+            if (!itemDef) {
+                console.warn(`⚠️ Item not found for COGS calculation: ${item.itemId}`);
+                return sum;
+            }
             // COGS = quantity × avgCost (avgCost is per unit)
-            const itemCOGS = item.qty * itemDef.avgCost;
+            const avgCost = itemDef.avgCost || 0;
+            const itemCOGS = item.qty * avgCost;
+            cogsBreakdown.push({
+                itemName: itemDef.name,
+                qty: item.qty,
+                avgCost: avgCost,
+                itemCOGS: itemCOGS
+            });
             return sum + itemCOGS;
         }, 0);
+        
+        // Log COGS calculation for debugging
+        console.log('📊 COGS Calculation for Invoice:', invoice.invoiceNo, {
+            totalCOGS,
+            breakdown: cogsBreakdown,
+            itemsWithZeroCost: cogsBreakdown.filter(b => b.avgCost === 0 || b.itemCOGS === 0)
+        });
         
         if (totalCOGS > 0) {
             // Debit COGS (Expense increases)
@@ -4258,8 +4481,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 narration: `Inventory Reduction: ${invoice.invoiceNo}`, 
                 factoryId: invoice.factoryId 
             });
+            console.log(`✅ COGS entries created: $${totalCOGS.toFixed(2)}`);
+        } else {
+            // Warn if COGS is zero but items were sold
+            const itemsWithZeroCost = cogsBreakdown.filter(b => b.avgCost === 0 || b.itemCOGS === 0);
+            if (itemsWithZeroCost.length > 0) {
+                const warningMsg = `⚠️ WARNING: No COGS entries created for Invoice ${invoice.invoiceNo}!\n\n` +
+                    `Items sold have zero or missing avgCost:\n` +
+                    itemsWithZeroCost.map(b => `  • ${b.itemName}: Qty ${b.qty}, AvgCost $${b.avgCost.toFixed(2)}`).join('\n') +
+                    `\n\nPlease set avgCost for these items in Setup > Items before posting invoices.\n` +
+                    `COGS and Inventory Reduction entries were NOT created.`;
+                console.warn(warningMsg);
+                alert(warningMsg);
+            }
         }
-        postTransaction(entries);
+        
+        // CRITICAL: Log before posting to help debug
+        console.log('📝 Posting sales invoice ledger entries:', {
+            invoiceNo: invoice.invoiceNo,
+            transactionId,
+            totalEntries: entries.length,
+            entries: entries.map(e => ({
+                accountName: e.accountName,
+                debit: e.debit,
+                credit: e.credit,
+                narration: e.narration
+            }))
+        });
+        
+        if (entries.length === 0) {
+            throw new Error(`CRITICAL: No ledger entries to post for invoice ${invoice.invoiceNo}! This should never happen.`);
+        }
+        
+        await postTransaction(entries);
+        console.log(`✅ Successfully posted ${entries.length} ledger entries for invoice ${invoice.invoiceNo}`);
     };
     const addDirectSale = (invoice: SalesInvoice, batchLandedCostPerKg: number) => {
         dispatch({ type: 'ADD_SALES_INVOICE', payload: invoice });
@@ -4454,13 +4709,193 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             factoryId: currentFactory?.id || ''
         };
         
+        // Extract opening balance before removing it from accountData
+        const openingBalance = account.balance !== undefined && account.balance !== null && !isNaN(account.balance)
+            ? Number(account.balance)
+            : 0;
+        
         // Remove id field - Firebase generates it
+        // Set balance to 0 in Firebase - actual balance will come from ledger entries
         const { id, ...accountData } = accountWithFactory;
         
         // Save to Firebase (listener will add to local state)
         try {
-            const docRef = await addDoc(collection(db, 'accounts'), { ...accountData, createdAt: serverTimestamp() });
-            // Firebase listener will handle adding to local state with real ID
+            const docRef = await addDoc(collection(db, 'accounts'), { ...accountData, balance: 0, createdAt: serverTimestamp() });
+            const accountId = docRef.id;
+            
+            // Wait a moment for Firebase to sync the new account
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // If opening balance is provided and non-zero, create opening balance ledger entries
+            if (openingBalance !== 0) {
+                const absBalance = Math.abs(openingBalance);
+                const date = new Date().toISOString().split('T')[0];
+                
+                // Find Owner's Capital account (EQUITY) - try multiple fallbacks
+                let capitalAccount = state.accounts.find(a => 
+                    a.code === '301' &&
+                    a.type === AccountType.EQUITY &&
+                    (!a.factoryId || a.factoryId === currentFactory?.id)
+                );
+                
+                if (!capitalAccount) {
+                    capitalAccount = state.accounts.find(a => 
+                        (a.name.includes('Owner\'s Capital') || a.name.includes('Owner Capital')) &&
+                        a.type === AccountType.EQUITY &&
+                        (!a.factoryId || a.factoryId === currentFactory?.id)
+                    );
+                }
+                
+                if (!capitalAccount) {
+                    capitalAccount = state.accounts.find(a => 
+                        a.type === AccountType.EQUITY &&
+                        (!a.factoryId || a.factoryId === currentFactory?.id)
+                    );
+                }
+                
+                if (!capitalAccount) {
+                    console.warn('⚠️ Owner\'s Capital account not found. Opening balance entries will not be created.');
+                    alert('⚠️ Warning: Owner\'s Capital account not found. Opening balance entries were not created.\n\nPlease create Owner\'s Capital account (code 301, EQUITY type) first.');
+                } else {
+                    const commonProps = {
+                        currency: 'USD' as Currency,
+                        exchangeRate: 1,
+                        fcyAmount: absBalance,
+                        factoryId: currentFactory?.id || ''
+                    };
+                    
+                    let entries: Omit<LedgerEntry, 'id'>[] = [];
+                    
+                    // Determine debit/credit based on account type and balance sign
+                    if ([AccountType.ASSET, AccountType.EXPENSE].includes(account.type)) {
+                        // ASSET/EXPENSE: Positive balance = Debit, Negative balance = Credit
+                        if (openingBalance > 0) {
+                            // Debit Asset/Expense, Credit Capital
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: accountId,
+                                    accountName: account.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${account.name}`
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: capitalAccount.id,
+                                    accountName: capitalAccount.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${account.name}`
+                                }
+                            ];
+                        } else {
+                            // Credit Asset/Expense (reduces), Debit Capital
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: accountId,
+                                    accountName: account.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${account.name}`
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: capitalAccount.id,
+                                    accountName: capitalAccount.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${account.name}`
+                                }
+                            ];
+                        }
+                    } else {
+                        // LIABILITY/EQUITY/REVENUE: Positive balance = Credit, Negative balance = Debit
+                        // IMPORTANT: For LIABILITY accounts, negative balance means it's actually an asset (advance)
+                        // But since Balance Sheet uses Math.abs() for liabilities, we need to handle this correctly
+                        if (openingBalance > 0) {
+                            // Positive opening balance: Credit Liability/Equity/Revenue, Debit Capital
+                            // This increases liability and decreases equity
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: accountId,
+                                    accountName: account.name,
+                                    debit: 0,
+                                    credit: absBalance,
+                                    narration: `Opening Balance - ${account.name}`
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: capitalAccount.id,
+                                    accountName: capitalAccount.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${account.name}`
+                                }
+                            ];
+                        } else {
+                            // Negative opening balance for LIABILITY/EQUITY/REVENUE
+                            // CRITICAL FIX: Balance Sheet uses Math.abs() for liability accounts
+                            // So negative liability balance (-$1000) shows as positive (+$1000) in Balance Sheet
+                            // To keep Balance Sheet balanced:
+                            // - Debit Liability (reduces liability, balance becomes negative)
+                            // - Debit Capital (decreases equity)
+                            // Result: Balance Sheet shows liability as +$1000 (Math.abs), but equity decreases by $1000
+                            // Equation: Assets = (Liabilities + 1000) + (Equity - 1000) = Liabilities + Equity ✓ BALANCED
+                            entries = [
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: accountId,
+                                    accountName: account.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${account.name}`
+                                },
+                                {
+                                    ...commonProps,
+                                    date,
+                                    transactionId: `OB-${accountId}`,
+                                    transactionType: TransactionType.OPENING_BALANCE,
+                                    accountId: capitalAccount.id,
+                                    accountName: capitalAccount.name,
+                                    debit: absBalance,
+                                    credit: 0,
+                                    narration: `Opening Balance - ${account.name}`
+                                }
+                            ];
+                        }
+                    }
+                    
+                    // Post opening balance entries
+                    if (entries.length > 0) {
+                        await postTransaction(entries);
+                        console.log(`✅ Opening balance entries created for account ${account.name}: ${openingBalance}`);
+                    }
+                }
+            }
         } catch (error) {
             console.error('❌ Error saving account:', error);
             throw error;
@@ -4475,11 +4910,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
         }
 
-        // Get existing account to check for type changes
+        // Get existing account to check for type changes and opening balance
         const existingAccount = state.accounts.find(a => a.id === id);
         if (!existingAccount) {
             throw new Error(`Account with ID ${id} not found`);
         }
+
+        // Extract opening balance before deleting it from accountData
+        const newOpeningBalance = account.balance !== undefined ? account.balance : undefined;
+        const openingBalanceChanged = newOpeningBalance !== undefined && 
+            Math.abs((newOpeningBalance || 0) - (existingAccount.balance || 0)) > 0.01;
 
         // Warn if changing account type (especially ASSET to EXPENSE)
         if (account.type && account.type !== existingAccount.type) {
@@ -4522,6 +4962,223 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await updateDoc(doc(db, 'accounts', id), accountData);
             // Firebase listener will handle updating local state
             console.log('✅ Account updated successfully');
+            
+            // If opening balance was changed, handle opening balance entries
+            if (openingBalanceChanged && newOpeningBalance !== undefined) {
+                // Check if opening balance entries already exist
+                const existingOBEntries = state.ledger.filter(
+                    e => e.transactionId === `OB-${id}` && e.transactionType === TransactionType.OPENING_BALANCE
+                );
+                
+                // If opening balance entries exist, delete them first
+                if (existingOBEntries.length > 0) {
+                    console.log('🔄 Deleting existing opening balance entries for account:', id, 'Count:', existingOBEntries.length);
+                    try {
+                        await deleteTransaction(`OB-${id}`, 'Opening balance updated');
+                        console.log('✅ Old opening balance entries deleted');
+                        
+                        // Wait for Firebase to process the deletion
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+                        // Verify deletion by querying Firebase directly
+                        const ledgerQuery = query(
+                            collection(db, 'ledger'), 
+                            where('transactionId', '==', `OB-${id}`),
+                            where('factoryId', '==', currentFactory?.id || '')
+                        );
+                        const verifySnapshot = await getDocs(ledgerQuery);
+                        
+                        if (verifySnapshot.size > 0) {
+                            console.warn(`⚠️ Warning: ${verifySnapshot.size} opening balance entries still exist in Firebase after deletion. Retrying deletion...`);
+                            // Retry deletion
+                            await deleteTransaction(`OB-${id}`, 'Opening balance updated - retry');
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            // Verify again
+                            const retrySnapshot = await getDocs(ledgerQuery);
+                            if (retrySnapshot.size > 0) {
+                                throw new Error(`Failed to delete ${retrySnapshot.size} old opening balance entries. Cannot create new entries.`);
+                            }
+                        }
+                        console.log('✅ Verified: All old opening balance entries deleted from Firebase');
+                    } catch (error: any) {
+                        console.error('⚠️ Error deleting old opening balance entries:', error);
+                        throw error; // Don't continue - we can't have duplicate entries
+                    }
+                }
+                
+                // If new opening balance is 0, we're done (entries deleted above)
+                if (newOpeningBalance === 0 || Math.abs(newOpeningBalance) < 0.01) {
+                    console.log('✅ Opening balance set to 0, entries deleted');
+                    return; // Exit early
+                }
+                
+                // Create new opening balance entries
+                console.log('📝 Creating opening balance entries for account:', id, 'Balance:', newOpeningBalance);
+                const absBalance = Math.abs(newOpeningBalance);
+                const date = new Date().toISOString().split('T')[0];
+                
+                // Find Owner's Capital account (EQUITY) - try multiple fallbacks
+                let capitalAccount = state.accounts.find(a => 
+                    a.code === '301' &&
+                    a.type === AccountType.EQUITY &&
+                    (!a.factoryId || a.factoryId === currentFactory?.id)
+                );
+                
+                if (!capitalAccount) {
+                    capitalAccount = state.accounts.find(a => 
+                        (a.name.includes('Owner\'s Capital') || a.name.includes('Owner Capital')) &&
+                        a.type === AccountType.EQUITY &&
+                        (!a.factoryId || a.factoryId === currentFactory?.id)
+                    );
+                }
+                
+                if (!capitalAccount) {
+                    capitalAccount = state.accounts.find(a => 
+                        a.type === AccountType.EQUITY &&
+                        (!a.factoryId || a.factoryId === currentFactory?.id)
+                    );
+                }
+                
+                if (!capitalAccount) {
+                    console.warn('⚠️ Owner\'s Capital account not found. Opening balance entries will not be created.');
+                    alert('⚠️ Warning: Owner\'s Capital account not found. Opening balance entries were not created.\n\nPlease create Owner\'s Capital account (code 301, EQUITY type) first.');
+                    return;
+                }
+                
+                const commonProps = {
+                    currency: 'USD' as Currency,
+                    exchangeRate: 1,
+                    fcyAmount: absBalance,
+                    factoryId: currentFactory?.id || ''
+                };
+                
+                let entries: Omit<LedgerEntry, 'id'>[] = [];
+                
+                // Use the account type from the update (or existing if not changed)
+                const accountType = account.type || existingAccount.type;
+                
+                // Determine debit/credit based on account type and balance sign
+                if ([AccountType.ASSET, AccountType.EXPENSE].includes(accountType)) {
+                    // ASSET/EXPENSE: Positive balance = Debit, Negative balance = Credit
+                    if (newOpeningBalance > 0) {
+                        // Debit Asset/Expense, Credit Capital
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingAccount.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalAccount.id,
+                                accountName: capitalAccount.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            }
+                        ];
+                    } else {
+                        // Credit Asset/Expense (reduces), Debit Capital
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingAccount.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalAccount.id,
+                                accountName: capitalAccount.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            }
+                        ];
+                    }
+                } else {
+                    // LIABILITY/EQUITY/REVENUE: Positive balance = Credit, Negative balance = Debit
+                    if (newOpeningBalance > 0) {
+                        // Positive opening balance: Credit Liability/Equity/Revenue, Debit Capital
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingAccount.name,
+                                debit: 0,
+                                credit: absBalance,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalAccount.id,
+                                accountName: capitalAccount.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            }
+                        ];
+                    } else {
+                        // Negative opening balance for LIABILITY/EQUITY/REVENUE
+                        // CRITICAL FIX: Balance Sheet uses Math.abs() for liability accounts
+                        // To keep Balance Sheet balanced: Debit Liability, Debit Capital
+                        entries = [
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: id,
+                                accountName: existingAccount.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            },
+                            {
+                                ...commonProps,
+                                date,
+                                transactionId: `OB-${id}`,
+                                transactionType: TransactionType.OPENING_BALANCE,
+                                accountId: capitalAccount.id,
+                                accountName: capitalAccount.name,
+                                debit: absBalance,
+                                credit: 0,
+                                narration: `Opening Balance - ${existingAccount.name}`
+                            }
+                        ];
+                    }
+                }
+                
+                // Post opening balance entries
+                if (entries.length > 0) {
+                    await postTransaction(entries);
+                    console.log(`✅ Opening balance entries created for account ${existingAccount.name}: ${newOpeningBalance}`);
+                }
+            }
         } catch (error) {
             console.error('❌ Error updating account:', error);
             throw error;

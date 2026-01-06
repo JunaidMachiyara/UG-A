@@ -1276,47 +1276,78 @@ export const Accounting: React.FC = () => {
                 a.code === '105' ||
                 a.code === '1202'
             );
-            // CRITICAL FIX: Lookup Inventory Adjustment account - should be EXPENSE type (code 503)
-            // Prefer EXPENSE type accounts, but allow EQUITY as fallback
-            // DO NOT use ASSET type accounts (they appear in Assets section, not Expenses)
+            // FIXED: Inventory adjustments should post to Owner's Capital (EQUITY), not EXPENSE
+            // This ensures inventory increases increase equity (Owner's Capital), not reduce Net Income
+            // Lookup Owner's Capital account (preferred for inventory adjustments)
+            // Priority: Code 301 first, then by name, then any EQUITY account
+            // Note: Owner's Capital is a fundamental account, so we check factoryId but also allow accounts without factoryId (backward compatibility)
+            
+            // First: Try to find account with code 301 (exact match preferred)
             adjustmentAccount = state.accounts.find(a => 
-                (a.name.includes('Inventory Adjustment') || 
-                 a.name.includes('Write-off') ||
-                 a.code === '503') &&
-                (a.type === AccountType.EXPENSE || a.type === AccountType.EQUITY)
+                a.code === '301' &&
+                a.type === AccountType.EQUITY &&
+                (!a.factoryId || a.factoryId === state.currentFactory?.id)
             );
             
-            // Fallback: if no EXPENSE/EQUITY account found, find by name/code only (for backward compatibility)
+            // Second: If code 301 not found, try by name (Owner's Capital)
             if (!adjustmentAccount) {
                 adjustmentAccount = state.accounts.find(a => 
-                a.name.includes('Inventory Adjustment') || 
+                    (a.name.includes('Owner\'s Capital') || 
+                     a.name.includes('Owner Capital')) &&
+                    a.type === AccountType.EQUITY &&
+                    (!a.factoryId || a.factoryId === state.currentFactory?.id)
+                );
+            }
+            
+            // Third: Fallback - try Inventory Adjustment account (EQUITY type only)
+            if (!adjustmentAccount) {
+                adjustmentAccount = state.accounts.find(a => 
+                    (a.name.includes('Inventory Adjustment') || 
                 a.name.includes('Write-off') ||
-                a.code === '503'
-                ) || undefined;
-                
-                if (adjustmentAccount && adjustmentAccount.type === AccountType.ASSET) {
-                    console.error('❌ CRITICAL ERROR: Inventory Adjustment account is an ASSET account!');
-                    console.error('   This will cause Balance Sheet issues. The account should be EXPENSE or EQUITY type.');
-                    console.error('   Account found:', {
-                        id: adjustmentAccount.id,
-                        name: adjustmentAccount.name,
-                        code: adjustmentAccount.code,
-                        type: adjustmentAccount.type
-                    });
-                    return alert(`❌ CRITICAL ERROR: Inventory Adjustment account "${adjustmentAccount.name}" is an ASSET account.\n\n` +
-                        `This will cause Balance Sheet imbalance. The account should be:\n` +
-                        `- Type: EXPENSE (recommended) or EQUITY\n` +
-                        `- Code: 503\n\n` +
-                        `Please update the account type in Setup > Chart of Accounts.\n\n` +
-                        `Current account: ${adjustmentAccount.name} (Type: ${adjustmentAccount.type})`);
-                }
+                     a.code === '503') &&
+                    a.type === AccountType.EQUITY &&
+                    (!a.factoryId || a.factoryId === state.currentFactory?.id)
+                );
+            }
+            
+            // Fourth: Final fallback - Any EQUITY account (ignoring factoryId if needed)
+            if (!adjustmentAccount) {
+                adjustmentAccount = state.accounts.find(a => 
+                    a.type === AccountType.EQUITY &&
+                    (!a.factoryId || a.factoryId === state.currentFactory?.id)
+                );
+            }
+            
+            // Fifth: Ultimate fallback - Any EQUITY account regardless of factoryId
+            if (!adjustmentAccount) {
+                adjustmentAccount = state.accounts.find(a => 
+                    (a.code === '301' || a.name.includes('Owner\'s Capital') || a.name.includes('Owner Capital')) &&
+                    a.type === AccountType.EQUITY
+                );
             }
             
             if (!inventoryAccount || !adjustmentAccount) {
+                // Debug: Log all accounts to help diagnose
+                console.error('❌ Inventory Adjustment Account Lookup Failed:', {
+                    currentFactory: state.currentFactory?.id,
+                    currentFactoryName: state.currentFactory?.name,
+                    totalAccounts: state.accounts.length,
+                    accountsWith301: state.accounts.filter(a => a.code === '301'),
+                    accountsWithCapital: state.accounts.filter(a => a.name.includes('Capital')),
+                    equityAccounts: state.accounts.filter(a => a.type === AccountType.EQUITY).map(a => ({ 
+                        code: a.code, 
+                        name: a.name, 
+                        factoryId: a.factoryId,
+                        id: a.id 
+                    })),
+                    inventoryAccountFound: !!inventoryAccount,
+                    adjustmentAccountFound: !!adjustmentAccount
+                });
+                
                 const missingAccounts = [];
                 if (!inventoryAccount) missingAccounts.push('Inventory - Finished Goods (105 or 1202)');
-                if (!adjustmentAccount) missingAccounts.push('Inventory Adjustment (503) - EXPENSE or EQUITY type');
-                return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.`);
+                if (!adjustmentAccount) missingAccounts.push('Owner\'s Capital (301) - EQUITY type');
+                return alert(`Missing required accounts: ${missingAccounts.join(', ')}. Please ensure these accounts exist in Setup > Chart of Accounts.\n\nCheck browser console (F12) for detailed debug information.`);
             }
             
             // CRITICAL: Log account IDs to verify they match Balance Sheet calculation
@@ -1948,12 +1979,14 @@ export const Accounting: React.FC = () => {
             
             // Lookup discrepancy account dynamically (factory-specific, always correct)
             // Try EQUITY first (preferred for balancing), then LIABILITY
+            // IMPORTANT: Allow accounts without factoryId (backward compatibility) OR matching factoryId
             let discrepancyAccount = state.accounts.find(a => 
                 (a.name.includes('Discrepancy') || 
                 a.name.includes('Suspense') ||
                 a.name.includes('Balancing Discrepancy') ||
                  a.code === '505') &&
-                a.type === AccountType.EQUITY
+                a.type === AccountType.EQUITY &&
+                (!a.factoryId || a.factoryId === state.currentFactory?.id)
             );
             
             if (!discrepancyAccount) {
@@ -1963,11 +1996,32 @@ export const Accounting: React.FC = () => {
                      a.name.includes('Suspense') ||
                      a.name.includes('Balancing Discrepancy') ||
                      a.code === '505') &&
-                    a.type === AccountType.LIABILITY
+                    a.type === AccountType.LIABILITY &&
+                    (!a.factoryId || a.factoryId === state.currentFactory?.id)
+                );
+            }
+            
+            // Final fallback: Ignore factoryId completely (for accounts that might have wrong factoryId)
+            if (!discrepancyAccount) {
+                discrepancyAccount = state.accounts.find(a => 
+                    (a.name.includes('Discrepancy') || 
+                     a.name.includes('Suspense') ||
+                     a.name.includes('Balancing Discrepancy') ||
+                     a.code === '505') &&
+                    (a.type === AccountType.EQUITY || a.type === AccountType.LIABILITY)
                 );
             }
             
             if (!discrepancyAccount) {
+                // Debug: Log all accounts to help diagnose
+                console.error('❌ BD Account Lookup Failed:', {
+                    currentFactory: state.currentFactory?.id,
+                    totalAccounts: state.accounts.length,
+                    accountsWith505: state.accounts.filter(a => a.code === '505'),
+                    accountsWithDiscrepancy: state.accounts.filter(a => a.name.includes('Discrepancy') || a.name.includes('Suspense')),
+                    equityAccounts: state.accounts.filter(a => a.type === AccountType.EQUITY).map(a => ({ code: a.code, name: a.name, factoryId: a.factoryId })),
+                    liabilityAccounts: state.accounts.filter(a => a.type === AccountType.LIABILITY).map(a => ({ code: a.code, name: a.name, factoryId: a.factoryId }))
+                });
                 return alert('Missing required account: Balancing Discrepancy / Suspense (505).\n\nPlease create this account in:\nSetup > Chart of Accounts\n\nRecommended:\n- Code: 505\n- Name: "Balancing Discrepancy" or "Suspense Account"\n- Type: EQUITY (preferred) or LIABILITY\n- Opening Balance: 0\n\nThe system will automatically find it by code "505" or if the name contains "Discrepancy", "Suspense", or "Balancing Discrepancy".');
             }
             
@@ -2017,11 +2071,11 @@ export const Accounting: React.FC = () => {
                     }
                 } else {
                     // ASSET or CUSTOMER: Debit account/partner (increases asset), Credit Discrepancy
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     if (isEquityAccount) {
-                        // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                    } else {
+                        // If Discrepancy is EQUITY: Credit Discrepancy (increases equity) to balance
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+            } else {
                         // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
                         entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     }
@@ -2045,13 +2099,13 @@ export const Accounting: React.FC = () => {
                     }
                 } else {
                     // ASSET or CUSTOMER: Credit account/partner (decreases asset), Debit Discrepancy
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     if (isEquityAccount) {
                         // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
                         entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     } else {
                         // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     }
                 }
             }
@@ -4600,12 +4654,14 @@ export const Accounting: React.FC = () => {
                                         if (!file) return;
 
                                         // Check for discrepancy account first (prefer EQUITY, fallback to LIABILITY)
+                                        // IMPORTANT: Allow accounts without factoryId (backward compatibility) OR matching factoryId
                                         let discrepancyAccount = state.accounts.find(a => 
                                             (a.name.includes('Discrepancy') || 
                                              a.name.includes('Suspense') ||
                                              a.name.includes('Balancing Discrepancy') ||
                                              a.code === '505') &&
-                                            a.type === AccountType.EQUITY
+                                            a.type === AccountType.EQUITY &&
+                                            (!a.factoryId || a.factoryId === state.currentFactory?.id)
                                         );
                                         
                                         if (!discrepancyAccount) {
@@ -4614,7 +4670,8 @@ export const Accounting: React.FC = () => {
                                                  a.name.includes('Suspense') ||
                                                  a.name.includes('Balancing Discrepancy') ||
                                                  a.code === '505') &&
-                                                a.type === AccountType.LIABILITY
+                                                a.type === AccountType.LIABILITY &&
+                                                (!a.factoryId || a.factoryId === state.currentFactory?.id)
                                             );
                                         }
                                         

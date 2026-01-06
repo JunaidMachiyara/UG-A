@@ -46,7 +46,7 @@ type ModuleType = 'production' | 'purchase' | 'sales';
 const SUPERVISOR_PIN = '7860';
 
 export const DataEntry: React.FC = () => {
-    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, deleteProductionsByDate, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment } = useData();
+    const { state, addItem, updateStock, addOriginalOpening, deleteOriginalOpening, addProduction, deleteProduction, deleteProductionsByDate, postBaleOpening, addPurchase, updatePurchase, addBundlePurchase, addSalesInvoice, updateSalesInvoice, deleteEntity, addDirectSale, addOngoingOrder, processOrderShipment, postSalesInvoice } = useData();
     const location = useLocation();
     const setupConfigs = useSetupConfigs();
     
@@ -151,10 +151,25 @@ export const DataEntry: React.FC = () => {
     const [prodDate, setProdDate] = useState(new Date().toISOString().split('T')[0]);
     const [prodItemId, setProdItemId] = useState('');
     const [prodQty, setProdQty] = useState('');
+    const [prodAvgCost, setProdAvgCost] = useState('');
     const [stagedProds, setStagedProds] = useState<ProductionEntry[]>([]);
     const [showProdSummary, setShowProdSummary] = useState(false);
     const [tempSerialTracker, setTempSerialTracker] = useState<Record<string, number>>({});
     const [isProcessingProduction, setIsProcessingProduction] = useState(false);
+    
+    // Auto-populate AvgCost when item is selected
+    useEffect(() => {
+        if (prodItemId) {
+            const item = state.items.find(i => i.id === prodItemId);
+            if (item && item.avgCost !== undefined && item.avgCost !== null) {
+                setProdAvgCost(item.avgCost.toString());
+            } else {
+                setProdAvgCost('');
+            }
+        } else {
+            setProdAvgCost('');
+        }
+    }, [prodItemId, state.items]);
 
     // --- Re-baling State ---
     const [rbDate, setRbDate] = useState(new Date().toISOString().split('T')[0]);
@@ -410,10 +425,14 @@ export const DataEntry: React.FC = () => {
                 .reduce((max, curr) => curr > max ? curr : max, 100);
             setBpBatch((maxBatch + 1).toString());
         } else if (activeSubModule === 'sales-invoice' && siMode === 'create') {
-            const maxInv = state.salesInvoices
-                .map(i => parseInt(i.invoiceNo.replace('SINV-', '')))
-                .filter(n => !isNaN(n))
-                .reduce((max, curr) => curr > max ? curr : max, 1000);
+            // Find the highest invoice number and add 1
+            const invoiceNumbers = state.salesInvoices
+                .map(i => {
+                    const match = i.invoiceNo.match(/SINV-(\d+)/);
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => !isNaN(n) && n > 0);
+            const maxInv = invoiceNumbers.length > 0 ? Math.max(...invoiceNumbers) : 1000;
             setSiInvoiceNo(`SINV-${maxInv + 1}`);
         } else if (activeSubModule === 'ongoing-orders' && ooView === 'create') {
             const maxOo = state.ongoingOrders
@@ -2413,6 +2432,10 @@ export const DataEntry: React.FC = () => {
             setTempSerialTracker(prev => ({ ...prev, [item.id]: (serialEnd || 0) + 1 }));
         }
 
+        // Use prodAvgCost if provided, otherwise fall back to item.avgCost
+        const avgCostValue = prodAvgCost ? parseFloat(prodAvgCost) : (item.avgCost || 0);
+        const productionPrice = isNaN(avgCostValue) ? (item.avgCost || 0) : avgCostValue;
+        
         const newEntry: ProductionEntry = {
             id: Math.random().toString(36).substr(2, 9),
             date: prodDate,
@@ -2424,11 +2447,12 @@ export const DataEntry: React.FC = () => {
             serialStart,
             serialEnd,
             factoryId: state.currentFactory?.id || '',
-            productionPrice: item.avgCost // Use avgProdPrice (avgCost) when entered via form
+            productionPrice: productionPrice // Use prodAvgCost from form, or item.avgCost as fallback
         };
         setStagedProds([...stagedProds, newEntry]);
         setProdItemId('');
         setProdQty('');
+        setProdAvgCost(''); // Clear avgCost field after adding to list
     };
 
     const handleFinalizeProduction = async () => {
@@ -4073,7 +4097,7 @@ export const DataEntry: React.FC = () => {
                                                     onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.CUSTOMER })}
                                                 />
                                             </div>
-                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} readOnly /></div>
+                                            <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} onChange={e => setSiInvoiceNo(e.target.value)} /></div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Date</label><input type="date" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800" value={siDate} onChange={e => setSiDate(e.target.value)} /></div>
                                             <div>
                                                 <label className="block text-xs font-medium text-slate-500 mb-1">Customer Currency</label>
@@ -4289,6 +4313,24 @@ export const DataEntry: React.FC = () => {
                                                         <td className="px-4 py-3 text-right font-mono">{inv.netTotal.toLocaleString()} {inv.currency}</td>
                                                         <td className="px-4 py-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${inv.status === 'Posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{inv.status}</span></td>
                                                         <td className="px-4 py-3 text-center flex justify-center gap-2">
+                                                            {inv.status === 'Posted' && (
+                                                                <button 
+                                                                    onClick={async () => {
+                                                                        if (confirm(`Invoice ${inv.invoiceNo} is Posted.\n\nVerify and create missing ledger entries if needed?`)) {
+                                                                            try {
+                                                                                await postSalesInvoice(inv);
+                                                                                alert(`✅ Invoice ${inv.invoiceNo} processed. Ledger entries verified/created.`);
+                                                                            } catch (error) {
+                                                                                alert(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="text-emerald-600 hover:text-emerald-800 font-medium text-xs px-2 py-1 border border-emerald-300 rounded hover:bg-emerald-50" 
+                                                                    title="Verify/Create Missing Entries"
+                                                                >
+                                                                    Create Entries
+                                                                </button>
+                                                            )}
                                                             <button onClick={() => handleEditInvoice(inv)} className="text-blue-500 hover:text-blue-700" title="Edit"><Edit2 size={16} /></button>
                                                             <button onClick={() => handleDeleteSalesInvoice(inv.id)} className="text-red-400 hover:text-red-600" title="Delete"><Trash2 size={16} /></button>
                                                         </td>
@@ -4655,6 +4697,7 @@ export const DataEntry: React.FC = () => {
                                             </div>
                                         </div>
                                         <div><label className="block text-sm font-medium text-slate-600 mb-1">Quantity (Units)</label><input type="number" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 font-bold" placeholder="0" value={prodQty} onChange={e => setProdQty(e.target.value)} /></div>
+                                        <div><label className="block text-sm font-medium text-slate-600 mb-1">Avg Cost (USD per Unit)</label><input type="number" step="0.01" className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:outline-none focus:border-blue-500 font-bold" placeholder="0.00" value={prodAvgCost} onChange={e => setProdAvgCost(e.target.value)} /></div>
                                         <button onClick={handleStageProduction} disabled={!prodItemId || !prodQty} className="w-full bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2"><Plus size={18} /> Add to List</button>
                                     </div>
                                     <div className="md:col-span-5 bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col h-full">
