@@ -17,6 +17,14 @@ dist-ssr
 .env.local
 .env.production
 
+# Firebase Service Account (contains sensitive credentials)
+firebase-service-account.json
+*service-account*.json
+
+# Backup files (contain all database data)
+backups/
+*.backup
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
