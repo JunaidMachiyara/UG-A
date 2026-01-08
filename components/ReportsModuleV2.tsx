@@ -35,7 +35,9 @@ import {
     ExternalLink,
     Truck,
     History,
-    ChevronUp
+    ChevronUp,
+    Wallet,
+    Users
 } from 'lucide-react';
 import { CHART_COLORS, EXCHANGE_RATES } from '../constants';
 import { EntitySelector } from './EntitySelector';
@@ -3417,6 +3419,1253 @@ const LedgerReport: React.FC = () => {
     );
 };
 
+// --- CASH MOVEMENT REPORT ---
+const CashMovementReport: React.FC = () => {
+    const { state } = useData();
+    const [startDate, setStartDate] = useState(`${new Date().getFullYear()}-01-01`);
+    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    const [transactionFilter, setTransactionFilter] = useState<'RECEIPTS' | 'PAYMENTS' | 'BOTH'>('BOTH');
+    const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+    const [viewVoucherId, setViewVoucherId] = useState<string | null>(null);
+
+    // Filter cash and bank accounts only
+    const cashBankAccounts = useMemo(() => {
+        return state.accounts.filter(acc => 
+            acc.type === AccountType.ASSET && 
+            (acc.name.toLowerCase().includes('cash') || acc.name.toLowerCase().includes('bank'))
+        );
+    }, [state.accounts]);
+
+    // Filter ledger entries based on criteria
+    const filteredEntries = useMemo(() => {
+        let entries = state.ledger.filter(entry => {
+            // Date range filter
+            const entryDate = new Date(entry.date).getTime();
+            const start = new Date(startDate).getTime();
+            const end = new Date(endDate).getTime();
+            if (entryDate < start || entryDate > end) return false;
+
+            // Account filter
+            if (selectedAccountId && entry.accountId !== selectedAccountId) return false;
+
+            // Transaction type filter
+            if (transactionFilter === 'RECEIPTS') {
+                if (entry.transactionType !== TransactionType.RECEIPT_VOUCHER) return false;
+            } else if (transactionFilter === 'PAYMENTS') {
+                if (entry.transactionType !== TransactionType.PAYMENT_VOUCHER) return false;
+            } else {
+                // BOTH - only show receipt and payment vouchers
+                if (entry.transactionType !== TransactionType.RECEIPT_VOUCHER && 
+                    entry.transactionType !== TransactionType.PAYMENT_VOUCHER) return false;
+            }
+
+            // Only show entries for cash/bank accounts
+            const isCashBankAccount = cashBankAccounts.some(acc => acc.id === entry.accountId);
+            if (!isCashBankAccount) return false;
+
+            return true;
+        });
+
+        // Sort by date
+        entries.sort((a, b) => {
+            const dateA = new Date(a.date).getTime();
+            const dateB = new Date(b.date).getTime();
+            if (dateA !== dateB) return dateA - dateB;
+            // If same date, sort by transaction ID for consistency
+            return a.transactionId.localeCompare(b.transactionId);
+        });
+
+        return entries;
+    }, [state.ledger, startDate, endDate, transactionFilter, selectedAccountId, cashBankAccounts]);
+
+    // Calculate opening balance (balance before start date)
+    const openingBalance = useMemo(() => {
+        if (!selectedAccountId) return 0;
+        
+        const start = new Date(startDate).getTime();
+        const openingEntries = state.ledger.filter(entry => {
+            const entryDate = new Date(entry.date).getTime();
+            return entry.accountId === selectedAccountId && entryDate < start;
+        });
+
+        const openingDr = openingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+        const openingCr = openingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+        return openingDr - openingCr;
+    }, [state.ledger, startDate, selectedAccountId]);
+
+    // Calculate running balance per account
+    const entriesWithBalance = useMemo(() => {
+        if (selectedAccountId) {
+            // Single account: running balance starts from opening balance
+            let runningBalance = openingBalance;
+            return filteredEntries.map(entry => {
+                const debit = entry.debit || 0;
+                const credit = entry.credit || 0;
+                runningBalance = runningBalance + debit - credit;
+                return {
+                    ...entry,
+                    runningBalance
+                };
+            });
+        } else {
+            // Multiple accounts: calculate running balance per account
+            const accountBalances: Record<string, number> = {};
+            const accountOpeningBalances: Record<string, number> = {};
+            
+            // Calculate opening balances per account
+            const start = new Date(startDate).getTime();
+            cashBankAccounts.forEach(acc => {
+                const openingEntries = state.ledger.filter(entry => {
+                    const entryDate = new Date(entry.date).getTime();
+                    return entry.accountId === acc.id && entryDate < start;
+                });
+                const openingDr = openingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                const openingCr = openingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                accountOpeningBalances[acc.id] = openingDr - openingCr;
+                accountBalances[acc.id] = accountOpeningBalances[acc.id];
+            });
+            
+            // Calculate running balance for each entry
+            return filteredEntries.map(entry => {
+                const accountId = entry.accountId;
+                const currentBalance = accountBalances[accountId] || 0;
+                const debit = entry.debit || 0;
+                const credit = entry.credit || 0;
+                const newBalance = currentBalance + debit - credit;
+                accountBalances[accountId] = newBalance;
+                return {
+                    ...entry,
+                    runningBalance: newBalance
+                };
+            });
+        }
+    }, [filteredEntries, selectedAccountId, openingBalance, startDate, state.ledger, cashBankAccounts]);
+
+    return (
+        <div className="space-y-6 animate-in fade-in h-full flex flex-col">
+            {/* Filters */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end shrink-0">
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">From</label>
+                    <input 
+                        type="date" 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={startDate} 
+                        onChange={e => setStartDate(e.target.value)} 
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">To</label>
+                    <input 
+                        type="date" 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={endDate} 
+                        onChange={e => setEndDate(e.target.value)} 
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                    <select 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={transactionFilter} 
+                        onChange={e => setTransactionFilter(e.target.value as 'RECEIPTS' | 'PAYMENTS' | 'BOTH')}
+                    >
+                        <option value="BOTH">Both</option>
+                        <option value="RECEIPTS">Receipts</option>
+                        <option value="PAYMENTS">Payments</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account</label>
+                    <div className="relative">
+                        <select 
+                            className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm appearance-none" 
+                            value={selectedAccountId} 
+                            onChange={e => setSelectedAccountId(e.target.value)}
+                        >
+                            <option value="">-- All Accounts --</option>
+                            {cashBankAccounts.map(acc => (
+                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                            ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-2.5 text-slate-400 pointer-events-none" size={16} />
+                    </div>
+                </div>
+            </div>
+
+            {/* Report Table */}
+            <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="flex-1 overflow-auto">
+                    <table className="w-full text-sm text-left min-w-full">
+                        <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">
+                            <tr>
+                                <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
+                                <th className="px-4 py-4 min-w-[300px]">Description</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Debit ($)</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Credit ($)</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Running Balance ($)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {selectedAccountId && openingBalance !== 0 && (
+                                <tr className="bg-amber-50">
+                                    <td colSpan={3} className="px-4 py-3 font-bold text-slate-700">
+                                        Opening Balance
+                                    </td>
+                                    <td className="px-4 py-3"></td>
+                                    <td className="px-4 py-3"></td>
+                                    <td className="px-4 py-3 text-right font-mono font-bold">
+                                        {openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                </tr>
+                            )}
+                            {entriesWithBalance.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                                        No transactions found for the selected criteria
+                                    </td>
+                                </tr>
+                            ) : (
+                                entriesWithBalance.map((entry, index) => {
+                                    return (
+                                        <tr key={entry.id} className="hover:bg-slate-50">
+                                            <td className="px-4 py-3 whitespace-nowrap text-slate-700">
+                                                {new Date(entry.date).toLocaleDateString()}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <button 
+                                                    onClick={() => setViewVoucherId(entry.transactionId)} 
+                                                    className="text-blue-600 hover:underline font-mono text-xs font-bold hover:text-blue-800"
+                                                >
+                                                    {entry.transactionId}
+                                                </button>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="font-medium text-slate-800">{entry.narration || '-'}</div>
+                                                <div className="text-xs text-slate-500">{entry.accountName}</div>
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono whitespace-nowrap">
+                                                {entry.debit > 0 ? entry.debit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono whitespace-nowrap">
+                                                {entry.credit > 0 ? entry.credit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">
+                                                {entry.runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Voucher Details Modal */}
+            {viewVoucherId && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-5xl w-full animate-in zoom-in-95">
+                        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4">
+                            <h3 className="text-xl font-bold text-slate-800">Transaction Details</h3>
+                            <button 
+                                onClick={() => setViewVoucherId(null)} 
+                                className="text-slate-400 hover:text-slate-600"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4">
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">Voucher ID</span>
+                                    <span className="font-mono font-bold text-blue-600">{viewVoucherId}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">Date</span>
+                                    <span className="font-medium text-slate-700">
+                                        {state.ledger.find(e => e.transactionId === viewVoucherId)?.date 
+                                            ? new Date(state.ledger.find(e => e.transactionId === viewVoucherId)!.date).toLocaleDateString()
+                                            : '-'}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left min-w-full">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs">
+                                    <tr>
+                                        <th className="px-4 py-3 min-w-[300px]">Account</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Debit</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Credit</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {state.ledger.filter(e => e.transactionId === viewVoucherId).map((row, i) => ( 
+                                        <tr key={i}>
+                                            <td className="px-4 py-2">
+                                                <div className="font-medium text-slate-800">{row.accountName}</div>
+                                                <div className="text-xs text-slate-500">{row.narration}</div>
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                {row.debit > 0 ? row.debit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                {row.credit > 0 ? row.credit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                            </td>
+                                        </tr> 
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="mt-6 text-right">
+                            <button 
+                                onClick={() => setViewVoucherId(null)} 
+                                className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-700"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- ACCOUNTS RECEIVABLE REPORT ---
+const AccountsReceivableReport: React.FC = () => {
+    const { state } = useData();
+    const [startDate, setStartDate] = useState(`${new Date().getFullYear()}-01-01`);
+    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    const [transactionFilter, setTransactionFilter] = useState<'RECEIPTS' | 'PAYMENTS' | 'SALES' | 'ALL'>('ALL');
+    const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+    const [viewLedgerAccountId, setViewLedgerAccountId] = useState<string | null>(null);
+
+    // Get all customers
+    const customers = useMemo(() => {
+        return state.partners.filter(p => p.type === PartnerType.CUSTOMER);
+    }, [state.partners]);
+
+    // Calculate account balances using partner balances (includes opening balances)
+    const accountBalances = useMemo(() => {
+        const balances: Record<string, number> = {};
+        customers.forEach(c => {
+            balances[c.id] = c.balance || 0;
+        });
+        return balances;
+    }, [customers]);
+
+    // Get filtered customer accounts with their transaction info
+    const accountData = useMemo(() => {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime();
+        
+        // Start with ALL customers that have a balance (including opening balances)
+        // Filter by selected customer if specified
+        let customersToShow = customers;
+        if (selectedCustomerId) {
+            customersToShow = customers.filter(c => c.id === selectedCustomerId);
+        }
+        
+        // Filter customers that have a non-zero balance
+        customersToShow = customersToShow.filter(c => (c.balance || 0) !== 0);
+        
+        // Get all customer transactions in date range (for finding latest date)
+        const customerTransactions = state.ledger.filter(entry => {
+            const entryDate = new Date(entry.date).getTime();
+            if (entryDate < start || entryDate > end) return false;
+            
+            const isCustomerEntry = customersToShow.some(c => c.id === entry.accountId);
+            if (!isCustomerEntry) return false;
+            
+            // Transaction type filter
+            if (transactionFilter === 'RECEIPTS') {
+                if (entry.transactionType !== TransactionType.RECEIPT_VOUCHER) return false;
+            } else if (transactionFilter === 'PAYMENTS') {
+                if (entry.transactionType !== TransactionType.PAYMENT_VOUCHER) return false;
+            } else if (transactionFilter === 'SALES') {
+                if (entry.transactionType !== TransactionType.SALES_INVOICE) return false;
+            }
+            
+            return true;
+        });
+        
+        // Build account map with ALL customers that have balances
+        const accountMap: Record<string, { customer: typeof customers[0], latestDate: string, hasTransactions: boolean }> = {};
+        
+        // Initialize with all customers that have balances
+        customersToShow.forEach(customer => {
+            accountMap[customer.id] = {
+                customer,
+                latestDate: '',
+                hasTransactions: false
+            };
+        });
+        
+        // Update with latest transaction date if they have transactions in the period
+        customerTransactions.forEach(entry => {
+            const customer = customersToShow.find(c => c.id === entry.accountId);
+            if (!customer || !accountMap[entry.accountId]) return;
+            
+            if (!accountMap[entry.accountId].hasTransactions) {
+                accountMap[entry.accountId].latestDate = entry.date;
+                accountMap[entry.accountId].hasTransactions = true;
+            } else {
+                // Update latest date if this entry is newer
+                const currentDate = new Date(accountMap[entry.accountId].latestDate).getTime();
+                const entryDate = new Date(entry.date).getTime();
+                if (entryDate > currentDate) {
+                    accountMap[entry.accountId].latestDate = entry.date;
+                }
+            }
+        });
+        
+        // Convert to array and sort by latest date (most recent first), then by balance
+        return Object.values(accountMap).sort((a, b) => {
+            // First sort by whether they have transactions in period
+            if (!a.hasTransactions && b.hasTransactions) return 1;
+            if (a.hasTransactions && !b.hasTransactions) return -1;
+            
+            // If both have transactions, sort by date
+            if (a.hasTransactions && b.hasTransactions) {
+                const dateA = new Date(a.latestDate).getTime();
+                const dateB = new Date(b.latestDate).getTime();
+                if (dateA !== dateB) return dateB - dateA; // Most recent first
+            }
+            
+            // If no transactions or same date, sort by balance (largest first)
+            const balanceA = Math.abs(accountBalances[a.customer.id] || 0);
+            const balanceB = Math.abs(accountBalances[b.customer.id] || 0);
+            return balanceB - balanceA;
+        });
+    }, [state.ledger, startDate, endDate, transactionFilter, selectedCustomerId, customers, accountBalances]);
+
+    // Get account type for display
+    const getAccountType = (accountId: string): string => {
+        const customer = customers.find(c => c.id === accountId);
+        return customer ? 'CUSTOMER' : '-';
+    };
+
+    // Get balance status (Debit or Credit)
+    const getBalanceStatus = (balance: number): { text: string; color: string } => {
+        if (balance > 0) {
+            return { text: 'Debit', color: 'text-red-600' };
+        } else if (balance < 0) {
+            return { text: 'Credit', color: 'text-green-600' };
+        } else {
+            return { text: 'Balanced', color: 'text-slate-500' };
+        }
+    };
+
+    // Get ledger entries for a specific account (for popup)
+    const getAccountLedger = (accountId: string) => {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime();
+        
+        return state.ledger
+            .filter(entry => {
+                const entryDate = new Date(entry.date).getTime();
+                return entry.accountId === accountId && entryDate >= start && entryDate <= end;
+            })
+            .sort((a, b) => {
+                const dateA = new Date(a.date).getTime();
+                const dateB = new Date(b.date).getTime();
+                if (dateA !== dateB) return dateA - dateB;
+                return a.transactionId.localeCompare(b.transactionId);
+            });
+    };
+
+    // Calculate opening balance for account ledger
+    const getAccountOpeningBalance = (accountId: string): number => {
+        const start = new Date(startDate).getTime();
+        const openingEntries = state.ledger.filter(entry => {
+            const entryDate = new Date(entry.date).getTime();
+            return entry.accountId === accountId && entryDate < start;
+        });
+
+        const openingDr = openingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+        const openingCr = openingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+        return openingDr - openingCr;
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in h-full flex flex-col">
+            {/* Filters */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end shrink-0">
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">From</label>
+                    <input 
+                        type="date" 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={startDate} 
+                        onChange={e => setStartDate(e.target.value)} 
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">To</label>
+                    <input 
+                        type="date" 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={endDate} 
+                        onChange={e => setEndDate(e.target.value)} 
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                    <select 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={transactionFilter} 
+                        onChange={e => setTransactionFilter(e.target.value as 'RECEIPTS' | 'PAYMENTS' | 'SALES' | 'ALL')}
+                    >
+                        <option value="ALL">All</option>
+                        <option value="RECEIPTS">Receipts</option>
+                        <option value="PAYMENTS">Payments</option>
+                        <option value="SALES">Sales</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Account</label>
+                    <div className="relative">
+                        <select 
+                            className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm appearance-none" 
+                            value={selectedCustomerId} 
+                            onChange={e => setSelectedCustomerId(e.target.value)}
+                        >
+                            <option value="">-- All Customers --</option>
+                            {customers.map(customer => (
+                                <option key={customer.id} value={customer.id}>{customer.name}</option>
+                            ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-2.5 text-slate-400 pointer-events-none" size={16} />
+                    </div>
+                </div>
+            </div>
+
+            {/* Report Table */}
+            <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="flex-1 overflow-auto">
+                    <table className="w-full text-sm text-left min-w-full">
+                        <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">
+                            <tr>
+                                <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                <th className="px-4 py-4 min-w-[250px]">Account</th>
+                                <th className="px-4 py-4 whitespace-nowrap">Account Type</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Balance ($)</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">Debit or Credit</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {accountData.length === 0 ? (
+                                <tr>
+                                    <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                                        No accounts found for the selected criteria
+                                    </td>
+                                </tr>
+                            ) : (
+                                accountData.map((accountInfo) => {
+                                    const balance = accountBalances[accountInfo.customer.id] || 0;
+                                    const status = getBalanceStatus(balance);
+                                    return (
+                                        <tr key={accountInfo.customer.id} className="hover:bg-slate-50">
+                                            <td className="px-4 py-3 whitespace-nowrap text-slate-700">
+                                                {accountInfo.hasTransactions && accountInfo.latestDate
+                                                    ? new Date(accountInfo.latestDate).toLocaleDateString()
+                                                    : '-'}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <button 
+                                                    onClick={() => setViewLedgerAccountId(accountInfo.customer.id)} 
+                                                    className="text-blue-600 hover:underline font-medium hover:text-blue-800 text-left"
+                                                >
+                                                    {accountInfo.customer.name}
+                                                </button>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-slate-600">
+                                                CUSTOMER
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">
+                                                {Math.abs(balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </td>
+                                            <td className="px-4 py-3 text-center whitespace-nowrap">
+                                                <span className={`font-semibold ${status.color}`}>
+                                                    {status.text}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Account Ledger Modal */}
+            {viewLedgerAccountId && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-6xl w-full animate-in zoom-in-95 max-h-[90vh] overflow-hidden flex flex-col">
+                        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4 shrink-0">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-800">Account Ledger</h3>
+                                <p className="text-sm text-slate-500 mt-1">
+                                    {customers.find(c => c.id === viewLedgerAccountId)?.name || 'Unknown Account'}
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => setViewLedgerAccountId(null)} 
+                                className="text-slate-400 hover:text-slate-600"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 shrink-0">
+                            <div className="grid grid-cols-3 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">Account</span>
+                                    <span className="font-medium text-slate-700">
+                                        {customers.find(c => c.id === viewLedgerAccountId)?.name || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">Period</span>
+                                    <span className="font-medium text-slate-700">
+                                        {new Date(startDate).toLocaleDateString()} - {new Date(endDate).toLocaleDateString()}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">Opening Balance</span>
+                                    <span className="font-mono font-bold text-slate-700">
+                                        {getAccountOpeningBalance(viewLedgerAccountId).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full text-sm text-left min-w-full">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs sticky top-0">
+                                    <tr>
+                                        <th className="px-4 py-3 whitespace-nowrap">Date</th>
+                                        <th className="px-4 py-3 whitespace-nowrap">Voucher</th>
+                                        <th className="px-4 py-3 min-w-[300px]">Description</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Debit</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Credit</th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {(() => {
+                                        const ledgerEntries = getAccountLedger(viewLedgerAccountId);
+                                        let runningBalance = getAccountOpeningBalance(viewLedgerAccountId);
+                                        
+                                        if (ledgerEntries.length === 0) {
+                                            return (
+                                                <tr>
+                                                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                                                        No transactions in this period
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+
+                                        return (
+                                            <>
+                                                {runningBalance !== 0 && (
+                                                    <tr className="bg-amber-50">
+                                                        <td colSpan={3} className="px-4 py-3 font-bold text-slate-700">
+                                                            Opening Balance
+                                                        </td>
+                                                        <td className="px-4 py-3"></td>
+                                                        <td className="px-4 py-3"></td>
+                                                        <td className="px-4 py-3 text-right font-mono font-bold">
+                                                            {runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                                {ledgerEntries.map((entry, i) => {
+                                                    runningBalance += (entry.debit || 0) - (entry.credit || 0);
+                                                    return (
+                                                        <tr key={entry.id} className="hover:bg-slate-50">
+                                                            <td className="px-4 py-2 whitespace-nowrap text-slate-700">
+                                                                {new Date(entry.date).toLocaleDateString()}
+                                                            </td>
+                                                            <td className="px-4 py-2 whitespace-nowrap">
+                                                                <span className="font-mono text-xs text-slate-600">{entry.transactionId}</span>
+                                                            </td>
+                                                            <td className="px-4 py-2">
+                                                                <div className="font-medium text-slate-800">{entry.narration || '-'}</div>
+                                                                <div className="text-xs text-slate-500">{entry.transactionType}</div>
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                                {entry.debit > 0 ? entry.debit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                                {entry.credit > 0 ? entry.credit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono font-bold whitespace-nowrap">
+                                                                {runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </>
+                                        );
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="mt-6 text-right shrink-0 border-t border-slate-100 pt-4">
+                            <button 
+                                onClick={() => setViewLedgerAccountId(null)} 
+                                className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-700"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- ACCOUNTS PAYABLE REPORT ---
+const AccountsPayableReport: React.FC = () => {
+    const { state } = useData();
+    const [startDate, setStartDate] = useState(`${new Date().getFullYear()}-01-01`);
+    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    const [transactionFilter, setTransactionFilter] = useState<'RECEIPTS' | 'PAYMENTS' | 'SALES' | 'ALL'>('ALL');
+    const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
+    const [viewLedgerAccountId, setViewLedgerAccountId] = useState<string | null>(null);
+
+    // Supplier-like partner types (creditors and other payables)
+    const supplierLikeTypes: PartnerType[] = [
+        PartnerType.SUPPLIER,
+        PartnerType.VENDOR,
+        PartnerType.FREIGHT_FORWARDER,
+        PartnerType.CLEARING_AGENT,
+        PartnerType.COMMISSION_AGENT
+    ];
+
+    // Get all suppliers/creditors (exclude sub-suppliers)
+    const suppliers = useMemo(() => {
+        return state.partners.filter(
+            p => supplierLikeTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER
+        );
+    }, [state.partners]);
+
+    // Calculate account balances using partner balances (includes opening balances)
+    const accountBalances = useMemo(() => {
+        const balances: Record<string, number> = {};
+        suppliers.forEach(s => {
+            balances[s.id] = s.balance || 0;
+        });
+        return balances;
+    }, [suppliers]);
+
+    // Get filtered supplier accounts with their transaction info
+    const accountData = useMemo(() => {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime();
+
+        // Start with ALL suppliers that have a balance (including opening balances)
+        // Filter by selected supplier if specified
+        let suppliersToShow = suppliers;
+        if (selectedSupplierId) {
+            suppliersToShow = suppliers.filter(s => s.id === selectedSupplierId);
+        }
+        
+        // Filter suppliers that have a non-zero balance
+        suppliersToShow = suppliersToShow.filter(s => (s.balance || 0) !== 0);
+
+        // Get all supplier transactions in date range (for finding latest date)
+        const supplierTransactions = state.ledger.filter(entry => {
+            const entryDate = new Date(entry.date).getTime();
+            if (entryDate < start || entryDate > end) return false;
+
+            const isSupplierEntry = suppliersToShow.some(s => s.id === entry.accountId);
+            if (!isSupplierEntry) return false;
+
+            // Transaction type filter
+            if (transactionFilter === 'RECEIPTS') {
+                if (entry.transactionType !== TransactionType.RECEIPT_VOUCHER) return false;
+            } else if (transactionFilter === 'PAYMENTS') {
+                if (entry.transactionType !== TransactionType.PAYMENT_VOUCHER) return false;
+            } else if (transactionFilter === 'SALES') {
+                // For payables, treat purchase/expense-type entries as "Sales" filter
+                if (
+                    entry.transactionType !== TransactionType.PURCHASE_INVOICE &&
+                    entry.transactionType !== TransactionType.PURCHASE_BILL &&
+                    entry.transactionType !== TransactionType.EXPENSE_VOUCHER
+                ) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        // Build account map with ALL suppliers that have balances
+        const accountMap: Record<string, { supplier: typeof suppliers[0]; latestDate: string; hasTransactions: boolean }> = {};
+
+        // Initialize with all suppliers that have balances
+        suppliersToShow.forEach(supplier => {
+            accountMap[supplier.id] = {
+                supplier,
+                latestDate: '',
+                hasTransactions: false
+            };
+        });
+
+        // Update with latest transaction date if they have transactions in the period
+        supplierTransactions.forEach(entry => {
+            const supplier = suppliersToShow.find(s => s.id === entry.accountId);
+            if (!supplier || !accountMap[entry.accountId]) return;
+
+            if (!accountMap[entry.accountId].hasTransactions) {
+                accountMap[entry.accountId].latestDate = entry.date;
+                accountMap[entry.accountId].hasTransactions = true;
+            } else {
+                const currentDate = new Date(accountMap[entry.accountId].latestDate).getTime();
+                const entryDate = new Date(entry.date).getTime();
+                if (entryDate > currentDate) {
+                    accountMap[entry.accountId].latestDate = entry.date;
+                }
+            }
+        });
+
+        // Convert to array and sort by latest date (most recent first), then by balance
+        return Object.values(accountMap).sort((a, b) => {
+            // First sort by whether they have transactions in period
+            if (!a.hasTransactions && b.hasTransactions) return 1;
+            if (a.hasTransactions && !b.hasTransactions) return -1;
+            
+            // If both have transactions, sort by date
+            if (a.hasTransactions && b.hasTransactions) {
+                const dateA = new Date(a.latestDate).getTime();
+                const dateB = new Date(b.latestDate).getTime();
+                if (dateA !== dateB) return dateB - dateA; // Most recent first
+            }
+            
+            // If no transactions or same date, sort by balance (largest first)
+            const balanceA = Math.abs(accountBalances[a.supplier.id] || 0);
+            const balanceB = Math.abs(accountBalances[b.supplier.id] || 0);
+            return balanceB - balanceA;
+        });
+    }, [state.ledger, startDate, endDate, transactionFilter, selectedSupplierId, suppliers, accountBalances]);
+
+    // Get account type (partner type) for display
+    const getAccountType = (accountId: string): string => {
+        const supplier = suppliers.find(s => s.id === accountId);
+        return supplier ? supplier.type : '-';
+    };
+
+    // Get balance status (Debit or Credit)
+    const getBalanceStatus = (balance: number): { text: string; color: string } => {
+        if (balance > 0) {
+            return { text: 'Debit', color: 'text-red-600' };
+        } else if (balance < 0) {
+            return { text: 'Credit', color: 'text-green-600' };
+        } else {
+            return { text: 'Balanced', color: 'text-slate-500' };
+        }
+    };
+
+    // Get ledger entries for a specific account (for popup)
+    const getAccountLedger = (accountId: string) => {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime();
+
+        return state.ledger
+            .filter(entry => {
+                const entryDate = new Date(entry.date).getTime();
+                return entry.accountId === accountId && entryDate >= start && entryDate <= end;
+            })
+            .sort((a, b) => {
+                const dateA = new Date(a.date).getTime();
+                const dateB = new Date(b.date).getTime();
+                if (dateA !== dateB) return dateA - dateB;
+                return a.transactionId.localeCompare(b.transactionId);
+            });
+    };
+
+    // Calculate opening balance for account ledger
+    const getAccountOpeningBalance = (accountId: string): number => {
+        const start = new Date(startDate).getTime();
+        const openingEntries = state.ledger.filter(entry => {
+            const entryDate = new Date(entry.date).getTime();
+            return entry.accountId === accountId && entryDate < start;
+        });
+
+        const openingDr = openingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+        const openingCr = openingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+        return openingDr - openingCr;
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in h-full flex flex-col">
+            {/* Filters */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end shrink-0">
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">From</label>
+                    <input
+                        type="date"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm"
+                        value={startDate}
+                        onChange={e => setStartDate(e.target.value)}
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">To</label>
+                    <input
+                        type="date"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm"
+                        value={endDate}
+                        onChange={e => setEndDate(e.target.value)}
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                    <select
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm"
+                        value={transactionFilter}
+                        onChange={e =>
+                            setTransactionFilter(
+                                e.target.value as 'RECEIPTS' | 'PAYMENTS' | 'SALES' | 'ALL'
+                            )
+                        }
+                    >
+                        <option value="ALL">All</option>
+                        <option value="RECEIPTS">Receipts</option>
+                        <option value="PAYMENTS">Payments</option>
+                        <option value="SALES">Sales / Bills</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                        Account
+                    </label>
+                    <div className="relative">
+                        <select
+                            className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm appearance-none"
+                            value={selectedSupplierId}
+                            onChange={e => setSelectedSupplierId(e.target.value)}
+                        >
+                            <option value="">-- All Creditors --</option>
+                            {suppliers.map(supplier => (
+                                <option key={supplier.id} value={supplier.id}>
+                                    {supplier.name}
+                                </option>
+                            ))}
+                        </select>
+                        <ChevronDown
+                            className="absolute right-2 top-2.5 text-slate-400 pointer-events-none"
+                            size={16}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* Report Table */}
+            <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="flex-1 overflow-auto">
+                    <table className="w-full text-sm text-left min-w-full">
+                        <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">
+                            <tr>
+                                <th className="px-4 py-4 whitespace-nowrap">Date</th>
+                                <th className="px-4 py-4 min-w-[250px]">Account</th>
+                                <th className="px-4 py-4 whitespace-nowrap">Account Type</th>
+                                <th className="px-4 py-4 text-right whitespace-nowrap">Balance ($)</th>
+                                <th className="px-4 py-4 text-center whitespace-nowrap">
+                                    Debit or Credit
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {accountData.length === 0 ? (
+                                <tr>
+                                    <td
+                                        colSpan={5}
+                                        className="px-4 py-8 text-center text-slate-400"
+                                    >
+                                        No accounts found for the selected criteria
+                                    </td>
+                                </tr>
+                            ) : (
+                                accountData.map(accountInfo => {
+                                    const balance =
+                                        accountBalances[accountInfo.supplier.id] || 0;
+                                    const status = getBalanceStatus(balance);
+                                    return (
+                                        <tr
+                                            key={accountInfo.supplier.id}
+                                            className="hover:bg-slate-50"
+                                        >
+                                            <td className="px-4 py-3 whitespace-nowrap text-slate-700">
+                                                {accountInfo.hasTransactions &&
+                                                accountInfo.latestDate
+                                                    ? new Date(
+                                                          accountInfo.latestDate
+                                                      ).toLocaleDateString()
+                                                    : '-'}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <button
+                                                    onClick={() =>
+                                                        setViewLedgerAccountId(
+                                                            accountInfo.supplier.id
+                                                        )
+                                                    }
+                                                    className="text-blue-600 hover:underline font-medium hover:text-blue-800 text-left"
+                                                >
+                                                    {accountInfo.supplier.name}
+                                                </button>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-slate-600">
+                                                {getAccountType(accountInfo.supplier.id)}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono font-bold whitespace-nowrap">
+                                                {Math.abs(balance).toLocaleString(
+                                                    undefined,
+                                                    {
+                                                        minimumFractionDigits: 2,
+                                                        maximumFractionDigits: 2
+                                                    }
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-center whitespace-nowrap">
+                                                <span
+                                                    className={`font-semibold ${status.color}`}
+                                                >
+                                                    {status.text}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Account Ledger Modal */}
+            {viewLedgerAccountId && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-6xl w-full animate-in zoom-in-95 max-h-[90vh] overflow-hidden flex flex-col">
+                        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4 shrink-0">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-800">
+                                    Account Ledger
+                                </h3>
+                                <p className="text-sm text-slate-500 mt-1">
+                                    {suppliers.find(s => s.id === viewLedgerAccountId)
+                                        ?.name || 'Unknown Account'}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setViewLedgerAccountId(null)}
+                                className="text-slate-400 hover:text-slate-600"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 shrink-0">
+                            <div className="grid grid-cols-3 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">
+                                        Account
+                                    </span>
+                                    <span className="font-medium text-slate-700">
+                                        {suppliers.find(s => s.id === viewLedgerAccountId)
+                                            ?.name || '-'}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">
+                                        Period
+                                    </span>
+                                    <span className="font-medium text-slate-700">
+                                        {new Date(startDate).toLocaleDateString()} -{' '}
+                                        {new Date(endDate).toLocaleDateString()}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-bold text-slate-400 uppercase">
+                                        Opening Balance
+                                    </span>
+                                    <span className="font-mono font-bold text-slate-700">
+                                        {getAccountOpeningBalance(
+                                            viewLedgerAccountId
+                                        ).toLocaleString(undefined, {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2
+                                        })}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full text-sm text-left min-w-full">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs sticky top-0">
+                                    <tr>
+                                        <th className="px-4 py-3 whitespace-nowrap">
+                                            Date
+                                        </th>
+                                        <th className="px-4 py-3 whitespace-nowrap">
+                                            Voucher
+                                        </th>
+                                        <th className="px-4 py-3 min-w-[300px]">
+                                            Description
+                                        </th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">
+                                            Debit
+                                        </th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">
+                                            Credit
+                                        </th>
+                                        <th className="px-4 py-3 text-right whitespace-nowrap">
+                                            Balance
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {(() => {
+                                        const ledgerEntries =
+                                            getAccountLedger(viewLedgerAccountId);
+                                        let runningBalance =
+                                            getAccountOpeningBalance(
+                                                viewLedgerAccountId
+                                            );
+
+                                        if (ledgerEntries.length === 0) {
+                                            return (
+                                                <tr>
+                                                    <td
+                                                        colSpan={6}
+                                                        className="px-4 py-8 text-center text-slate-400"
+                                                    >
+                                                        No transactions in this period
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+
+                                        return (
+                                            <>
+                                                {runningBalance !== 0 && (
+                                                    <tr className="bg-amber-50">
+                                                        <td
+                                                            colSpan={3}
+                                                            className="px-4 py-3 font-bold text-slate-700"
+                                                        >
+                                                            Opening Balance
+                                                        </td>
+                                                        <td className="px-4 py-3"></td>
+                                                        <td className="px-4 py-3"></td>
+                                                        <td className="px-4 py-3 text-right font-mono font-bold">
+                                                            {runningBalance.toLocaleString(
+                                                                undefined,
+                                                                {
+                                                                    minimumFractionDigits: 2,
+                                                                    maximumFractionDigits: 2
+                                                                }
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                                {ledgerEntries.map(entry => {
+                                                    runningBalance +=
+                                                        (entry.debit || 0) -
+                                                        (entry.credit || 0);
+                                                    return (
+                                                        <tr
+                                                            key={entry.id}
+                                                            className="hover:bg-slate-50"
+                                                        >
+                                                            <td className="px-4 py-2 whitespace-nowrap text-slate-700">
+                                                                {new Date(
+                                                                    entry.date
+                                                                ).toLocaleDateString()}
+                                                            </td>
+                                                            <td className="px-4 py-2 whitespace-nowrap">
+                                                                <span className="font-mono text-xs text-slate-600">
+                                                                    {
+                                                                        entry.transactionId
+                                                                    }
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-4 py-2">
+                                                                <div className="font-medium text-slate-800">
+                                                                    {entry.narration ||
+                                                                        '-'}
+                                                                </div>
+                                                                <div className="text-xs text-slate-500">
+                                                                    {
+                                                                        entry.transactionType
+                                                                    }
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                                {entry.debit > 0
+                                                                    ? entry.debit.toLocaleString(
+                                                                          undefined,
+                                                                          {
+                                                                              minimumFractionDigits: 2,
+                                                                              maximumFractionDigits: 2
+                                                                          }
+                                                                      )
+                                                                    : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                                                                {entry.credit > 0
+                                                                    ? entry.credit.toLocaleString(
+                                                                          undefined,
+                                                                          {
+                                                                              minimumFractionDigits: 2,
+                                                                              maximumFractionDigits: 2
+                                                                          }
+                                                                      )
+                                                                    : '-'}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right font-mono font-bold whitespace-nowrap">
+                                                                {runningBalance.toLocaleString(
+                                                                    undefined,
+                                                                    {
+                                                                        minimumFractionDigits: 2,
+                                                                        maximumFractionDigits: 2
+                                                                    }
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </>
+                                        );
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="mt-6 text-right shrink-0 border-t border-slate-100 pt-4">
+                            <button
+                                onClick={() => setViewLedgerAccountId(null)}
+                                className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-700"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 // --- AUDIT LOG REPORT ---
 const AuditLogReport: React.FC = () => {
     const { state } = useData();
@@ -3450,8 +4699,8 @@ const AuditLogReport: React.FC = () => {
 
 export const ReportsModuleV2: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
-    const tabFromUrl = searchParams.get('tab') as 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | null;
-    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP'>(tabFromUrl || 'BI');
+    const tabFromUrl = searchParams.get('tab') as 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP' | null;
+    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP'>(tabFromUrl || 'BI');
     
     // Update URL when tab changes
     useEffect(() => {
@@ -3460,7 +4709,7 @@ export const ReportsModuleV2: React.FC = () => {
         }
     }, [tabFromUrl]);
     
-    const handleTabChange = (tab: 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP') => {
+    const handleTabChange = (tab: 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP') => {
         setActiveTab(tab);
         setSearchParams({ tab });
     };
@@ -3508,6 +4757,9 @@ export const ReportsModuleV2: React.FC = () => {
                     { id: 'LEDGER', label: 'General Ledger', icon: BookOpen },
                     { id: 'PROD', label: 'Production Yield', icon: Factory },
                     { id: 'EXP', label: 'Smart Explorer', icon: Search },
+                    { id: 'CASH', label: 'Cash Movement', icon: Wallet },
+                    { id: 'AR', label: 'Accounts Receivable', icon: Users },
+                    { id: 'AP', label: 'Accounts Payable', icon: Briefcase },
                 ].map(tab => (
                     <button key={tab.id} onClick={() => handleTabChange(tab.id as any)} className={`flex items-center gap-2 py-4 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}><tab.icon size={18} />{tab.label}</button>
                 ))}
@@ -3519,6 +4771,9 @@ export const ReportsModuleV2: React.FC = () => {
                 {activeTab === 'LEDGER' && <LedgerReport />}
                 {activeTab === 'PROD' && <ProductionYield />}
                 {activeTab === 'EXP' && <SmartExplorer />}
+                {activeTab === 'CASH' && <CashMovementReport />}
+                {activeTab === 'AR' && <AccountsReceivableReport />}
+                {activeTab === 'AP' && <AccountsPayableReport />}
             </div>
         </div>
     );

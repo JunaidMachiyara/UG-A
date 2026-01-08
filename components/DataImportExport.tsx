@@ -40,8 +40,8 @@ const CSV_TEMPLATES = {
         ['', 'SUP-001', 'XYZ Suppliers', 'SUPPLIER', 'UAE', 'AED', '0', 'div-1', '']
     ],
     accounts: [
-        ['id', 'name', 'type', 'balance', 'description'],
-        ['acc-001', 'Office Rent', 'EXPENSE', '0', 'Monthly office rent expenses']
+        ['id', 'code', 'name', 'type', 'balance', 'currency', 'parentAccountCode', 'description'],
+        ['', '1400', 'Employee Advance - John Smith', 'ASSET', '0', 'USD', '1130', 'Employee advance account']
     ],
     originalTypes: [
         ['id', 'name', 'packingType', 'packingSize'],
@@ -1986,14 +1986,25 @@ export const DataImportExport: React.FC = () => {
                                 break;
                             }
                             case 'accounts': {
+                                // Find parent account if parentAccountId or parentAccountCode is provided
+                                let parentAccountId = row.parentAccountId;
+                                if (!parentAccountId && row.parentAccountCode) {
+                                    const parentAccount = state.accounts.find(a => 
+                                        a.code === row.parentAccountCode && 
+                                        (!a.factoryId || a.factoryId === currentFactory?.id)
+                                    );
+                                    parentAccountId = parentAccount?.id;
+                                }
+                                
                                 const account = {
                                     id: row.id,
                                     code: row.code || row.id,
                                     name: row.name,
-                                    type: row.type,
+                                    type: row.type as AccountType,
                                     balance: parseFloat(row.balance) || 0,
                                     description: row.description || '',
-                                    currency: row.currency || 'USD'
+                                    currency: (row.currency || 'USD') as any,
+                                    parentAccountId: parentAccountId || undefined
                                 };
                                 await addAccount(account);
                                 successCount++;

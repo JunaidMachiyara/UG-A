@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ComposedChart, Treemap, Funnel, FunnelChart, LabelList } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText, Building2, ChevronDown, Landmark } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Package, Users, DollarSign, Activity, Factory, TrendingUp, TrendingDown, Wallet, ShoppingCart, CreditCard, AlertCircle, Target, BarChart3, PieChart as PieChartIcon, Layers, Container, FileText, Building2, ChevronDown } from 'lucide-react';
 import { CHART_COLORS } from '../constants';
 import { AccountType, UserRole, PartnerType } from '../types';
 
@@ -259,149 +259,50 @@ const YieldWidget = () => {
     );
 }
 
-// Account Balance Ticker Component
-const AccountBalanceTicker: React.FC = () => {
-    const { state } = useData();
+// Static Dashboard Card Component
+const DashboardCard = ({ 
+    title, 
+    value, 
+    icon: Icon, 
+    onClick,
+    accentColor = 'blue'
+}: { 
+    title: string, 
+    value: string, 
+    icon: any, 
+    onClick?: () => void,
+    accentColor?: 'blue' | 'green' | 'orange' | 'red' | 'purple'
+}) => {
+    const colorClasses = {
+        blue: 'border-l-blue-500 bg-gradient-to-br from-blue-50 to-white',
+        green: 'border-l-green-500 bg-gradient-to-br from-green-50 to-white',
+        orange: 'border-l-orange-500 bg-gradient-to-br from-orange-50 to-white',
+        red: 'border-l-red-500 bg-gradient-to-br from-red-50 to-white',
+        purple: 'border-l-purple-500 bg-gradient-to-br from-purple-50 to-white'
+    };
     
-    // Filter Cash accounts (accounts with "cash" in name, case-insensitive)
-    const cashAccounts = useMemo(() => {
-        return state.accounts.filter(acc => 
-            acc.type === AccountType.ASSET && 
-            acc.name.toLowerCase().includes('cash')
-        ).map(acc => ({
-            id: acc.id,
-            name: acc.name,
-            code: acc.code,
-            balance: acc.balance || 0,
-            type: 'cash' as const
-        }));
-    }, [state.accounts]);
-    
-    // Filter Bank accounts (accounts with "bank" in name, case-insensitive)
-    const bankAccounts = useMemo(() => {
-        return state.accounts.filter(acc => 
-            acc.type === AccountType.ASSET && 
-            acc.name.toLowerCase().includes('bank')
-        ).map(acc => ({
-            id: acc.id,
-            name: acc.name,
-            code: acc.code,
-            balance: acc.balance || 0,
-            type: 'bank' as const
-        }));
-    }, [state.accounts]);
-    
-    // Combine all accounts for ticker
-    const allAccounts = useMemo(() => {
-        return [...cashAccounts, ...bankAccounts];
-    }, [cashAccounts, bankAccounts]);
-    
-    // If no accounts, don't show ticker
-    if (allAccounts.length === 0) {
-        return null;
-    }
+    const iconColors = {
+        blue: 'text-blue-600',
+        green: 'text-green-600',
+        orange: 'text-orange-600',
+        red: 'text-red-600',
+        purple: 'text-purple-600'
+    };
     
     return (
-        <div className="w-full bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl shadow-lg overflow-hidden mb-6">
-            <div className="relative flex items-center h-16">
-                {/* Left gradient fade */}
-                <div className="absolute left-0 top-0 bottom-0 w-20 bg-gradient-to-r from-slate-800 to-transparent z-10 pointer-events-none"></div>
-                
-                {/* Right gradient fade */}
-                <div className="absolute right-0 top-0 bottom-0 w-20 bg-gradient-to-l from-slate-800 to-transparent z-10 pointer-events-none"></div>
-                
-                {/* Scrolling ticker */}
-                <div className="flex items-center gap-8 animate-scroll whitespace-nowrap">
-                    {/* Cash Accounts Section */}
-                    {cashAccounts.length > 0 && (
-                        <>
-                            <div className="flex items-center gap-2 px-4">
-                                <Wallet className="text-green-400" size={20} />
-                                <span className="text-green-400 font-bold text-sm uppercase">Cash Accounts:</span>
-                            </div>
-                            {cashAccounts.map((acc) => (
-                                <div key={acc.id} className="flex items-center gap-3 px-4 py-2 bg-slate-700/50 rounded-lg border border-slate-600/50">
-                                    <span className="text-slate-300 text-sm font-medium">{acc.name}</span>
-                                    <span className={`text-sm font-bold ${acc.balance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                        ${acc.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
-                                </div>
-                            ))}
-                        </>
-                    )}
-                    
-                    {/* Bank Accounts Section */}
-                    {bankAccounts.length > 0 && (
-                        <>
-                            <div className="flex items-center gap-2 px-4">
-                                <Landmark className="text-blue-400" size={20} />
-                                <span className="text-blue-400 font-bold text-sm uppercase">Bank Accounts:</span>
-                            </div>
-                            {bankAccounts.map((acc) => (
-                                <div key={acc.id} className="flex items-center gap-3 px-4 py-2 bg-slate-700/50 rounded-lg border border-slate-600/50">
-                                    <span className="text-slate-300 text-sm font-medium">{acc.name}</span>
-                                    <span className={`text-sm font-bold ${acc.balance >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                                        ${acc.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
-                                </div>
-                            ))}
-                        </>
-                    )}
-                    
-                    {/* Duplicate for seamless loop */}
-                    {cashAccounts.length > 0 && (
-                        <>
-                            <div className="flex items-center gap-2 px-4">
-                                <Wallet className="text-green-400" size={20} />
-                                <span className="text-green-400 font-bold text-sm uppercase">Cash Accounts:</span>
-                            </div>
-                            {cashAccounts.map((acc) => (
-                                <div key={`dup-${acc.id}`} className="flex items-center gap-3 px-4 py-2 bg-slate-700/50 rounded-lg border border-slate-600/50">
-                                    <span className="text-slate-300 text-sm font-medium">{acc.name}</span>
-                                    <span className={`text-sm font-bold ${acc.balance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                        ${acc.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
-                                </div>
-                            ))}
-                        </>
-                    )}
-                    
-                    {bankAccounts.length > 0 && (
-                        <>
-                            <div className="flex items-center gap-2 px-4">
-                                <Landmark className="text-blue-400" size={20} />
-                                <span className="text-blue-400 font-bold text-sm uppercase">Bank Accounts:</span>
-                            </div>
-                            {bankAccounts.map((acc) => (
-                                <div key={`dup-${acc.id}`} className="flex items-center gap-3 px-4 py-2 bg-slate-700/50 rounded-lg border border-slate-600/50">
-                                    <span className="text-slate-300 text-sm font-medium">{acc.name}</span>
-                                    <span className={`text-sm font-bold ${acc.balance >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                                        ${acc.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
-                                </div>
-                            ))}
-                        </>
-                    )}
+        <div 
+            onClick={onClick}
+            className={`p-6 rounded-xl border-l-4 ${colorClasses[accentColor]} shadow-lg hover:shadow-xl transition-all duration-300 ${
+                onClick ? 'cursor-pointer hover:scale-105 hover:-translate-y-1 active:scale-100' : ''
+            }`}
+        >
+            <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-slate-600 uppercase tracking-wide">{title}</p>
+                <div className={`p-2 rounded-lg ${iconColors[accentColor]} bg-white/80`}>
+                    <Icon size={20} />
                 </div>
             </div>
-            
-            {/* Add CSS animation */}
-            <style>{`
-                @keyframes scroll {
-                    0% {
-                        transform: translateX(0);
-                    }
-                    100% {
-                        transform: translateX(-50%);
-                    }
-                }
-                .animate-scroll {
-                    animation: scroll 30s linear infinite;
-                }
-                .animate-scroll:hover {
-                    animation-play-state: paused;
-                }
-            `}</style>
+            <p className="text-2xl font-bold text-slate-900">{value}</p>
         </div>
     );
 };
@@ -584,6 +485,19 @@ export const Dashboard: React.FC = () => {
         // Finished Goods Inventory: Account code 1202
         const finishedGoodsInventory = state.accounts.find(a => a.code === '1202' || a.name.includes('Finished Goods'))?.balance || 0;
         
+        // Cash in Hand Nazim + Petty Cash: Find specific accounts
+        const cashInHandNazim = state.accounts.find(a => 
+            a.type === AccountType.ASSET && 
+            (a.name.toLowerCase().includes('cash in hand nazim') || a.name.toLowerCase().includes('nazim'))
+        )?.balance || 0;
+        
+        const pettyCash = state.accounts.find(a => 
+            a.type === AccountType.ASSET && 
+            a.name.toLowerCase().includes('petty cash')
+        )?.balance || 0;
+        
+        const cashNazimAndPetty = cashInHandNazim + pettyCash;
+        
         const netProfit = revenue - expenses;
         
         // Calculate Net Working Capital properly: Current Assets - Current Liabilities
@@ -637,7 +551,8 @@ export const Dashboard: React.FC = () => {
             revenue, expenses, inventory, rawMaterialsInventory, finishedGoodsInventory, netProfit, workingCapital,
             currentAssets, currentLiabilities, // Added for reference
             totalLiquidity: cash + bank,
-            currentRatio: currentLiabilities > 0 ? (currentAssets / currentLiabilities) : 0
+            currentRatio: currentLiabilities > 0 ? (currentAssets / currentLiabilities) : 0,
+            cashNazimAndPetty // Cash in Hand Nazim + Petty Cash
         };
     }, [state.accounts, state.partners]);
 
@@ -847,8 +762,44 @@ export const Dashboard: React.FC = () => {
                 </div>
             </div>
 
-            {/* Cash & Bank Accounts Ticker */}
-            <AccountBalanceTicker />
+            {/* Static Dashboard Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                <DashboardCard
+                    title="Cash in Hand Nazim + Petty Cash"
+                    value={`$${formatNumber(metrics.cashNazimAndPetty)}`}
+                    icon={Wallet}
+                    accentColor="green"
+                    onClick={() => navigate('/reports?tab=CASH')}
+                />
+                <DashboardCard
+                    title="Accounts Receivable"
+                    value={`$${formatNumber(metrics.receivables)}`}
+                    icon={Users}
+                    accentColor="blue"
+                    onClick={() => navigate('/reports?tab=AR')}
+                />
+                <DashboardCard
+                    title="Accounts Payable"
+                    value={`$${formatNumber(metrics.payables)}`}
+                    icon={CreditCard}
+                    accentColor="red"
+                    onClick={() => navigate('/reports?tab=AP')}
+                />
+                <DashboardCard
+                    title="Inventory Value (Finished Goods)"
+                    value={`$${formatNumber(metrics.finishedGoodsInventory)}`}
+                    icon={Package}
+                    accentColor="purple"
+                    onClick={() => navigate('/reports?tab=INV')}
+                />
+                <DashboardCard
+                    title="Raw Materials Inventory"
+                    value={`$${formatNumber(metrics.rawMaterialsInventory)}`}
+                    icon={Layers}
+                    accentColor="orange"
+                    onClick={() => navigate('/reports?tab=INV')}
+                />
+            </div>
 
             {/* Mobile KPI Cards - 2 Column Grid */}
             <div className="lg:hidden grid grid-cols-2 gap-4">
@@ -933,81 +884,6 @@ export const Dashboard: React.FC = () => {
                     >
                         <ShoppingCart size={20} /> Orders
                     </button>
-                </div>
-            </div>
-
-            {/* KPI Cards - 8 Cards in a Single Row */}
-            <div className="w-full">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                <StatCard 
-                    title="Total Liquidity" 
-                    value={`$${formatNumber(metrics.totalLiquidity)}`} 
-                    subValue="Cash + Bank Accounts" 
-                    icon={Wallet} 
-                    trend="up"
-                    change="+12.5% vs last month"
-                    delay={0}
-                />
-                <StatCard 
-                    title="Net Working Capital" 
-                    value={`$${formatNumber(metrics.workingCapital)}`} 
-                    subValue={`Current Assets ($${formatNumber(metrics.currentAssets || 0)}) - Current Liabilities ($${formatNumber(metrics.currentLiabilities || 0)})`} 
-                    icon={TrendingUp} 
-                    trend={metrics.workingCapital > 0 ? 'up' : 'down'}
-                    change={metrics.workingCapital > 0 ? 'Healthy Position' : 'Needs Attention'}
-                    delay={100}
-                />
-                <StatCard 
-                    title="Accounts Receivable" 
-                    value={`$${formatNumber(metrics.receivables)}`} 
-                    subValue={`From ${state.partners.filter(p => p.type === 'CUSTOMER').length} Customers`}
-                    icon={Users} 
-                    change="Avg. 30 days"
-                    delay={200}
-                />
-                <StatCard 
-                    title="Accounts Payable" 
-                    value={`$${formatNumber(metrics.payables)}`} 
-                    subValue={`To ${state.partners.filter(p => p.type === 'SUPPLIER').length} Suppliers`}
-                    icon={CreditCard} 
-                    trend="down"
-                    change="Due in 15 days"
-                    delay={300}
-                />
-                <StatCard 
-                    title="Total Revenue" 
-                    value={`$${formatNumber(metrics.revenue)}`} 
-                    subValue="Year to Date" 
-                    icon={DollarSign} 
-                    trend="up"
-                    change="+18.2%"
-                    delay={400}
-                />
-                <StatCard 
-                    title="Net Profit" 
-                    value={`$${formatNumber(metrics.netProfit)}`} 
-                    subValue={`Margin: ${metrics.revenue > 0 ? ((metrics.netProfit / metrics.revenue) * 100).toFixed(1) : 0}%`}
-                    icon={Target} 
-                    trend={metrics.netProfit > 0 ? 'up' : 'down'}
-                    change={metrics.netProfit > 0 ? 'Profitable' : 'Loss'}
-                    delay={500}
-                />
-                <StatCard 
-                    title="Inventory Value" 
-                    value={`$${formatNumber(metrics.inventory)}`} 
-                    subValue={`${state.items.length} Active Items`}
-                    icon={Package} 
-                    change="Moving Avg Cost"
-                    delay={600}
-                />
-                <StatCard 
-                    title="Raw Materials Inventory" 
-                    value={`$${formatNumber(metrics.rawMaterialsInventory)}`} 
-                    subValue="Inventory - Raw Materials"
-                    icon={Layers} 
-                    change="From Balance Sheet"
-                    delay={700}
-                />
                 </div>
             </div>
 

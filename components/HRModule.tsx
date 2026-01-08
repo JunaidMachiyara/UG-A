@@ -37,7 +37,7 @@ export const HRModule: React.FC = () => {
             setIsModalOpen(true);
         };
 
-        const handleSave = () => {
+        const handleSave = async () => {
             if (!formData.name || !formData.passportNumber || !formData.designation) {
                 alert('Name, Passport, and Designation are required.');
                 return;
@@ -57,10 +57,18 @@ export const HRModule: React.FC = () => {
                 id: editId || Math.random().toString(36).substr(2, 9)
             } as Employee;
 
-            if (editId) updateEmployee(empData);
-            else addEmployee(empData);
-            
-            setIsModalOpen(false);
+            try {
+                if (editId) {
+                    updateEmployee(empData);
+                } else {
+                    await addEmployee(empData);
+                    alert(`✅ Employee "${empData.name}" added successfully!\n\nAn Employee Advance account has been automatically created in Chart of Accounts.`);
+                }
+                setIsModalOpen(false);
+            } catch (error) {
+                console.error('Error saving employee:', error);
+                alert('Error saving employee. Please try again.');
+            }
         };
 
         const filtered = state.employees.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()));
