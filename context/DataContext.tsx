@@ -2313,8 +2313,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const materialCostUSD = purchaseWithFactory.totalCostFCY / purchaseWithFactory.exchangeRate;
         const supplierName = supplier.name;
         
+        // Calculate total additional costs USD
+        const totalAdditionalCostsUSD = (purchaseWithFactory.additionalCosts || []).reduce((sum, cost) => sum + (cost.amountUSD || 0), 0);
+        
         const entries: Omit<LedgerEntry, 'id'>[] = [
-            // Debit: Inventory - Raw Materials (Asset increases)
+            // Debit: Inventory - Raw Materials (Material cost only - additional costs added separately)
                 { 
                     date: purchaseWithFactory.date, 
                     transactionId, 
@@ -2323,13 +2326,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     accountName: 'Inventory - Raw Materials', 
                     currency: 'USD', 
                     exchangeRate: 1, 
-                    fcyAmount: purchaseWithFactory.totalLandedCost, 
-                    debit: purchaseWithFactory.totalLandedCost, 
+                    fcyAmount: materialCostUSD, 
+                    debit: materialCostUSD, 
                     credit: 0, 
                     narration: `Purchase: ${purchaseWithFactory.originalType} (Batch: ${purchaseWithFactory.batchNumber})`, 
                     factoryId: purchaseWithFactory.factoryId 
             },
-            // Credit: Supplier Account (Liability increases - we owe them)
+            // Credit: Supplier Account (Liability increases - we owe them for material only)
             { 
                 date: purchaseWithFactory.date, 
                 transactionId, 
