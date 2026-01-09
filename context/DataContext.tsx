@@ -1287,8 +1287,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             // Validate each transaction group
             for (const [transactionId, txEntries] of transactionsByTxId) {
-                const totalDebits = txEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
-                const totalCredits = txEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                // Filter out reporting-only entries for balance validation (they're for analytics only)
+                const accountingEntries = txEntries.filter(e => !(e as any).isReportingOnly);
+                
+                const totalDebits = accountingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                const totalCredits = accountingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
                 const imbalance = Math.abs(totalDebits - totalCredits);
 
                 if (imbalance > 0.01) { // Allow small rounding differences (0.01)
@@ -1298,15 +1301,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         `Imbalance: $${imbalance.toFixed(2)}\n\n` +
                         `In double-entry accounting, debits MUST equal credits.\n` +
                         `Transaction will NOT be saved.\n\n` +
-                        `Entries:\n${txEntries.map(e => `  - ${e.accountName}: Debit $${e.debit || 0}, Credit $${e.credit || 0}`).join('\n')}`;
+                        `Accounting Entries (excluding reporting-only):\n${accountingEntries.map(e => `  - ${e.accountName}: Debit $${e.debit || 0}, Credit $${e.credit || 0}`).join('\n')}`;
                     
                     console.error(errorMsg);
                     throw new Error(`Unbalanced transaction: ${transactionId}. Debits: $${totalDebits.toFixed(2)}, Credits: $${totalCredits.toFixed(2)}`);
                 }
 
-                // Ensure at least one debit and one credit entry exists
-                const hasDebit = txEntries.some(e => (e.debit || 0) > 0);
-                const hasCredit = txEntries.some(e => (e.credit || 0) > 0);
+                // Ensure at least one debit and one credit entry exists (excluding reporting-only)
+                const hasDebit = accountingEntries.some(e => (e.debit || 0) > 0);
+                const hasCredit = accountingEntries.some(e => (e.credit || 0) > 0);
 
                 if (!hasDebit || !hasCredit) {
                     const errorMsg = `❌ DOUBLE-ENTRY ACCOUNTING ERROR: Transaction "${transactionId}" is missing required entries!\n\n` +
@@ -5989,6 +5992,240 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => window.location.reload(), 1000);
     };
 
+    // Fix missing purchase ledger entries - retroactively post ledger entries for purchases that don't have them
+    const fixMissingPurchaseLedgerEntries = async () => {
+        if (!currentFactory?.id) {
+            alert('No factory selected');
+            return;
+        }
+
+        if (!isFirestoreLoaded) {
+            alert('Firebase not loaded yet. Please wait a few seconds and try again.');
+            return;
+        }
+
+        // Find all purchases for this factory
+        const factoryPurchases = state.purchases.filter(p => p.factoryId === currentFactory.id);
+        
+        if (factoryPurchases.length === 0) {
+            alert('No purchases found for this factory.');
+            return;
+        }
+
+        // Find purchases that don't have ledger entries or have incomplete entries
+        const purchasesNeedingFix: { purchase: Purchase; existingEntries: LedgerEntry[]; needsFix: boolean }[] = [];
+        
+        for (const purchase of factoryPurchases) {
+            const transactionId = `PI-${purchase.batchNumber || purchase.id.toUpperCase()}`;
+            const existingEntries = state.ledger.filter(e => 
+                e.transactionId === transactionId && 
+                !(e as any).isReportingOnly // Exclude reporting-only entries
+            );
+            
+            // Check if entries are balanced
+            const totalDebits = existingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalCredits = existingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+            const imbalance = Math.abs(totalDebits - totalCredits);
+            
+            // Needs fix if: no entries, or entries are unbalanced, or missing required accounts
+            const needsFix = existingEntries.length === 0 || imbalance > 0.01;
+            
+            if (needsFix) {
+                purchasesNeedingFix.push({ purchase, existingEntries, needsFix });
+            }
+        }
+
+        if (purchasesNeedingFix.length === 0) {
+            alert('✅ All purchases have complete and balanced ledger entries!');
+            return;
+        }
+
+        const confirmMessage = `Found ${purchasesNeedingFix.length} purchase(s) that need ledger entries fixed:\n\n` +
+            purchasesNeedingFix.map(({ purchase }) => `- Batch ${purchase.batchNumber || purchase.id}`).join('\n') +
+            `\n\nThis will:\n` +
+            `1. Delete any existing incomplete/unbalanced ledger entries for these purchases\n` +
+            `2. Create new, properly balanced ledger entries\n\n` +
+            `Continue?`;
+
+        if (!confirm(confirmMessage)) {
+            return;
+        }
+
+        let fixedCount = 0;
+        const errors: string[] = [];
+
+        for (const { purchase, existingEntries } of purchasesNeedingFix) {
+            try {
+                const transactionId = `PI-${purchase.batchNumber || purchase.id.toUpperCase()}`;
+                
+                // Delete existing entries first (if any)
+                if (existingEntries.length > 0) {
+                    console.log(`🗑️ Deleting ${existingEntries.length} existing entries for ${transactionId}`);
+                    // Delete from Firebase
+                    for (const entry of existingEntries) {
+                        if (entry.id) {
+                            try {
+                                await deleteDoc(doc(db, 'ledger', entry.id));
+                            } catch (err) {
+                                console.warn(`Could not delete entry ${entry.id}:`, err);
+                            }
+                        }
+                    }
+                    // Remove from local state using the transaction ID
+                    dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason: 'Fixing incomplete entries', user: 'System' } });
+                }
+
+                // Build new ledger entries using the same logic as addPurchase
+                const inventoryAccount = state.accounts.find(a => 
+                    a.name.includes('Inventory - Raw Material') || 
+                    a.name.includes('Raw Materials') ||
+                    a.code === '1200'
+                );
+
+                if (!inventoryAccount) {
+                    errors.push(`Batch ${purchase.batchNumber}: Inventory account not found`);
+                    continue;
+                }
+
+                const supplier = state.partners.find(p => p.id === purchase.supplierId);
+                if (!supplier) {
+                    errors.push(`Batch ${purchase.batchNumber}: Supplier not found`);
+                    continue;
+                }
+
+                const inventoryId = inventoryAccount.id;
+                const materialCostUSD = purchase.totalCostFCY / purchase.exchangeRate;
+                const supplierName = supplier.name;
+
+                const entries: Omit<LedgerEntry, 'id'>[] = [
+                    // Debit: Inventory - Raw Materials
+                    {
+                        date: purchase.date,
+                        transactionId,
+                        transactionType: TransactionType.PURCHASE_INVOICE,
+                        accountId: inventoryId,
+                        accountName: 'Inventory - Raw Materials',
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: materialCostUSD,
+                        debit: materialCostUSD,
+                        credit: 0,
+                        narration: `Purchase: ${purchase.originalType} (Batch: ${purchase.batchNumber})`,
+                        factoryId: purchase.factoryId
+                    },
+                    // Credit: Supplier Account
+                    {
+                        date: purchase.date,
+                        transactionId,
+                        transactionType: TransactionType.PURCHASE_INVOICE,
+                        accountId: purchase.supplierId,
+                        accountName: supplierName,
+                        currency: purchase.currency,
+                        exchangeRate: purchase.exchangeRate,
+                        fcyAmount: purchase.totalCostFCY,
+                        debit: 0,
+                        credit: materialCostUSD,
+                        narration: `Material Cost: ${supplierName}`,
+                        factoryId: purchase.factoryId
+                    }
+                ];
+
+                // Add additional costs
+                if (purchase.additionalCosts && purchase.additionalCosts.length > 0) {
+                    purchase.additionalCosts.forEach(cost => {
+                        const provider = state.partners.find(p => p.id === cost.providerId);
+                        if (!provider) {
+                            console.warn(`Provider not found for cost ${cost.costType}: ${cost.providerId}`);
+                            return;
+                        }
+
+                        const costDescription = (cost.costType === 'Other' && cost.customName) 
+                            ? cost.customName 
+                            : provider.name;
+
+                        // Debit: Inventory
+                        entries.push({
+                            date: purchase.date,
+                            transactionType: TransactionType.PURCHASE_INVOICE,
+                            transactionId,
+                            accountId: inventoryId,
+                            accountName: 'Inventory - Raw Materials',
+                            currency: 'USD',
+                            exchangeRate: 1,
+                            fcyAmount: cost.amountUSD,
+                            debit: cost.amountUSD,
+                            credit: 0,
+                            narration: `${cost.costType} (Capitalized): ${costDescription}`,
+                            factoryId: purchase.factoryId
+                        });
+
+                        // Credit: Provider Account
+                        entries.push({
+                            date: purchase.date,
+                            transactionType: TransactionType.PURCHASE_INVOICE,
+                            transactionId,
+                            accountId: cost.providerId,
+                            accountName: provider.name,
+                            currency: cost.currency,
+                            exchangeRate: cost.exchangeRate,
+                            fcyAmount: cost.amountFCY,
+                            debit: 0,
+                            credit: cost.amountUSD,
+                            narration: `${cost.costType}: ${costDescription}`,
+                            factoryId: purchase.factoryId
+                        });
+                    });
+                }
+
+                // Add sub-supplier reporting entries (if any)
+                if (purchase.items && purchase.items.length > 0) {
+                    purchase.items.forEach(item => {
+                        if (item.subSupplierId) {
+                            const subSupplier = state.partners.find(p => p.id === item.subSupplierId);
+                            if (subSupplier) {
+                                entries.push({
+                                    date: purchase.date,
+                                    transactionId,
+                                    transactionType: TransactionType.PURCHASE_INVOICE,
+                                    accountId: item.subSupplierId,
+                                    accountName: subSupplier.name,
+                                    currency: purchase.currency,
+                                    exchangeRate: purchase.exchangeRate,
+                                    fcyAmount: item.totalCostFCY,
+                                    debit: 0,
+                                    credit: item.totalCostUSD,
+                                    narration: `Purchase (via ${supplierName}): ${item.originalType}`,
+                                    factoryId: purchase.factoryId,
+                                    isReportingOnly: true
+                                });
+                            }
+                        }
+                    });
+                }
+
+                // Post the entries
+                await postTransaction(entries);
+                fixedCount++;
+                console.log(`✅ Fixed ledger entries for Batch ${purchase.batchNumber}`);
+
+            } catch (error) {
+                const errorMsg = `Batch ${purchase.batchNumber}: ${(error as Error).message}`;
+                errors.push(errorMsg);
+                console.error(`❌ Error fixing purchase ${purchase.batchNumber}:`, error);
+            }
+        }
+
+        const resultMessage = `✅ Fixed ${fixedCount} purchase(s)!\n\n` +
+            (errors.length > 0 ? `⚠️ Errors (${errors.length}):\n${errors.join('\n')}\n\n` : '') +
+            `Page will refresh automatically...`;
+
+        alert(resultMessage);
+        console.log(`✅ Fix complete: ${fixedCount} purchases fixed, ${errors.length} errors`);
+
+        // Auto-refresh to reload clean data
+        setTimeout(() => window.location.reload(), 2000);
+    };
+
     // Migration function: Mark existing sub-supplier entries as reporting-only
     const markSubSupplierEntriesAsReportingOnly = async () => {
         if (!currentFactory?.id) {
@@ -6170,6 +6407,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             addCustomsDocument,
             cleanupOrphanedLedger,
             markSubSupplierEntriesAsReportingOnly,
+            fixMissingPurchaseLedgerEntries,
             alignBalance,
             alignFinishedGoodsStock,
             alignOriginalStock

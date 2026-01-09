@@ -18,7 +18,7 @@ import { CentralItemDatabase } from './CentralItemDatabase';
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem } = useData();
+    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem, fixMissingPurchaseLedgerEntries } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -1210,6 +1210,348 @@ export const AdminModule: React.FC = () => {
                 >
                     Find & Delete Orphaned Purchase Entries
                     </button>
+            </div>
+
+            {/* Fix Missing Purchase Ledger Entries Section */}
+            <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <RefreshCw className="text-blue-600" size={24} />
+                    <h3 className="text-lg font-bold text-blue-900">Fix Missing Purchase Ledger Entries</h3>
+                </div>
+                
+                <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-blue-800 mb-2">
+                        This utility fixes purchases that were saved but don't have complete ledger entries.
+                        It will:
+                    </p>
+                    <ul className="text-sm text-blue-800 list-disc list-inside space-y-1">
+                        <li>Find purchases without ledger entries or with unbalanced entries</li>
+                        <li>Delete any incomplete/unbalanced entries</li>
+                        <li>Create new, properly balanced ledger entries</li>
+                        <li>Include all additional costs (Freight, Clearing, Commission, etc.)</li>
+                    </ul>
+                    <p className="text-sm text-blue-600 mt-2 font-semibold">
+                        ⚠️ Use this if you entered purchases but got "Unbalanced transaction" errors.
+                    </p>
+                </div>
+
+                <button
+                    onClick={async () => {
+                        if (!confirm('This will fix ledger entries for all purchases that need them.\n\nContinue?')) {
+                            return;
+                        }
+                        setFixingPurchaseLedgers(true);
+                        setPurchaseLedgerFixResult(null);
+                        try {
+                            await fixMissingPurchaseLedgerEntries();
+                            // The function shows its own alert and refreshes, so we don't need to set result here
+                        } catch (error: any) {
+                            setPurchaseLedgerFixResult({
+                                success: false,
+                                message: error.message || 'Unknown error',
+                                fixed: 0,
+                                errors: [error.message || 'Unknown error']
+                            });
+                        } finally {
+                            setFixingPurchaseLedgers(false);
+                        }
+                    }}
+                    disabled={fixingPurchaseLedgers}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                    {fixingPurchaseLedgers ? (
+                        <>
+                            <RefreshCw className="animate-spin" size={16} />
+                            Fixing...
+                        </>
+                    ) : (
+                        <>
+                            <CheckCircle size={16} />
+                            Fix Missing Purchase Ledger Entries
+                        </>
+                    )}
+                </button>
+
+                {purchaseLedgerFixResult && (
+                    <div className={`mt-4 p-4 rounded-lg ${purchaseLedgerFixResult.success ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'}`}>
+                        <p className={`font-semibold ${purchaseLedgerFixResult.success ? 'text-green-800' : 'text-red-800'}`}>
+                            {purchaseLedgerFixResult.success ? '✅ Success!' : '❌ Error'}
+                        </p>
+                        <p className="text-sm mt-1">{purchaseLedgerFixResult.message}</p>
+                        {purchaseLedgerFixResult.errors.length > 0 && (
+                            <div className="mt-2">
+                                <p className="text-sm font-semibold">Errors:</p>
+                                <ul className="text-sm list-disc list-inside">
+                                    {purchaseLedgerFixResult.errors.map((err, idx) => (
+                                        <li key={idx}>{err}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* Diagnostic: What System Missed Section */}
+            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <Search className="text-yellow-600" size={24} />
+                    <h3 className="text-lg font-bold text-yellow-900">Diagnostic: What System Missed</h3>
+                </div>
+                
+                <div className="bg-white border border-yellow-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-yellow-800 mb-2">
+                        This diagnostic tool shows what entries might be missing even though the Balance Sheet is balanced.
+                        It checks for:
+                    </p>
+                    <ul className="text-sm text-yellow-800 list-disc list-inside space-y-1">
+                        <li>Purchases without ledger entries</li>
+                        <li>Unbalanced transactions (debits ≠ credits)</li>
+                        <li>Sales invoices without ledger entries</li>
+                        <li>Balance Discrepancy account breakdown</li>
+                        <li>Transactions with missing accounts or partners</li>
+                    </ul>
+                </div>
+
+                <button
+                    onClick={() => {
+                        const issues: string[] = [];
+                        const details: any = {
+                            purchasesWithoutEntries: [],
+                            unbalancedTransactions: [],
+                            salesInvoicesWithoutEntries: [],
+                            balanceDiscrepancyBreakdown: null,
+                            missingAccounts: []
+                        };
+
+                        // 1. Check purchases without ledger entries
+                        state.purchases.forEach(purchase => {
+                            const transactionId = `PI-${purchase.batchNumber || purchase.id.toUpperCase()}`;
+                            const entries = state.ledger.filter(e => 
+                                e.transactionId === transactionId && 
+                                !(e as any).isReportingOnly
+                            );
+                            
+                            if (entries.length === 0) {
+                                details.purchasesWithoutEntries.push({
+                                    batch: purchase.batchNumber || purchase.id,
+                                    date: purchase.date,
+                                    supplier: state.partners.find(p => p.id === purchase.supplierId)?.name || 'Unknown',
+                                    totalCost: purchase.totalCostFCY
+                                });
+                            } else {
+                                // Check if balanced
+                                const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                const imbalance = Math.abs(totalDebits - totalCredits);
+                                
+                                if (imbalance > 0.01) {
+                                    details.unbalancedTransactions.push({
+                                        transactionId,
+                                        type: 'Purchase',
+                                        batch: purchase.batchNumber || purchase.id,
+                                        debits: totalDebits,
+                                        credits: totalCredits,
+                                        imbalance
+                                    });
+                                }
+                            }
+                        });
+
+                        // 2. Check sales invoices without ledger entries
+                        state.salesInvoices.forEach(invoice => {
+                            const transactionId = `INV-${invoice.invoiceNo}`;
+                            const entries = state.ledger.filter(e => 
+                                e.transactionId === transactionId && 
+                                !(e as any).isReportingOnly
+                            );
+                            
+                            if (entries.length === 0) {
+                                details.salesInvoicesWithoutEntries.push({
+                                    invoiceNo: invoice.invoiceNo,
+                                    date: invoice.date,
+                                    customer: state.partners.find(p => p.id === invoice.customerId)?.name || 'Unknown',
+                                    total: invoice.netTotal
+                                });
+                            } else {
+                                // Check if balanced
+                                const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                                const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                                const imbalance = Math.abs(totalDebits - totalCredits);
+                                
+                                if (imbalance > 0.01) {
+                                    details.unbalancedTransactions.push({
+                                        transactionId,
+                                        type: 'Sales Invoice',
+                                        invoiceNo: invoice.invoiceNo,
+                                        debits: totalDebits,
+                                        credits: totalCredits,
+                                        imbalance
+                                    });
+                                }
+                            }
+                        });
+
+                        // 3. Check all transactions for balance
+                        const transactionGroups: { [key: string]: any[] } = {};
+                        state.ledger.forEach(entry => {
+                            if (entry.transactionId && !(entry as any).isReportingOnly) {
+                                if (!transactionGroups[entry.transactionId]) {
+                                    transactionGroups[entry.transactionId] = [];
+                                }
+                                transactionGroups[entry.transactionId].push(entry);
+                            }
+                        });
+
+                        Object.entries(transactionGroups).forEach(([txId, entries]) => {
+                            const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                            const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                            const imbalance = Math.abs(totalDebits - totalCredits);
+                            
+                            if (imbalance > 0.01 && !details.unbalancedTransactions.find(u => u.transactionId === txId)) {
+                                details.unbalancedTransactions.push({
+                                    transactionId: txId,
+                                    type: 'Other',
+                                    debits: totalDebits,
+                                    credits: totalCredits,
+                                    imbalance
+                                });
+                            }
+                        });
+
+                        // 4. Balance Discrepancy breakdown
+                        const discrepancyAccount = state.accounts.find(a => 
+                            a.name.includes('Balance Discrepancy') || 
+                            a.name.includes('Discrepancy') ||
+                            a.code === '505'
+                        );
+                        
+                        if (discrepancyAccount) {
+                            const discrepancyEntries = state.ledger.filter(e => 
+                                e.accountId === discrepancyAccount.id
+                            );
+                            
+                            const totalDebit = discrepancyEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                            const totalCredit = discrepancyEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                            
+                            details.balanceDiscrepancyBreakdown = {
+                                accountName: discrepancyAccount.name,
+                                balance: discrepancyAccount.balance || 0,
+                                totalDebit,
+                                totalCredit,
+                                entryCount: discrepancyEntries.length,
+                                recentEntries: discrepancyEntries
+                                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                    .slice(0, 10)
+                                    .map(e => ({
+                                        date: e.date,
+                                        transactionId: e.transactionId,
+                                        narration: e.narration,
+                                        debit: e.debit,
+                                        credit: e.credit
+                                    }))
+                            };
+                        }
+
+                        // 5. Check for missing accounts/partners in ledger entries
+                        state.ledger.forEach(entry => {
+                            if (!(entry as any).isReportingOnly) {
+                                const account = state.accounts.find(a => a.id === entry.accountId);
+                                const partner = state.partners.find(p => p.id === entry.accountId);
+                                
+                                if (!account && !partner) {
+                                    if (!details.missingAccounts.find((m: any) => m.id === entry.accountId)) {
+                                        details.missingAccounts.push({
+                                            id: entry.accountId,
+                                            accountName: entry.accountName,
+                                            transactionId: entry.transactionId,
+                                            date: entry.date
+                                        });
+                                    }
+                                }
+                            }
+                        });
+
+                        // Build report message
+                        let report = '📊 DIAGNOSTIC REPORT: What System Missed\n\n';
+                        report += `═══════════════════════════════════════\n\n`;
+
+                        if (details.purchasesWithoutEntries.length > 0) {
+                            report += `❌ PURCHASES WITHOUT LEDGER ENTRIES (${details.purchasesWithoutEntries.length}):\n`;
+                            details.purchasesWithoutEntries.forEach((p: any) => {
+                                report += `  • Batch ${p.batch} (${p.date}): ${p.supplier} - $${p.totalCost.toFixed(2)}\n`;
+                            });
+                            report += '\n';
+                        }
+
+                        if (details.salesInvoicesWithoutEntries.length > 0) {
+                            report += `❌ SALES INVOICES WITHOUT LEDGER ENTRIES (${details.salesInvoicesWithoutEntries.length}):\n`;
+                            details.salesInvoicesWithoutEntries.forEach((inv: any) => {
+                                report += `  • ${inv.invoiceNo} (${inv.date}): ${inv.customer} - $${inv.total.toFixed(2)}\n`;
+                            });
+                            report += '\n';
+                        }
+
+                        if (details.unbalancedTransactions.length > 0) {
+                            report += `⚠️ UNBALANCED TRANSACTIONS (${details.unbalancedTransactions.length}):\n`;
+                            details.unbalancedTransactions.forEach((u: any) => {
+                                report += `  • ${u.transactionId} (${u.type}): Debits $${u.debits.toFixed(2)}, Credits $${u.credits.toFixed(2)}, Imbalance $${u.imbalance.toFixed(2)}\n`;
+                            });
+                            report += '\n';
+                        }
+
+                        if (details.balanceDiscrepancyBreakdown) {
+                            const bd = details.balanceDiscrepancyBreakdown;
+                            report += `💰 BALANCE DISCREPANCY BREAKDOWN:\n`;
+                            report += `  Account: ${bd.accountName}\n`;
+                            report += `  Current Balance: $${bd.balance.toFixed(2)}\n`;
+                            report += `  Total Debits: $${bd.totalDebit.toFixed(2)}\n`;
+                            report += `  Total Credits: $${bd.totalCredit.toFixed(2)}\n`;
+                            report += `  Entry Count: ${bd.entryCount}\n`;
+                            if (bd.recentEntries.length > 0) {
+                                report += `  Recent Entries (last 10):\n`;
+                                bd.recentEntries.forEach((e: any) => {
+                                    report += `    • ${e.date} - ${e.transactionId}: ${e.narration} (Dr: $${e.debit.toFixed(2)}, Cr: $${e.credit.toFixed(2)})\n`;
+                                });
+                            }
+                            report += '\n';
+                        }
+
+                        if (details.missingAccounts.length > 0) {
+                            report += `⚠️ LEDGER ENTRIES WITH MISSING ACCOUNTS/PARTNERS (${details.missingAccounts.length}):\n`;
+                            details.missingAccounts.forEach((m: any) => {
+                                report += `  • Account ID: ${m.id}, Name: ${m.accountName}, Transaction: ${m.transactionId}\n`;
+                            });
+                            report += '\n';
+                        }
+
+                        if (details.purchasesWithoutEntries.length === 0 && 
+                            details.salesInvoicesWithoutEntries.length === 0 && 
+                            details.unbalancedTransactions.length === 0 && 
+                            details.missingAccounts.length === 0) {
+                            report += `✅ NO ISSUES FOUND!\n\n`;
+                            report += `All purchases and sales invoices have complete ledger entries.\n`;
+                            report += `All transactions are balanced.\n`;
+                            if (details.balanceDiscrepancyBreakdown) {
+                                report += `\nNote: Balance Discrepancy account has ${details.balanceDiscrepancyBreakdown.entryCount} entries with a balance of $${details.balanceDiscrepancyBreakdown.balance.toFixed(2)}.\n`;
+                                report += `This is normal if you've used the Balance Discrepancy utility to adjust accounts.\n`;
+                            }
+                        }
+
+                        report += `\n═══════════════════════════════════════\n`;
+                        report += `\n💡 TIP: Use "Fix Missing Purchase Ledger Entries" to fix purchase issues.`;
+
+                        // Show in alert (might be long, but user can scroll)
+                        alert(report);
+                        
+                        // Also log to console for detailed inspection
+                        console.log('📊 Full Diagnostic Details:', details);
+                    }}
+                    className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-semibold flex items-center gap-2"
+                >
+                    <Search size={16} />
+                    Run Diagnostic: What System Missed
+                </button>
             </div>
 
             {/* Delete Partners by Type Utility Section */}
