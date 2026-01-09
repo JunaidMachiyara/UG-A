@@ -39,23 +39,47 @@ export const ContainerOffloading: React.FC = () => {
     const allShipments = useMemo(() => {
         const shipments: LogisticsEntry[] = [];
 
+        // Debug: Log all purchases to see which ones have container numbers
+        if (process.env.NODE_ENV === 'development') {
+            console.log('📦 All Purchases:', state.purchases.map(p => ({
+                id: p.id,
+                batchNumber: p.batchNumber,
+                containerNumber: p.containerNumber,
+                status: p.status,
+                supplierId: p.supplierId
+            })));
+        }
+
         // 1. Process Original Purchases
         state.purchases.forEach(p => {
-            if (!p.containerNumber) return;
+            // Skip purchases without container number (empty string, null, or undefined)
+            const containerNum = p.containerNumber?.trim() || '';
+            if (!containerNum || containerNum === '') {
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('⏭️ Skipping purchase without container:', p.batchNumber, p.id);
+                }
+                return;
+            }
             const existingEntry = state.logisticsEntries.find(le => le.purchaseId === p.id && le.purchaseType === 'ORIGINAL');
             
             if (existingEntry) {
                 shipments.push(existingEntry);
             } else {
-                // Placeholder
+                // Placeholder - use purchase status if available, otherwise default to 'In Transit'
+                // For opening stock purchases, status should be 'Arrived' or 'Cleared'
+                const purchaseStatus = p.status || 'In Transit';
+                const logisticsStatus = (purchaseStatus === 'Arrived' || purchaseStatus === 'Cleared') 
+                    ? purchaseStatus 
+                    : 'In Transit';
+                
                 shipments.push({
                     id: `PLACEHOLDER-ORIG-${p.id}`,
                     purchaseId: p.id,
                     purchaseType: 'ORIGINAL',
                     containerNumber: p.containerNumber,
-                    status: 'In Transit',
+                    status: logisticsStatus,
                     invoicedWeight: p.weightPurchased,
-                    receivedWeight: 0,
+                    receivedWeight: (purchaseStatus === 'Arrived' || purchaseStatus === 'Cleared') ? p.weightPurchased : 0,
                     shortageKg: 0
                 });
             }
@@ -63,13 +87,20 @@ export const ContainerOffloading: React.FC = () => {
 
         // 2. Process Bundle Purchases
         state.bundlePurchases.forEach(p => {
-             if (!p.containerNumber) return;
+             // Skip purchases without container number (empty string, null, or undefined)
+             if (!p.containerNumber || p.containerNumber.trim() === '') return;
              const existingEntry = state.logisticsEntries.find(le => le.purchaseId === p.id && le.purchaseType === 'BUNDLE');
              
              if (existingEntry) {
                  shipments.push(existingEntry);
              } else {
-                 // Placeholder
+                 // Placeholder - use purchase status if available, otherwise default to 'In Transit'
+                 // For opening stock purchases, status should be 'Arrived' or 'Cleared'
+                 const purchaseStatus = p.status || 'In Transit';
+                 const logisticsStatus = (purchaseStatus === 'Arrived' || purchaseStatus === 'Cleared') 
+                     ? purchaseStatus 
+                     : 'In Transit';
+                 
                  // For Bundles, Invoiced Weight is sum of item weights (approx) or 0 if not tracked by weight on purchase
                  // Let's assume calculated from items for now
                  const approxWeight = p.items.reduce((sum, item) => {
@@ -82,9 +113,9 @@ export const ContainerOffloading: React.FC = () => {
                     purchaseId: p.id,
                     purchaseType: 'BUNDLE',
                     containerNumber: p.containerNumber,
-                    status: 'In Transit',
+                    status: logisticsStatus,
                     invoicedWeight: approxWeight,
-                    receivedWeight: 0,
+                    receivedWeight: (purchaseStatus === 'Arrived' || purchaseStatus === 'Cleared') ? approxWeight : 0,
                     shortageKg: 0
                 });
              }
@@ -95,21 +126,42 @@ export const ContainerOffloading: React.FC = () => {
 
     // Apply Filters
     const filteredShipments = useMemo(() => {
-        return allShipments.filter(s => {
+        const filtered = allShipments.filter(s => {
+            // Status filter
             if (s.status !== filterStatus) return false;
             
             // Filter by Supplier (need to lookup supplier ID from purchase)
             if (filterSupplier) {
                 let supplierId = '';
                 if (s.purchaseType === 'ORIGINAL') {
-                    supplierId = state.purchases.find(p => p.id === s.purchaseId)?.supplierId || '';
+                    const purchase = state.purchases.find(p => p.id === s.purchaseId);
+                    supplierId = purchase?.supplierId || '';
                 } else {
-                    supplierId = state.bundlePurchases.find(p => p.id === s.purchaseId)?.supplierId || '';
+                    const bundlePurchase = state.bundlePurchases.find(p => p.id === s.purchaseId);
+                    supplierId = bundlePurchase?.supplierId || '';
                 }
                 if (supplierId !== filterSupplier) return false;
             }
             return true;
         });
+        
+        // Debug logging (only in development)
+        if (process.env.NODE_ENV === 'development') {
+            console.log('🔍 Container Offloading Filter Debug:', {
+                totalShipments: allShipments.length,
+                filterStatus,
+                filterSupplier,
+                filteredCount: filtered.length,
+                allShipments: allShipments.map(s => ({
+                    id: s.id,
+                    containerNumber: s.containerNumber,
+                    status: s.status,
+                    purchaseId: s.purchaseId
+                }))
+            });
+        }
+        
+        return filtered;
     }, [allShipments, filterStatus, filterSupplier, state.purchases, state.bundlePurchases]);
 
     // Active Shipment Data
