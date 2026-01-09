@@ -656,6 +656,7 @@ interface DataContextType {
     firestoreError: string | null;
     postTransaction: (entries: Omit<LedgerEntry, 'id'>[]) => Promise<void>;
     deleteTransaction: (transactionId: string, reason?: string, user?: string) => void;
+    deleteLedgerEntry: (entryId: string, reason?: string, user?: string) => Promise<void>;
     addPartner: (partner: Partner) => void;
     updatePartner: (id: string, partner: Partial<Partner>) => Promise<void>;
     addItem: (item: Item, openingStock?: number) => void;
@@ -1024,14 +1025,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             (snapshot) => {
                 const purchases: Purchase[] = [];
                 snapshot.forEach((doc) => {
-                    purchases.push({ id: doc.id, ...doc.data() } as Purchase);
+                    const data = doc.data();
+                    purchases.push({ id: doc.id, ...data } as Purchase);
                 });
+                console.log(`✅ Loaded ${purchases.length} purchases for factory: ${currentFactory.name} (${currentFactory.id})`);
+                if (purchases.length > 0) {
+                    console.log('📋 Sample purchase:', {
+                        id: purchases[0].id,
+                        batchNumber: purchases[0].batchNumber,
+                        factoryId: purchases[0].factoryId,
+                        date: purchases[0].date
+                    });
+                }
                 isUpdatingFromFirestore.current = true;
                 dispatch({ type: 'LOAD_PURCHASES', payload: purchases });
                 markCollectionLoaded('purchases');
                 isUpdatingFromFirestore.current = false;
             },
-            (error) => console.error('❌ Error loading purchases:', error)
+            (error) => {
+                console.error('❌ Error loading purchases:', error);
+                console.error('📋 Current factory:', currentFactory?.id, currentFactory?.name);
+            }
         );
 
         // Listen to BundlePurchases collection - FILTERED by factoryId
@@ -1413,6 +1427,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     
     const deleteTransaction = async (transactionId: string, reason?: string, user?: string) => {
+        // 🛡️ SAFEGUARD: Prevent accidental deletion of Opening Balance entries
+        if (transactionId.startsWith('OB-')) {
+            const confirmDelete = window.confirm(
+                `⚠️ WARNING: You are about to delete an Opening Balance entry (${transactionId}).\n\n` +
+                `This will permanently remove the opening balance and may affect account balances.\n\n` +
+                `Are you absolutely sure you want to proceed?`
+            );
+            if (!confirmDelete) {
+                console.log('❌ Opening Balance deletion cancelled by user');
+                return;
+            }
+        }
+        
         // Delete from state
         dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason, user } });
         
@@ -1422,10 +1449,133 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         console.log(`🗑️ Deleting ${ledgerSnapshot.size} ledger entries for transaction ${transactionId}`);
         
+        // 🛡️ Additional safeguard: Check if any entries are Opening Balance type
+        const openingBalanceEntries = ledgerSnapshot.docs.filter(doc => 
+            doc.data().transactionType === TransactionType.OPENING_BALANCE
+        );
+        if (openingBalanceEntries.length > 0 && !transactionId.startsWith('OB-')) {
+            console.warn(`⚠️ Warning: Attempting to delete ${openingBalanceEntries.length} Opening Balance entries with transactionId ${transactionId}`);
+            const confirmDeleteOB = window.confirm(
+                `⚠️ WARNING: This transaction contains ${openingBalanceEntries.length} Opening Balance entry/entries.\n\n` +
+                `Deleting this will permanently remove opening balances. Are you sure?`
+            );
+            if (!confirmDeleteOB) {
+                console.log('❌ Deletion cancelled - Opening Balance entries detected');
+                return;
+            }
+        }
+        
         const deletePromises = ledgerSnapshot.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
         await Promise.all(deletePromises);
         
         console.log(`✅ Deleted all ledger entries for transaction ${transactionId}`);
+    };
+    
+    // Delete a single ledger entry by ID (without affecting other entries in the transaction)
+    // This is safer than editing the entire voucher, which can cause issues with Opening Balances
+    const deleteLedgerEntry = async (entryId: string, reason?: string, user?: string) => {
+        // Find the entry in state
+        const entry = state.ledger.find(e => e.id === entryId);
+        if (!entry) {
+            throw new Error(`Ledger entry ${entryId} not found`);
+        }
+        
+        console.log(`🗑️ Deleting single ledger entry: ${entryId}`, {
+            transactionId: entry.transactionId,
+            accountName: entry.accountName,
+            debit: entry.debit,
+            credit: entry.credit,
+            narration: entry.narration
+        });
+        
+        // Delete from Firebase
+        const entryRef = doc(db, 'ledger', entryId);
+        await deleteDoc(entryRef);
+        
+        // Update state - remove entry and adjust balances
+        const updatedAccounts = state.accounts.map(acc => {
+            if (acc.id === entry.accountId) {
+                let newBalance = acc.balance;
+                if ([AccountType.ASSET, AccountType.EXPENSE].includes(acc.type)) {
+                    // Removing debit decreases balance, removing credit increases balance
+                    newBalance = acc.balance - (entry.debit || 0) + (entry.credit || 0);
+                } else {
+                    // Removing credit decreases balance, removing debit increases balance
+                    newBalance = acc.balance - (entry.credit || 0) + (entry.debit || 0);
+                }
+                return { ...acc, balance: newBalance };
+            }
+            return acc;
+        });
+        
+        // Update partner balances if applicable
+        const updatedPartners = state.partners.map(partner => {
+            if (partner.id === entry.accountId) {
+                let newBalance = partner.balance;
+                if ([PartnerType.CUSTOMER].includes(partner.type)) {
+                    // Customers: removing debit decreases balance, removing credit increases balance
+                    newBalance = partner.balance - (entry.debit || 0) + (entry.credit || 0);
+                } else {
+                    // Suppliers: removing credit decreases liability, removing debit increases liability
+                    newBalance = partner.balance + (entry.credit || 0) - (entry.debit || 0);
+                }
+                return { ...partner, balance: newBalance };
+            }
+            return partner;
+        });
+        
+        // Remove entry from ledger
+        const updatedLedger = state.ledger.filter(e => e.id !== entryId);
+        
+        // Archive the deleted entry
+        const archiveEntry: ArchivedTransaction = {
+            id: generateId(),
+            originalTransactionId: entry.transactionId,
+            deletedAt: new Date().toISOString(),
+            deletedBy: user || 'Unknown',
+            reason: reason || 'Individual Entry Deletion',
+            entries: [entry],
+            totalValue: entry.debit || entry.credit || 0
+        };
+        
+        // Update state first
+        dispatch({ 
+            type: 'LOAD_LEDGER', 
+            payload: updatedLedger 
+        });
+        dispatch({ 
+            type: 'LOAD_ACCOUNTS', 
+            payload: updatedAccounts 
+        });
+        dispatch({ 
+            type: 'LOAD_PARTNERS', 
+            payload: updatedPartners 
+        });
+        
+        // Update Firebase accounts and partners
+        if (entry.accountId && state.accounts.find(a => a.id === entry.accountId)) {
+            const accountRef = doc(db, 'accounts', entry.accountId);
+            const account = updatedAccounts.find(a => a.id === entry.accountId);
+            if (account) {
+                await updateDoc(accountRef, { balance: account.balance });
+                console.log(`✅ Updated account balance in Firebase: ${account.name} = ${account.balance}`);
+            }
+        }
+        
+        if (entry.accountId && state.partners.find(p => p.id === entry.accountId)) {
+            const partnerRef = doc(db, 'partners', entry.accountId);
+            const partner = updatedPartners.find(p => p.id === entry.accountId);
+            if (partner) {
+                await updateDoc(partnerRef, { balance: partner.balance });
+                console.log(`✅ Updated partner balance in Firebase: ${partner.name} = ${partner.balance}`);
+            }
+        }
+        
+        // Add to archive
+        dispatch({ type: 'ADD_ARCHIVED_TRANSACTION', payload: archiveEntry });
+        
+        console.log(`✅ Deleted ledger entry ${entryId} successfully`);
+        console.log(`📊 Balance Sheet should refresh automatically. If not, please refresh the page (F5).`);
     };
     
     // Helper to recursively replace undefined with null (Firestore-safe)
@@ -2057,7 +2207,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const addPurchase = (purchase: Purchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
         if (!isFirestoreLoaded) {
-            console.warn('⚠️ Firebase not loaded, purchase not saved to database');
+            const errorMsg = '⚠️ Firebase not loaded yet. Purchase cannot be saved.\n\nPlease wait a few seconds and try again.';
+            console.warn(errorMsg);
+            alert(errorMsg);
+            return;
+        }
+        
+        // Factory check (should never happen - UI requires factory selection to access module)
+        if (!currentFactory?.id) {
+            console.error('❌ No factory selected - this should not happen');
+            alert('⚠️ System Error: No factory selected. Please refresh the page and try again.');
+            return;
+        }
+        
+        // Supplier check (should never happen - UI disables submit button without supplier)
+        if (!purchase.supplierId) {
+            console.error('❌ No supplier selected - this should not happen');
+            alert('⚠️ System Error: No supplier selected. Please select a supplier and try again.');
             return;
         }
 
@@ -2093,41 +2259,53 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addDoc(collection(db, 'purchases'), purchaseData)
             .then((docRef) => {
                 console.log('✅ Purchase saved to Firebase:', docRef.id);
+                console.log('📋 Purchase details:', {
+                    batchNumber: purchaseWithFactory.batchNumber,
+                    factoryId: purchaseWithFactory.factoryId,
+                    supplierId: purchaseWithFactory.supplierId,
+                    date: purchaseWithFactory.date,
+                    currentFactoryId: currentFactory?.id
+                });
+                alert(`✅ Purchase saved successfully!\n\nBatch: ${purchaseWithFactory.batchNumber}\nFactory: ${currentFactory?.name || 'Unknown'}\n\nIt should appear in the list shortly.`);
                 // Firebase listener will handle adding to local state
             })
             .catch((error) => {
                 console.error('❌ Error saving purchase to Firebase:', error);
-                alert('Failed to save purchase: ' + error.message);
+                console.error('📋 Purchase data that failed:', purchaseData);
+                alert(`❌ Failed to save purchase:\n\n${error.message}\n\nPlease check the browser console for details.`);
             });
 
         // Create journal entries for this purchase
         // 🛡️ DOUBLE-ENTRY RULE: Must have both accounts or throw error
         const buildPurchaseEntries = (): Omit<LedgerEntry, 'id'>[] | null => {
-        const inventoryAccount = state.accounts.find(a => a.name.includes('Inventory - Raw Material'));
-        const apAccount = state.accounts.find(a => a.name.includes('Accounts Payable'));
+        // Account lookup (should exist - it's in the dropdown)
+        const inventoryAccount = state.accounts.find(a => 
+            a.name.includes('Inventory - Raw Material') || 
+            a.name.includes('Raw Materials') ||
+            a.code === '1200'
+        );
 
-        if (!inventoryAccount || !apAccount) {
-            const errorMsg = `❌ CRITICAL ERROR: Cannot create purchase entry.\n\n` +
-                `Required accounts not found:\n` +
-                `${!inventoryAccount ? '- Inventory - Raw Materials\n' : ''}` +
-                `${!apAccount ? '- Accounts Payable\n' : ''}` +
-                `\nPlease create these accounts in Setup > Chart of Accounts.\n\n` +
-                `Purchase will NOT be saved.`;
-            console.error(errorMsg);
+        if (!inventoryAccount) {
+            const errorMsg = `⚠️ Account Not Found: Inventory - Raw Materials\n\n` +
+                `Purchase was saved but ledger entries were NOT created.\n\n` +
+                `Please create this account in Setup > Chart of Accounts (Code: 1200) and manually post the ledger entries.`;
+            console.error('❌ Inventory account not found:', errorMsg);
             alert(errorMsg);
-            throw new Error(errorMsg);
+            // Don't throw - allow purchase to be saved, but warn user
+            return null;
         }
 
-        // Verify supplier exists
+        // Supplier verification (should exist - it's in the dropdown)
         const supplier = state.partners.find(p => p.id === purchaseWithFactory.supplierId);
         if (!supplier) {
-            const errorMsg = `❌ CRITICAL ERROR: Cannot create purchase entry.\n\n` +
-                `Supplier not found: ${purchaseWithFactory.supplierId}\n\n` +
-                `Please ensure the supplier exists in Setup > Business Partners.\n\n` +
-                `Purchase will NOT be saved.`;
-            console.error(errorMsg);
+            const errorMsg = `⚠️ Supplier Not Found\n\n` +
+                `Supplier ID: ${purchaseWithFactory.supplierId}\n\n` +
+                `Purchase was saved but ledger entries were NOT created.\n\n` +
+                `Please verify the supplier exists in Setup > Business Partners.`;
+            console.error('❌ Supplier not found:', errorMsg);
             alert(errorMsg);
-            throw new Error(errorMsg);
+            // Don't throw - allow purchase to be saved, but warn user
+            return null;
         }
 
         const inventoryId = inventoryAccount.id;
@@ -2172,9 +2350,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         purchaseWithFactory.additionalCosts.forEach(cost => {
             const provider = state.partners.find(p => p.id === cost.providerId);
             if (!provider) {
-                console.warn(`⚠️ Provider not found for cost ${cost.costType}: ${cost.providerId}`);
+                console.error(`❌ Provider not found for cost ${cost.costType}: ${cost.providerId}`);
+                console.error('📋 Cost details:', cost);
+                alert(`⚠️ Warning: Provider not found for ${cost.costType} cost.\n\nProvider ID: ${cost.providerId}\n\nThis cost will be skipped. Please check the purchase and correct the provider.`);
                 return;
             }
+            
+            // For "Other" costs, use customName in narration if available, otherwise use provider name
+            const costDescription = (cost.costType === 'Other' && cost.customName) 
+                ? cost.customName 
+                : provider.name;
             
             // Debit: Inventory (capitalize additional costs)
                 entries.push({ 
@@ -2188,11 +2373,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 fcyAmount: cost.amountUSD, 
                 debit: cost.amountUSD, 
                 credit: 0, 
-                narration: `${cost.costType} (Capitalized): ${provider.name}`, 
+                narration: `${cost.costType} (Capitalized): ${costDescription}`, 
                 factoryId: purchaseWithFactory.factoryId 
             });
             
-            // Credit: Provider Account
+            // Credit: Provider Account (for "Other" costs, this is the supplier)
             entries.push({ 
                 date: purchaseWithFactory.date, 
                     transactionType: TransactionType.PURCHASE_INVOICE,
@@ -2204,7 +2389,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     fcyAmount: cost.amountFCY, 
                     debit: 0, 
                     credit: cost.amountUSD, 
-                narration: `${cost.costType}: ${provider.name}`, 
+                narration: `${cost.costType}: ${costDescription}`, 
                     factoryId: purchaseWithFactory.factoryId 
                 });
             });
@@ -4698,21 +4883,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 factoryId: invoice.factoryId 
             });
             
-            // CREDIT: Provider Payable (we owe the provider this amount)
-            entries.push({ 
-                date: invoice.date, 
-                transactionId, 
-                transactionType: TransactionType.SALES_INVOICE, 
-                accountId: cost.providerId, 
-                accountName: providerName, 
-                currency: cost.currency, 
-                exchangeRate: cost.exchangeRate, 
-                fcyAmount: cost.amount, 
-                debit: 0, 
-                credit: amountUSD, 
-                narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, 
-                factoryId: invoice.factoryId 
-            }); 
+            // CREDIT: Provider Payable - ONLY if there's an actual provider to pay
+            // For "Other" or "Customs" types without a provider, we don't owe anyone
+            // (Customer already paid us, we incur the expense, but no one to pay)
+            if (cost.providerId && cost.costType !== 'Other' && cost.costType !== 'Customs') {
+                entries.push({ 
+                    date: invoice.date, 
+                    transactionId, 
+                    transactionType: TransactionType.SALES_INVOICE, 
+                    accountId: cost.providerId, 
+                    accountName: providerName, 
+                    currency: cost.currency, 
+                    exchangeRate: cost.exchangeRate, 
+                    fcyAmount: cost.amount, 
+                    debit: 0, 
+                    credit: amountUSD, 
+                    narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, 
+                    factoryId: invoice.factoryId 
+                });
+            }
+            // NOTE: For "Other" or "Customs" without provider:
+            // - Customer pays us (Revenue Credit) ✓
+            // - We incur expense (Expense Debit) ✓
+            // - No payable entry (we don't owe anyone, customer already paid) 
         });
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory
@@ -5911,6 +6104,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             totalCollections,
             postTransaction,
             deleteTransaction,
+            deleteLedgerEntry,
             addPartner,
             updatePartner,
             addItem,

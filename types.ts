@@ -351,7 +351,8 @@ export interface LedgerEntry {
 export interface PurchaseAdditionalCost {
     id: string;
     costType: 'Freight' | 'Clearing' | 'Commission' | 'Other';
-    providerId: string; // ID of the partner (Agent or Supplier)
+    providerId: string; // ID of the partner (Agent or Supplier) - For 'Other', this will be the supplier ID
+    customName?: string; // Custom name/description for 'Other' charges (e.g., "VAT", "Custom Duty")
     currency: Currency;
     exchangeRate: number;
     amountFCY: number;

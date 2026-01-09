@@ -401,6 +401,7 @@ export const DataEntry: React.FC = () => {
     const [additionalCosts, setAdditionalCosts] = useState<PurchaseAdditionalCost[]>([]);
     const [acType, setAcType] = useState<'Freight'|'Clearing'|'Commission'|'Other'>('Freight');
     const [acProvider, setAcProvider] = useState('');
+    const [acCustomName, setAcCustomName] = useState(''); // For 'Other' charge type - custom name/description
     const [acCurrency, setAcCurrency] = useState<Currency>('USD');
     const [acExchangeRate, setAcExchangeRate] = useState<number>(1);
     const [acAmount, setAcAmount] = useState('');
@@ -919,25 +920,25 @@ export const DataEntry: React.FC = () => {
         
         const matchingPurchases = factoryFilteredPurchases.filter(p => {
             // Check supplier match
-            if (p.supplierId !== ooSupplier) return false;
+                if (p.supplierId !== ooSupplier) return false;
             
-            // For multi-item purchases, check if any item matches the selected type and product (if selected)
-            if (p.items && p.items.length > 0) {
-                return p.items.some(item => {
+                // For multi-item purchases, check if any item matches the selected type and product (if selected)
+                if (p.items && p.items.length > 0) {
+                    return p.items.some(item => {
                     // Try both ID and name matching for flexibility
                     const itemTypeId = item.originalTypeId;
                     const itemTypeName = item.originalType;
                     const typeMatches = itemTypeId === ooType || itemTypeName === ooType;
-                    const productMatches = !ooProduct || item.originalProductId === ooProduct;
-                    return typeMatches && productMatches;
-                });
-            }
-            // For legacy single-item purchases, check top-level fields
+                        const productMatches = !ooProduct || item.originalProductId === ooProduct;
+                        return typeMatches && productMatches;
+                    });
+                }
+                // For legacy single-item purchases, check top-level fields
             const purchaseTypeId = p.originalTypeId;
             const purchaseTypeName = p.originalType;
             const typeMatches = purchaseTypeId === ooType || purchaseTypeName === ooType;
-            const productMatches = !ooProduct || p.originalProductId === ooProduct;
-            return typeMatches && productMatches;
+                const productMatches = !ooProduct || p.originalProductId === ooProduct;
+                return typeMatches && productMatches;
         });
         
         if (matchingPurchases.length === 0 && allPurchases.length > 0) {
@@ -1571,20 +1572,46 @@ export const DataEntry: React.FC = () => {
 
     // --- Shared Additional Cost Logic ---
     const handleAddCost = () => {
-        if (!acProvider || !acAmount) return;
-        const fcy = parseFloat(acAmount);
-        const usd = fcy / acExchangeRate;
-        const newCost: PurchaseAdditionalCost = {
-            id: Math.random().toString(36).substr(2, 9),
-            costType: acType,
-            providerId: acProvider,
-            currency: acCurrency,
-            exchangeRate: acExchangeRate,
-            amountFCY: fcy,
-            amountUSD: usd
-        };
-        setAdditionalCosts([...additionalCosts, newCost]);
-        setAcAmount('');
+        // For 'Other' type, require custom name and use supplier ID as provider
+        if (acType === 'Other') {
+            if (!acCustomName || !acAmount) return;
+            const activeSupplierId = activeSubModule === 'original-purchase' ? purSupplier : bpSupplier;
+            if (!activeSupplierId) {
+                alert('Please select a supplier first. "Other" charges are recorded as payable to the supplier.');
+                return;
+            }
+            const fcy = parseFloat(acAmount);
+            const usd = fcy / acExchangeRate;
+            const newCost: PurchaseAdditionalCost = {
+                id: Math.random().toString(36).substr(2, 9),
+                costType: acType,
+                providerId: activeSupplierId, // Use supplier ID for 'Other' charges
+                customName: acCustomName, // Store custom name (e.g., "VAT", "Custom Duty")
+                currency: acCurrency,
+                exchangeRate: acExchangeRate,
+                amountFCY: fcy,
+                amountUSD: usd
+            };
+            setAdditionalCosts([...additionalCosts, newCost]);
+            setAcAmount('');
+            setAcCustomName(''); // Reset custom name
+        } else {
+            // For other types (Freight, Clearing, Commission), use selected provider
+            if (!acProvider || !acAmount) return;
+            const fcy = parseFloat(acAmount);
+            const usd = fcy / acExchangeRate;
+            const newCost: PurchaseAdditionalCost = {
+                id: Math.random().toString(36).substr(2, 9),
+                costType: acType,
+                providerId: acProvider,
+                currency: acCurrency,
+                exchangeRate: acExchangeRate,
+                amountFCY: fcy,
+                amountUSD: usd
+            };
+            setAdditionalCosts([...additionalCosts, newCost]);
+            setAcAmount('');
+        }
     };
 
     // --- Original Purchase Logic ---
@@ -2526,7 +2553,7 @@ export const DataEntry: React.FC = () => {
         // Use prodAvgCost if provided, otherwise fall back to item.avgCost
         const avgCostValue = prodAvgCost ? parseFloat(prodAvgCost) : (item.avgCost || 0);
         const productionPrice = isNaN(avgCostValue) ? (item.avgCost || 0) : avgCostValue;
-        
+
         const newEntry: ProductionEntry = {
             id: Math.random().toString(36).substr(2, 9),
             date: prodDate,
@@ -2885,13 +2912,13 @@ export const DataEntry: React.FC = () => {
                     <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm min-h-[500px]">
                         <div className="flex items-center justify-between mb-6 border-b border-slate-100 pb-4 print:hidden">
                             <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-                                    {currentSubModuleDef && <currentSubModuleDef.icon size={24} />}
-                                </div>
-                                <div>
-                                    <h2 className="text-xl font-bold text-slate-800">{currentSubModuleDef?.label}</h2>
-                                    <p className="text-sm text-slate-500">{currentSubModuleDef?.desc}</p>
-                                </div>
+                            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+                                {currentSubModuleDef && <currentSubModuleDef.icon size={24} />}
+                            </div>
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-800">{currentSubModuleDef?.label}</h2>
+                                <p className="text-sm text-slate-500">{currentSubModuleDef?.desc}</p>
+                            </div>
                             </div>
                             {activeSubModule === 'produced-production' && (
                                 <button
@@ -3450,6 +3477,11 @@ export const DataEntry: React.FC = () => {
                                         <div className="p-4 bg-slate-50 border-b border-slate-200">
                                             <h4 className="font-bold text-slate-800">Purchase List</h4>
                                             <p className="text-xs text-slate-500 mt-1">{state.purchases.length} purchase(s) recorded</p>
+                                            {(() => {
+                                                console.log('🔍 DataEntry Component - Purchases count:', state.purchases.length);
+                                                console.log('🔍 DataEntry Component - First 3 purchases:', state.purchases.slice(0, 3).map(p => ({ id: p.id, batch: p.batchNumber, factoryId: p.factoryId })));
+                                                return null;
+                                            })()}
                                         </div>
                                         <div className="overflow-x-auto">
                                             <table className="w-full text-sm">
@@ -3465,14 +3497,23 @@ export const DataEntry: React.FC = () => {
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-100">
-                                                    {state.purchases.length === 0 ? (
-                                                        <tr>
-                                                            <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                                                                No purchases found. Click "Create New" to add your first purchase.
-                                                            </td>
-                                                        </tr>
-                                                    ) : (
-                                                        state.purchases.map(purchase => {
+                                                    {(() => {
+                                                        console.log('🔍 Rendering table - purchases.length:', state.purchases.length);
+                                                        if (state.purchases.length === 0) {
+                                                            console.warn('⚠️ No purchases in state.purchases array!');
+                                                            return (
+                                                                <tr>
+                                                                    <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                                                                        No purchases found. Click "Create New" to add your first purchase.
+                                                                        <br />
+                                                                        <span className="text-xs text-red-400 mt-2 block">
+                                                                            Debug: state.purchases.length = {state.purchases.length}
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        }
+                                                        return state.purchases.map(purchase => {
                                                             const supplier = state.partners.find(p => p.id === purchase.supplierId);
                                                             const originalTypes = purchase.items?.length > 0
                                                                 ? purchase.items.map(item => state.originalTypes.find(t => t.id === item.originalTypeId)?.name || 'Unknown').join(', ')
@@ -3504,8 +3545,8 @@ export const DataEntry: React.FC = () => {
                                                                     </td>
                                                                 </tr>
                                                             );
-                                                        })
-                                                    )}
+                                                        });
+                                                    })()}
                                                 </tbody>
                                             </table>
                                         </div>
@@ -3691,22 +3732,37 @@ export const DataEntry: React.FC = () => {
                                         <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Anchor size={18} className="text-blue-500" /> Landed Cost / Additional Charges</h4>
                                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => setAcType(e.target.value as any)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => { setAcType(e.target.value as any); setAcProvider(''); setAcCustomName(''); }}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
                                                 <div className="md:col-span-1">
-                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Provider/Agent</label>
-                                                    <EntitySelector
-                                                        entities={filteredProviders}
-                                                        selectedId={acProvider}
-                                                        onSelect={setAcProvider}
-                                                        placeholder="Select..."
-                                                        onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
-                                                    />
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">
+                                                        {acType === 'Other' ? 'Charge Description' : 'Provider/Agent'}
+                                                    </label>
+                                                    {acType === 'Other' ? (
+                                                        <input
+                                                            type="text"
+                                                            value={acCustomName}
+                                                            onChange={(e) => setAcCustomName(e.target.value)}
+                                                            placeholder="e.g., VAT, Custom Duty..."
+                                                            className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800"
+                                                        />
+                                                    ) : (
+                                                        <EntitySelector
+                                                            entities={filteredProviders}
+                                                            selectedId={acProvider}
+                                                            onSelect={setAcProvider}
+                                                            placeholder="Select..."
+                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                        />
+                                                    )}
+                                                    {acType === 'Other' && (
+                                                        <p className="text-xs text-slate-400 mt-1">This will be recorded as payable to the supplier</p>
+                                                    )}
                                                 </div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
-                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
+                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={(acType === 'Other' ? !acCustomName : !acProvider) || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => { const providerName = cost.costType === 'Other' && cost.customName ? cost.customName : state.partners.find(p=>p.id===cost.providerId)?.name; return ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{providerName || 'Unknown'}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ); })}</div>
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
@@ -3998,22 +4054,37 @@ export const DataEntry: React.FC = () => {
                                         <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Anchor size={18} className="text-blue-500" /> Landed Cost / Additional Charges</h4>
                                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => setAcType(e.target.value as any)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => { setAcType(e.target.value as any); setAcProvider(''); setAcCustomName(''); }}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
                                                 <div className="md:col-span-1">
-                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Provider/Agent</label>
-                                                    <EntitySelector
-                                                        entities={filteredProviders}
-                                                        selectedId={acProvider}
-                                                        onSelect={setAcProvider}
-                                                        placeholder="Select..."
-                                                        onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
-                                                    />
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">
+                                                        {acType === 'Other' ? 'Charge Description' : 'Provider/Agent'}
+                                                    </label>
+                                                    {acType === 'Other' ? (
+                                                        <input
+                                                            type="text"
+                                                            value={acCustomName}
+                                                            onChange={(e) => setAcCustomName(e.target.value)}
+                                                            placeholder="e.g., VAT, Custom Duty..."
+                                                            className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800"
+                                                        />
+                                                    ) : (
+                                                        <EntitySelector
+                                                            entities={filteredProviders}
+                                                            selectedId={acProvider}
+                                                            onSelect={setAcProvider}
+                                                            placeholder="Select..."
+                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                        />
+                                                    )}
+                                                    {acType === 'Other' && (
+                                                        <p className="text-xs text-slate-400 mt-1">This will be recorded as payable to the supplier</p>
+                                                    )}
                                                 </div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
-                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
+                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={(acType === 'Other' ? !acCustomName : !acProvider) || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => { const providerName = cost.costType === 'Other' && cost.customName ? cost.customName : state.partners.find(p=>p.id===cost.providerId)?.name; return ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{providerName || 'Unknown'}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ); })}</div>
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
@@ -4131,22 +4202,37 @@ export const DataEntry: React.FC = () => {
                                     <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Anchor size={18} className="text-blue-500" /> Landed Cost / Additional Charges</h4>
                                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
                                             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => setAcType(e.target.value as any)}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
+                                                <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Charge Type</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acType} onChange={e => { setAcType(e.target.value as any); setAcProvider(''); setAcCustomName(''); }}><option value="Freight">Freight</option><option value="Clearing">Clearing</option><option value="Commission">Commission</option><option value="Other">Other</option></select></div>
                                                 <div className="md:col-span-1">
-                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Provider/Agent</label>
-                                                    <EntitySelector
-                                                        entities={filteredProviders}
-                                                        selectedId={acProvider}
-                                                        onSelect={setAcProvider}
-                                                        placeholder="Select..."
-                                                        onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
-                                                    />
+                                                    <label className="block text-xs font-semibold text-slate-500 mb-1">
+                                                        {acType === 'Other' ? 'Charge Description' : 'Provider/Agent'}
+                                                    </label>
+                                                    {acType === 'Other' ? (
+                                                        <input
+                                                            type="text"
+                                                            value={acCustomName}
+                                                            onChange={(e) => setAcCustomName(e.target.value)}
+                                                            placeholder="e.g., VAT, Custom Duty..."
+                                                            className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800"
+                                                        />
+                                                    ) : (
+                                                        <EntitySelector
+                                                            entities={filteredProviders}
+                                                            selectedId={acProvider}
+                                                            onSelect={setAcProvider}
+                                                            placeholder="Select..."
+                                                            onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
+                                                        />
+                                                    )}
+                                                    {acType === 'Other' && (
+                                                        <p className="text-xs text-slate-400 mt-1">This will be recorded as payable to the supplier</p>
+                                                    )}
                                                 </div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Currency</label><select className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acCurrency} onChange={e => setAcCurrency(e.target.value as Currency)}>{state.currencies.length > 0 ? state.currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>) : <option value="USD">USD</option>}</select></div>
                                                 <div className="md:col-span-1"><label className="block text-xs font-semibold text-slate-500 mb-1">Amount</label><input type="number" placeholder="0.00" className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-800" value={acAmount} onChange={e => setAcAmount(e.target.value)}/></div>
-                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={!acProvider || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
+                                                <div className="md:col-span-1 flex items-end"><button type="button" onClick={handleAddCost} disabled={(acType === 'Other' ? !acCustomName : !acProvider) || !acAmount} className="w-full bg-slate-800 text-white p-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:bg-slate-300">Add Cost</button></div>
                                             </div>
-                                            <div className="space-y-2">{additionalCosts.map(cost => ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{state.partners.find(p=>p.id===cost.providerId)?.name}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ))}</div>
+                                            <div className="space-y-2">{additionalCosts.map(cost => { const providerName = cost.costType === 'Other' && cost.customName ? cost.customName : state.partners.find(p=>p.id===cost.providerId)?.name; return ( <div key={cost.id} className="flex justify-between items-center bg-white p-2 rounded border border-slate-200 text-sm"><div className="flex gap-4"><span className="font-semibold text-slate-700 w-24">{cost.costType}</span><span className="text-slate-600">{providerName || 'Unknown'}</span></div><div className="flex items-center gap-4"><span className="font-mono">{cost.amountFCY} {cost.currency}</span><span className="text-slate-400 text-xs">Rate: {cost.exchangeRate}</span><span className="font-mono font-bold text-blue-600 w-20 text-right">${(cost.amountUSD || 0).toFixed(2)}</span><button type="button" onClick={() => setAdditionalCosts(additionalCosts.filter(c => c.id !== cost.id))} className="text-red-400 hover:text-red-600"><X size={14}/></button></div></div> ); })}</div>
                                     </div>
                                 </div>
 

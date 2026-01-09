@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { AccountType, TransactionType, PlannerPeriodType, PlannerEntityType, PlannerEntry, PartnerType, LedgerEntry, PackingType } from '../types';
 import { 
@@ -3163,7 +3163,8 @@ const LedgerReport: React.FC = () => {
         const closing = opening + debit - credit;
         
         // Only sort entries if we're viewing the detail (not summary) - lazy sorting
-        const sortedEntries = periodEntries.sort((a,b) => {
+        // Use slice() to avoid mutating the original array
+        const sortedEntries = [...periodEntries].sort((a,b) => {
             const aTime = new Date(a.date).getTime();
             const bTime = new Date(b.date).getTime();
             return aTime - bTime;
@@ -3178,17 +3179,22 @@ const LedgerReport: React.FC = () => {
         };
     }, [ledgerByAccount, dateFilteredLedger, startTimestamp]);
 
-    // PERFORMANCE OPTIMIZATION #4: Memoize account stats for summary view (only calculate when needed)
-    const accountStatsCache = useMemo(() => {
-        const cache: Record<string, ReturnType<typeof getAccountStats>> = {};
-        // Only calculate stats for visible entities (filteredEntities)
-        filteredEntities.forEach(entity => {
-            cache[entity.id] = getAccountStats(entity.id);
-        });
-        return cache;
-    }, [filteredEntities, getAccountStats]);
+    // PERFORMANCE OPTIMIZATION #4: Use ref for persistent cache that doesn't trigger re-renders
+    // Calculate stats on-demand only when rows are rendered
+    const accountStatsCacheRef = useRef<Record<string, ReturnType<typeof getAccountStats>>>({});
+    
+    // Clear cache when filters change
+    useEffect(() => {
+        accountStatsCacheRef.current = {};
+    }, [startDate, endDate, accountType]);
 
     const activeEntity = useMemo(() => allEntities.find(e => e.id === selectedAccountId), [allEntities, selectedAccountId]);
+    
+    // PERFORMANCE: Memoize voucher entries to avoid filtering on every render
+    const voucherEntries = useMemo(() => {
+        if (!viewVoucherId) return [];
+        return state.ledger.filter(e => e.transactionId === viewVoucherId);
+    }, [state.ledger, viewVoucherId]);
 
     return (
         <div className="space-y-6 animate-in fade-in h-full flex flex-col">
@@ -3235,8 +3241,12 @@ const LedgerReport: React.FC = () => {
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {filteredEntities.map(e => { 
-                                    // Use cached stats instead of recalculating for each render
-                                    const stats = accountStatsCache[e.id] || getAccountStats(e.id); 
+                                    // Calculate stats on-demand (lazy) - only when row is rendered
+                                    // Use ref cache to avoid recalculating on every render
+                                    if (!accountStatsCacheRef.current[e.id]) {
+                                        accountStatsCacheRef.current[e.id] = getAccountStats(e.id);
+                                    }
+                                    const stats = accountStatsCacheRef.current[e.id];
                                     if (stats.opening === 0 && stats.debit === 0 && stats.credit === 0) return null; 
                                     return ( 
                                         <tr key={e.id} className="hover:bg-slate-50 group">
@@ -3387,7 +3397,7 @@ const LedgerReport: React.FC = () => {
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                     <div className="bg-white rounded-xl shadow-2xl p-6 max-w-5xl w-full animate-in zoom-in-95">
                         <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4"><h3 className="text-xl font-bold text-slate-800">Transaction Details</h3><button onClick={() => setViewVoucherId(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button></div>
-                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4"><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs font-bold text-slate-400 uppercase">Voucher ID</span><span className="font-mono font-bold text-blue-600">{viewVoucherId}</span></div><div><span className="block text-xs font-bold text-slate-400 uppercase">Date</span><span className="font-medium text-slate-700">{state.ledger.find(e => e.transactionId === viewVoucherId)?.date}</span></div></div></div>
+                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4"><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs font-bold text-slate-400 uppercase">Voucher ID</span><span className="font-mono font-bold text-blue-600">{viewVoucherId}</span></div><div><span className="block text-xs font-bold text-slate-400 uppercase">Date</span><span className="font-medium text-slate-700">{voucherEntries[0]?.date || ''}</span></div></div></div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm text-left min-w-full">
                                 <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs">
@@ -3398,7 +3408,7 @@ const LedgerReport: React.FC = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {state.ledger.filter(e => e.transactionId === viewVoucherId).map((row, i) => ( 
+                                    {voucherEntries.map((row, i) => ( 
                                         <tr key={i}>
                                             <td className="px-4 py-2">
                                                 <div className="font-medium text-slate-800">{row.accountName}</div>

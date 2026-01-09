@@ -6,7 +6,7 @@ import { EXCHANGE_RATES, CURRENCY_SYMBOLS } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { FileText, ArrowRight, ArrowLeftRight, CreditCard, DollarSign, Plus, Trash2, CheckCircle, Calculator, Building, User, RefreshCw, TrendingUp, Filter, Lock, ShieldAlert, Edit2, X, ShoppingBag, Package, RotateCcw, AlertTriangle, Scale, Printer, ChevronUp, ChevronDown, Upload } from 'lucide-react';
 import { db } from '../services/firebase';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import Papa from 'papaparse';
 
 type VoucherType = 'RV' | 'PV' | 'EV' | 'JV' | 'TR' | 'PB' | 'IA' | 'IAO' | 'RTS' | 'WO' | 'BD' | 'MJV';
@@ -26,7 +26,7 @@ interface JvRow {
 const SUPERVISOR_PIN = '7860';
 
 export const Accounting: React.FC = () => {
-    const { state, postTransaction, deleteTransaction, alignBalance, alignFinishedGoodsStock, alignOriginalStock } = useData();
+    const { state, postTransaction, deleteTransaction, deleteLedgerEntry, alignBalance, alignFinishedGoodsStock, alignOriginalStock } = useData();
     const [activeTab, setActiveTab] = useState<'voucher' | 'ledger' | 'balance-alignment' | 'stock-alignment'>('voucher');
 
     // --- Voucher State ---
@@ -2198,12 +2198,42 @@ export const Accounting: React.FC = () => {
         // This ensures we don't lose data if save fails
         if (editingTransactionId) {
             try {
+                console.log(`🗑️ Deleting old transaction before edit: ${editingTransactionId}`);
                 await deleteTransaction(editingTransactionId, 'Edit Reversal', authPin);
+                
+                // CRITICAL: Wait a moment for Firestore to sync the deletion
+                // This prevents race conditions where new entries are posted before old ones are deleted
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Verify deletion by checking Firebase directly (not state, which may be stale)
+                const ledgerQuery = query(
+                    collection(db, 'ledger'), 
+                    where('transactionId', '==', editingTransactionId),
+                    where('factoryId', '==', state.currentFactory?.id || '')
+                );
+                const ledgerSnapshot = await getDocs(ledgerQuery);
+                
+                if (!ledgerSnapshot.empty) {
+                    console.warn(`⚠️ Warning: ${ledgerSnapshot.size} entries still exist in Firebase after deletion. Retrying...`);
+                    // Retry deletion
+                    await deleteTransaction(editingTransactionId, 'Edit Reversal (Retry)', authPin);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Verify again after retry
+                    const retrySnapshot = await getDocs(ledgerQuery);
+                    if (!retrySnapshot.empty) {
+                        throw new Error(`Failed to delete ${retrySnapshot.size} existing entries for transaction ${editingTransactionId}. Please delete them manually before editing.`);
+                    }
+                }
+                
+                console.log(`✅ Old transaction deleted successfully: ${editingTransactionId}`);
+                
                 // Clear edit state after successful deletion
                 setEditingTransactionId(null);
                 setOriginalEntries([]);
             } catch (error) {
-                alert('Failed to delete original transaction. Edit cancelled.');
+                console.error('❌ Failed to delete original transaction:', error);
+                alert('Failed to delete original transaction. Edit cancelled. Please try again or delete the transaction manually.');
                 return;
             }
         }
@@ -2373,18 +2403,81 @@ export const Accounting: React.FC = () => {
     const removeJvRow = (id: string) => setJvRows(prev => prev.filter(r => r.id !== id));
 
     // --- Ledger Logic ---
+    // PERFORMANCE: Pre-convert date filters to timestamps for faster comparison
+    const filterDateFromTimestamp = useMemo(() => 
+        filterDateFrom ? new Date(filterDateFrom).getTime() : null, 
+        [filterDateFrom]
+    );
+    const filterDateToTimestamp = useMemo(() => 
+        filterDateTo ? new Date(filterDateTo).getTime() : null, 
+        [filterDateTo]
+    );
+    const filterMinAmountNum = useMemo(() => 
+        filterMinAmount ? parseFloat(filterMinAmount) : null, 
+        [filterMinAmount]
+    );
+    const filterMaxAmountNum = useMemo(() => 
+        filterMaxAmount ? parseFloat(filterMaxAmount) : null, 
+        [filterMaxAmount]
+    );
+    
     const filteredLedger = useMemo(() => {
-        return state.ledger.filter(entry => {
-            if (filterDateFrom && entry.date < filterDateFrom) return false;
-            if (filterDateTo && entry.date > filterDateTo) return false;
+        // Early exit if no filters and no ledger entries
+        if (state.ledger.length === 0) return [];
+        
+        // Filter with optimized comparisons (numeric timestamps instead of string dates)
+        const filtered = state.ledger.filter(entry => {
+            // Fast path: if no filters, return all entries
+            if (!filterDateFromTimestamp && !filterDateToTimestamp && !filterType && 
+                !filterAccountId && !filterVoucherId && !filterMinAmountNum && !filterMaxAmountNum) {
+                return true;
+            }
+            
+            // Date filter (numeric comparison is faster)
+            if (filterDateFromTimestamp || filterDateToTimestamp) {
+                const entryTimestamp = new Date(entry.date).getTime();
+                if (filterDateFromTimestamp && entryTimestamp < filterDateFromTimestamp) return false;
+                if (filterDateToTimestamp && entryTimestamp > filterDateToTimestamp) return false;
+            }
+            
+            // Type filter (fast string comparison)
             if (filterType && entry.transactionType !== filterType) return false;
+            
+            // Account filter (fast string comparison)
             if (filterAccountId && entry.accountId !== filterAccountId) return false;
+            
+            // Voucher filter (fast string comparison)
             if (filterVoucherId && entry.transactionId !== filterVoucherId) return false;
-            if (filterMinAmount && entry.fcyAmount < parseFloat(filterMinAmount)) return false;
-            if (filterMaxAmount && entry.fcyAmount > parseFloat(filterMaxAmount)) return false;
+            
+            // Amount filters (numeric comparison)
+            if (filterMinAmountNum !== null && (entry.fcyAmount || 0) < filterMinAmountNum) return false;
+            if (filterMaxAmountNum !== null && (entry.fcyAmount || 0) > filterMaxAmountNum) return false;
+            
             return true;
-        }).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    }, [state.ledger, filterDateFrom, filterDateTo, filterType, filterAccountId, filterVoucherId, filterMinAmount, filterMaxAmount]);
+        });
+        
+        // Sort only if we have entries (avoid unnecessary sort on empty array)
+        if (filtered.length === 0) return [];
+        
+        // Optimized sort: cache timestamps to avoid recalculating
+        const entriesWithTimestamps = filtered.map(entry => ({
+            entry,
+            timestamp: new Date(entry.date).getTime()
+        }));
+        
+        entriesWithTimestamps.sort((a, b) => b.timestamp - a.timestamp);
+        
+        return entriesWithTimestamps.map(item => item.entry);
+    }, [state.ledger, filterDateFromTimestamp, filterDateToTimestamp, filterType, filterAccountId, filterVoucherId, filterMinAmountNum, filterMaxAmountNum]);
+    
+    // PERFORMANCE: Pre-index partners by ID to avoid O(n*m) lookups in map
+    const partnerIndex = useMemo(() => {
+        const index: Record<string, typeof state.partners[0]> = {};
+        state.partners.forEach(p => {
+            index[p.id] = p;
+        });
+        return index;
+    }, [state.partners]);
 
     // --- Secure Action Handlers ---
     const initiateAction = (type: 'DELETE' | 'EDIT', transactionId: string) => {
@@ -5439,9 +5532,9 @@ export const Accounting: React.FC = () => {
                             </thead>
                             <tbody className="divide-y divide-slate-200 text-slate-700">
                                     {filteredLedger.map((entry) => {
-                                        // Check if this accountId is a partner
-                                        const isPartner = state.partners.some(p => p.id === entry.accountId);
-                                        const partner = state.partners.find(p => p.id === entry.accountId);
+                                        // Fast O(1) lookup instead of O(n) find/some
+                                        const partner = partnerIndex[entry.accountId];
+                                        const isPartner = !!partner;
                                         
                                         return (
                                     <tr key={entry.id} className="hover:bg-slate-50 group">
@@ -5472,7 +5565,32 @@ export const Accounting: React.FC = () => {
                                             <td className="px-4 py-4 text-center whitespace-nowrap">
                                             <div className="flex justify-center gap-2">
                                                 <button onClick={() => initiateAction('EDIT', entry.transactionId)} className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors" title="Edit Voucher"><Edit2 size={16} /></button>
-                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Voucher"><Trash2 size={16} /></button>
+                                                <button onClick={() => initiateAction('DELETE', entry.transactionId)} className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Entire Voucher"><Trash2 size={16} /></button>
+                                                <button 
+                                                    onClick={async () => {
+                                                        if (!window.confirm(`⚠️ Delete this individual ledger entry?\n\nAccount: ${entry.accountName}\nAmount: $${(entry.debit || entry.credit || 0).toFixed(2)}\nNarration: ${entry.narration}\n\nThis will NOT affect other entries in the voucher.`)) {
+                                                            return;
+                                                        }
+                                                        const pin = prompt('Enter Supervisor PIN to delete this entry:');
+                                                        if (pin !== SUPERVISOR_PIN) {
+                                                            alert('❌ Invalid PIN! Deletion cancelled.');
+                                                            return;
+                                                        }
+                                                        try {
+                                                            console.log(`🗑️ Deleting entry: ${entry.id}`, entry);
+                                                            await deleteLedgerEntry(entry.id, 'Individual entry deletion', pin);
+                                                            // Force a small delay to allow state to update
+                                                            await new Promise(resolve => setTimeout(resolve, 1000));
+                                                            alert('✅ Entry deleted successfully!\n\n⚠️ IMPORTANT: Please refresh the page (F5) to see updated Balance Sheet.\n\nAfter refresh, check:\n1. Balance Sheet discrepancy should be reduced\n2. If still unbalanced, check browser console (F12) for Balance Sheet calculation logs');
+                                                        } catch (error: any) {
+                                                            alert(`❌ Error deleting entry: ${error.message || 'Unknown error'}`);
+                                                        }
+                                                    }}
+                                                    className="p-1 text-orange-500 hover:bg-orange-50 rounded transition-colors" 
+                                                    title="Delete This Entry Only (Safer - Won't affect Opening Balances)"
+                                                >
+                                                    <X size={16} />
+                                                </button>
                                             </div>
                                         </td>
                                     </tr>

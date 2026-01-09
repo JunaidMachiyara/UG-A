@@ -63,50 +63,77 @@ export const UserManagement: React.FC = () => {
         setSaving(true);
 
         try {
-            const userData = {
-                ...formData,
-                ...(editingId ? { updatedDate: new Date().toISOString() } : { createdDate: new Date().toISOString() })
-            };
-
             if (editingId) {
+                console.log('Updating user:', editingId, formData);
                 // Don't update password if it's empty (editing mode)
-                const updateData: any = { ...userData };
-                if (!formData.password) {
-                    delete updateData.password;
+                const updateData: any = {
+                    username: formData.username,
+                    displayName: formData.displayName,
+                    role: formData.role,
+                    factoryId: formData.factoryId,
+                    allowedModules: formData.allowedModules,
+                    isActive: formData.isActive,
+                    updatedDate: new Date().toISOString()
+                };
+                
+                // Only include password if it's provided
+                if (formData.password && formData.password.trim() !== '') {
+                    updateData.password = formData.password;
                 }
+                
                 await updateDoc(doc(db, 'users', editingId), updateData);
+                console.log('User updated successfully');
                 
                 // If we updated the currently logged-in user, refresh their session
                 if (currentUser && editingId === currentUser.id) {
                     await refreshUser();
                     alert('Your permissions have been updated. Please refresh the page to see the changes.');
+                } else {
+                    alert('User updated successfully!');
                 }
             } else {
+                console.log('Creating new user:', formData);
+                const userData = {
+                    ...formData,
+                    createdDate: new Date().toISOString()
+                };
                 await addDoc(collection(db, 'users'), userData);
+                console.log('User created successfully');
+                alert('User created successfully!');
             }
 
             await loadUsers();
             resetForm();
         } catch (error) {
             console.error('Failed to save user:', error);
-            alert('Failed to save user');
+            alert(`Failed to save user: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
             setSaving(false);
         }
     };
 
     const handleEdit = (user: User) => {
-        setFormData({
-            username: user.username,
+        if (!user.id) {
+            console.error('Cannot edit user: missing ID', user);
+            alert('Error: User ID is missing. Cannot edit this user.');
+            return;
+        }
+        
+        console.log('Editing user:', user.id, user);
+        const formDataToSet = {
+            username: user.username || '',
             password: '', // Don't show existing password
-            displayName: user.displayName,
-            role: user.role,
-            factoryId: user.factoryId,
+            displayName: user.displayName || '',
+            role: user.role || UserRole.DATA_ENTRY_INVENTORY,
+            factoryId: user.factoryId || '',
             allowedModules: user.allowedModules || [],
-            isActive: user.isActive
-        });
+            isActive: user.isActive !== undefined ? user.isActive : true
+        };
+        console.log('Setting form data:', formDataToSet);
+        setFormData(formDataToSet);
         setEditingId(user.id);
         setShowForm(true);
+        console.log('Form should now be visible. editingId:', user.id, 'showForm: true');
     };
 
     const resetForm = () => {
