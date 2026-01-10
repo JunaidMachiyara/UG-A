@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { EntitySelector } from './EntitySelector';
 import { LogisticsEntry, Purchase, BundlePurchase, ProductionEntry, PackingType } from '../types';
-import { Container, Truck, CheckCircle, Scale, Building, Plus, X } from 'lucide-react';
+import { Container, Truck, CheckCircle, Scale, Building, Plus, X, Search } from 'lucide-react';
 
 export const ContainerOffloading: React.FC = () => {
     const { state, saveLogisticsEntry, addProduction } = useData();
@@ -63,6 +63,7 @@ export const ContainerOffloading: React.FC = () => {
             const existingEntry = state.logisticsEntries.find(le => le.purchaseId === p.id && le.purchaseType === 'ORIGINAL');
             
             if (existingEntry) {
+                // Use existing logistics entry - this takes precedence over purchase status
                 shipments.push(existingEntry);
             } else {
                 // Placeholder - use purchase status if available, otherwise default to 'In Transit'
@@ -317,15 +318,18 @@ export const ContainerOffloading: React.FC = () => {
         try {
             await saveLogisticsEntry(entry);
             console.log('✅ Container Off-loaded Successfully!');
-            alert('✅ Container Off-loaded Successfully!');
             
-            // Reset and refresh
+            // IMPORTANT: Change filter to "Arrived" BEFORE showing success message
+            // This ensures the container will be visible after the status change
+            setFilterStatus('Arrived');
+            
+            alert('✅ Container Off-loaded Successfully!\n\nContainer status changed to "Arrived".\nPlease check the "Arrived" filter if you don\'t see it.');
+            
+            // Reset form but keep filter on "Arrived" so container is visible
             setSelectedContainerId('');
             setReceivedWeight('');
             setTallyList([]);
             setArrivalDate(new Date().toISOString().split('T')[0]);
-            // Don't reset filter status - let user see the updated entry in "Arrived" filter
-            setFilterStatus('Arrived');
         } catch (error) {
             console.error('❌ Error finalizing off-loading:', error);
             console.error('❌ Entry that failed:', entry);
@@ -373,15 +377,103 @@ export const ContainerOffloading: React.FC = () => {
                     </div>
                     <div className="md:col-span-2">
                          <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Select Container</label>
-                         <EntitySelector
-                            entities={filteredShipments.map(s => ({
-                                id: s.id,
-                                name: `${s.containerNumber} (${s.purchaseType === 'ORIGINAL' ? 'Original' : 'Bundle'})`
-                            }))}
-                            selectedId={selectedContainerId}
-                            onSelect={setSelectedContainerId}
-                            placeholder="Select Container..."
-                        />
+                         <div className="flex gap-2">
+                            <div className="flex-1">
+                                <EntitySelector
+                                    entities={filteredShipments.map(s => ({
+                                        id: s.id,
+                                        name: `${s.containerNumber} (${s.purchaseType === 'ORIGINAL' ? 'Original' : 'Bundle'}) - ${s.status}`
+                                    }))}
+                                    selectedId={selectedContainerId}
+                                    onSelect={setSelectedContainerId}
+                                    placeholder="Select Container..."
+                                />
+                            </div>
+                            <button
+                                onClick={() => {
+                                    // Find container 73073 AD across all statuses (not just filtered)
+                                    const container73073 = allShipments.find(s => 
+                                        s.containerNumber && (
+                                            s.containerNumber.includes('73073') || 
+                                            s.containerNumber.toLowerCase().includes('73073')
+                                        )
+                                    );
+                                    
+                                    if (container73073) {
+                                        const purchase = state.purchases.find(p => p.id === container73073.purchaseId);
+                                        const logisticsEntry = state.logisticsEntries.find(e => 
+                                            e.purchaseId === container73073.purchaseId && 
+                                            e.purchaseType === container73073.purchaseType
+                                        );
+                                        
+                                        alert(`✅ Container 73073 AD Found!\n\n` +
+                                            `Container Number: ${container73073.containerNumber}\n` +
+                                            `Status: ${container73073.status}\n` +
+                                            `Purchase Status: ${purchase?.status || 'Unknown'}\n` +
+                                            `Purchase ID: ${container73073.purchaseId}\n` +
+                                            `Logistics Entry ID: ${container73073.id}\n` +
+                                            `Has Logistics Entry: ${!!logisticsEntry}\n` +
+                                            `Current Filter: ${filterStatus}\n` +
+                                            `Is Placeholder: ${container73073.id.startsWith('PLACEHOLDER')}\n\n` +
+                                            `⚠️ To see this container, change filter to: "${container73073.status}"\n\n` +
+                                            `Changing filter now...`);
+                                        setFilterStatus(container73073.status as any);
+                                        setSelectedContainerId(container73073.id);
+                                    } else {
+                                        // Check if purchase exists but no shipment found
+                                        const purchase73073 = state.purchases.find(p => 
+                                            p.containerNumber && (
+                                                p.containerNumber.includes('73073') || 
+                                                p.containerNumber.toLowerCase().includes('73073')
+                                            )
+                                        );
+                                        
+                                        if (purchase73073) {
+                                            const logisticsEntry73073 = state.logisticsEntries.find(e => 
+                                                e.purchaseId === purchase73073.id && 
+                                                e.purchaseType === 'ORIGINAL'
+                                            );
+                                            
+                                            alert(`⚠️ Purchase 73073 AD Found but not showing in shipments!\n\n` +
+                                                `Purchase ID: ${purchase73073.id}\n` +
+                                                `Purchase Status: ${purchase73073.status}\n` +
+                                                `Container Number: ${purchase73073.containerNumber}\n` +
+                                                `Has Logistics Entry: ${!!logisticsEntry73073}\n` +
+                                                `Logistics Entry Status: ${logisticsEntry73073?.status || 'N/A'}\n` +
+                                                `Current Filter: ${filterStatus}\n\n` +
+                                                `This purchase exists but might be filtered out.\n` +
+                                                `Try changing the filter to: "${purchase73073.status || 'Arrived'}"\n\n` +
+                                                `Changing filter now...`);
+                                            
+                                            // Try to show it by changing filter
+                                            if (purchase73073.status) {
+                                                setFilterStatus(purchase73073.status as any);
+                                            } else {
+                                                setFilterStatus('Arrived');
+                                            }
+                                        } else {
+                                            const allContainerNumbers = state.purchases
+                                                .filter(p => p.containerNumber)
+                                                .map(p => p.containerNumber)
+                                                .filter((c): c is string => !!c);
+                                            
+                                            alert(`❌ Container 73073 AD not found!\n\n` +
+                                                `Total Purchases: ${state.purchases.length}\n` +
+                                                `Purchases with containers: ${allContainerNumbers.length}\n` +
+                                                `Total Shipments: ${allShipments.length}\n\n` +
+                                                `Container numbers in system:\n` +
+                                                allContainerNumbers.slice(0, 10).join(', ') +
+                                                (allContainerNumbers.length > 10 ? `\n...and ${allContainerNumbers.length - 10} more` : '') +
+                                                `\n\nPlease verify the container number is correct.`);
+                                        }
+                                    }
+                                }}
+                                className="px-3 py-2 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600 flex items-center gap-1"
+                                title="Find Container 73073 AD"
+                            >
+                                <Search size={14} /> Find 73073
+                            </button>
+                        </div>
                     </div>
                 </div>
 
