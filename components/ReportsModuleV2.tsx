@@ -4777,8 +4777,34 @@ const DayBookReport: React.FC = () => {
             groupedByTransaction[entry.transactionId].push(entry);
         });
 
+        // Separate PROD transactions from others for aggregation
+        const prodTransactions: typeof entries = [];
+        const nonProdTransactions: Array<[string, typeof entries]> = [];
+
+        Object.entries(groupedByTransaction).forEach(([txId, txEntries]) => {
+            const firstEntry = txEntries[0];
+            if (firstEntry.transactionType === TransactionType.PRODUCTION) {
+                // Collect all PROD entries for aggregation
+                prodTransactions.push(...txEntries);
+            } else {
+                // Keep non-PROD transactions as individual entries
+                nonProdTransactions.push([txId, txEntries]);
+            }
+        });
+
+        // Aggregate PROD transactions into a single entry
+        const finalTransactions: Array<[string, typeof entries]> = [];
+        
+        if (prodTransactions.length > 0) {
+            // Create aggregated PROD entry
+            finalTransactions.push(['PRODUCTION-AGGREGATED', prodTransactions]);
+        }
+
+        // Add non-PROD transactions
+        finalTransactions.push(...nonProdTransactions);
+
         // Sort transactions by entry date (createdAt), then by transaction ID
-        const sortedTransactions = Object.entries(groupedByTransaction).sort(([txIdA, entriesA], [txIdB, entriesB]) => {
+        const sortedTransactions = finalTransactions.sort(([txIdA, entriesA], [txIdB, entriesB]) => {
             // Get entry date (createdAt) for sorting
             const getEntryDate = (entry: typeof entriesA[0]) => {
                 const entryWithCreatedAt = entry as any;
@@ -4818,6 +4844,7 @@ const DayBookReport: React.FC = () => {
             [TransactionType.BALANCING_DISCREPANCY]: 'Balance Discrepancy (BD)',
             [TransactionType.INVENTORY_ADJUSTMENT]: 'Inventory Adjustment (IA)',
             [TransactionType.OPENING_BALANCE]: 'Opening Balance (OB)',
+            [TransactionType.PRODUCTION]: 'Production (PROD)',
         };
         return labels[type] || type;
     };
@@ -4931,7 +4958,24 @@ const DayBookReport: React.FC = () => {
                         {filteredEntries.map(([transactionId, entries]) => {
                             const totals = getTransactionTotals(entries);
                             const firstEntry = entries[0];
-                            const voucherType = getVoucherTypeLabel(firstEntry.transactionType);
+                            const isAggregatedProd = transactionId === 'PRODUCTION-AGGREGATED';
+                            
+                            // For aggregated PROD, show "Production" instead of transaction ID
+                            const displayLabel = isAggregatedProd ? 'Production' : transactionId;
+                            const voucherType = isAggregatedProd 
+                                ? 'Production (PROD)' 
+                                : getVoucherTypeLabel(firstEntry.transactionType);
+                            
+                            // Group entries by original transaction ID for aggregated PROD
+                            const groupedByOriginalTx: { [key: string]: typeof entries } = {};
+                            if (isAggregatedProd) {
+                                entries.forEach(entry => {
+                                    if (!groupedByOriginalTx[entry.transactionId]) {
+                                        groupedByOriginalTx[entry.transactionId] = [];
+                                    }
+                                    groupedByOriginalTx[entry.transactionId].push(entry);
+                                });
+                            }
                             
                             return (
                                 <div key={transactionId} className="p-4 hover:bg-slate-50 transition-colors">
@@ -4944,8 +4988,13 @@ const DayBookReport: React.FC = () => {
                                                 {viewVoucherId === transactionId ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                                             </button>
                                             <div>
-                                                <span className="font-mono font-bold text-slate-800">{transactionId}</span>
+                                                <span className="font-mono font-bold text-slate-800">{displayLabel}</span>
                                                 <span className="ml-3 text-sm text-slate-500">{voucherType}</span>
+                                                {isAggregatedProd && (
+                                                    <span className="ml-2 text-xs text-slate-400">
+                                                        ({Object.keys(groupedByOriginalTx).length} entries)
+                                                    </span>
+                                                )}
                                             </div>
                                             <span className="text-sm text-slate-400">{firstEntry.date}</span>
                                         </div>
@@ -4961,38 +5010,99 @@ const DayBookReport: React.FC = () => {
                                     
                                     {viewVoucherId === transactionId && (
                                         <div className="mt-3 ml-7 bg-slate-50 rounded-lg p-3 border border-slate-200">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-slate-100 text-slate-600 font-bold">
-                                                    <tr>
-                                                        <th className="px-3 py-2 text-left">Account</th>
-                                                        <th className="px-3 py-2 text-right">Debit ($)</th>
-                                                        <th className="px-3 py-2 text-right">Credit ($)</th>
-                                                        <th className="px-3 py-2 text-left">Narration</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-slate-100">
-                                                    {entries.map((entry, idx) => (
-                                                        <tr key={idx} className="hover:bg-white">
-                                                            <td className="px-3 py-2 font-medium">{entry.accountName}</td>
-                                                            <td className="px-3 py-2 text-right font-mono">
-                                                                {entry.debit > 0 ? entry.debit.toFixed(2) : '-'}
-                                                            </td>
-                                                            <td className="px-3 py-2 text-right font-mono">
-                                                                {entry.credit > 0 ? entry.credit.toFixed(2) : '-'}
-                                                            </td>
-                                                            <td className="px-3 py-2 text-slate-500 italic">{entry.narration}</td>
+                                            {isAggregatedProd ? (
+                                                // Show grouped production entries
+                                                <div className="space-y-4">
+                                                    {Object.entries(groupedByOriginalTx).map(([originalTxId, txEntries]) => {
+                                                        const txTotals = getTransactionTotals(txEntries);
+                                                        return (
+                                                            <div key={originalTxId} className="bg-white rounded p-3 border border-slate-200">
+                                                                <div className="font-semibold text-slate-700 mb-2 pb-2 border-b border-slate-200">
+                                                                    {originalTxId} - {getVoucherTypeLabel(TransactionType.PRODUCTION)}
+                                                                </div>
+                                                                <table className="w-full text-sm">
+                                                                    <thead className="bg-slate-100 text-slate-600 font-bold">
+                                                                        <tr>
+                                                                            <th className="px-3 py-2 text-left">Account</th>
+                                                                            <th className="px-3 py-2 text-right">Debit ($)</th>
+                                                                            <th className="px-3 py-2 text-right">Credit ($)</th>
+                                                                            <th className="px-3 py-2 text-left">Narration</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-slate-100">
+                                                                        {txEntries.map((entry, idx) => (
+                                                                            <tr key={idx} className="hover:bg-slate-50">
+                                                                                <td className="px-3 py-2 font-medium">{entry.accountName}</td>
+                                                                                <td className="px-3 py-2 text-right font-mono">
+                                                                                    {entry.debit > 0 ? entry.debit.toFixed(2) : '-'}
+                                                                                </td>
+                                                                                <td className="px-3 py-2 text-right font-mono">
+                                                                                    {entry.credit > 0 ? entry.credit.toFixed(2) : '-'}
+                                                                                </td>
+                                                                                <td className="px-3 py-2 text-slate-500 italic">{entry.narration}</td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                    <tfoot className="bg-slate-100 font-bold">
+                                                                        <tr>
+                                                                            <td className="px-3 py-2">Subtotal</td>
+                                                                            <td className="px-3 py-2 text-right text-green-700">${txTotals.totalDebit.toFixed(2)}</td>
+                                                                            <td className="px-3 py-2 text-right text-red-700">${txTotals.totalCredit.toFixed(2)}</td>
+                                                                            <td className="px-3 py-2"></td>
+                                                                        </tr>
+                                                                    </tfoot>
+                                                                </table>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div className="bg-blue-50 rounded p-3 border border-blue-200">
+                                                        <table className="w-full text-sm">
+                                                            <tfoot className="font-bold">
+                                                                <tr>
+                                                                    <td className="px-3 py-2">Total Production</td>
+                                                                    <td className="px-3 py-2 text-right text-green-700">${totals.totalDebit.toFixed(2)}</td>
+                                                                    <td className="px-3 py-2 text-right text-red-700">${totals.totalCredit.toFixed(2)}</td>
+                                                                    <td className="px-3 py-2"></td>
+                                                                </tr>
+                                                            </tfoot>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                // Show regular transaction entries
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-slate-100 text-slate-600 font-bold">
+                                                        <tr>
+                                                            <th className="px-3 py-2 text-left">Account</th>
+                                                            <th className="px-3 py-2 text-right">Debit ($)</th>
+                                                            <th className="px-3 py-2 text-right">Credit ($)</th>
+                                                            <th className="px-3 py-2 text-left">Narration</th>
                                                         </tr>
-                                                    ))}
-                                                </tbody>
-                                                <tfoot className="bg-slate-100 font-bold">
-                                                    <tr>
-                                                        <td className="px-3 py-2">Total</td>
-                                                        <td className="px-3 py-2 text-right text-green-700">${totals.totalDebit.toFixed(2)}</td>
-                                                        <td className="px-3 py-2 text-right text-red-700">${totals.totalCredit.toFixed(2)}</td>
-                                                        <td className="px-3 py-2"></td>
-                                                    </tr>
-                                                </tfoot>
-                                            </table>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {entries.map((entry, idx) => (
+                                                            <tr key={idx} className="hover:bg-white">
+                                                                <td className="px-3 py-2 font-medium">{entry.accountName}</td>
+                                                                <td className="px-3 py-2 text-right font-mono">
+                                                                    {entry.debit > 0 ? entry.debit.toFixed(2) : '-'}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-right font-mono">
+                                                                    {entry.credit > 0 ? entry.credit.toFixed(2) : '-'}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-slate-500 italic">{entry.narration}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                    <tfoot className="bg-slate-100 font-bold">
+                                                        <tr>
+                                                            <td className="px-3 py-2">Total</td>
+                                                            <td className="px-3 py-2 text-right text-green-700">${totals.totalDebit.toFixed(2)}</td>
+                                                            <td className="px-3 py-2 text-right text-red-700">${totals.totalCredit.toFixed(2)}</td>
+                                                            <td className="px-3 py-2"></td>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            )}
                                         </div>
                                     )}
                                 </div>
