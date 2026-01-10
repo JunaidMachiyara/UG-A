@@ -4701,6 +4701,310 @@ const AccountsPayableReport: React.FC = () => {
     );
 };
 
+// --- DAY BOOK REPORT ---
+const DayBookReport: React.FC = () => {
+    const { state } = useData();
+    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [voucherTypeFilter, setVoucherTypeFilter] = useState<string>('ALL');
+    const [viewVoucherId, setViewVoucherId] = useState<string | null>(null);
+
+    // Get all transaction types for filter
+    const transactionTypes = useMemo(() => {
+        const types = new Set<string>();
+        state.ledger.forEach(entry => {
+            if (entry.transactionType) {
+                types.add(entry.transactionType);
+            }
+        });
+        return Array.from(types).sort();
+    }, [state.ledger]);
+
+    // Filter entries by entry date (createdAt) and voucher type
+    // Note: createdAt is stored in Firebase but might not be in the TypeScript interface
+    const filteredEntries = useMemo(() => {
+        const selectedDateObj = new Date(selectedDate);
+        selectedDateObj.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(selectedDateObj);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        let entries = state.ledger.filter(entry => {
+            // Filter by entry date (createdAt) - when the entry was created/entered into the system
+            // This allows showing entries entered on one date but with transaction date of previous date
+            const entryWithCreatedAt = entry as any;
+            let matchesEntryDate = false;
+            
+            if (entryWithCreatedAt.createdAt) {
+                // createdAt is a Firestore Timestamp, convert to Date
+                let createdAtDate: Date;
+                if (entryWithCreatedAt.createdAt.toDate) {
+                    createdAtDate = entryWithCreatedAt.createdAt.toDate();
+                } else if (entryWithCreatedAt.createdAt.seconds) {
+                    createdAtDate = new Date(entryWithCreatedAt.createdAt.seconds * 1000);
+                } else {
+                    createdAtDate = new Date(entryWithCreatedAt.createdAt);
+                }
+                createdAtDate.setHours(0, 0, 0, 0);
+                matchesEntryDate = createdAtDate.getTime() === selectedDateObj.getTime();
+            } else {
+                // Fallback: If createdAt not available, use transaction date
+                // This happens if createdAt wasn't loaded from Firebase
+                const transactionDate = new Date(entry.date);
+                transactionDate.setHours(0, 0, 0, 0);
+                matchesEntryDate = transactionDate.getTime() === selectedDateObj.getTime();
+            }
+            
+            if (!matchesEntryDate) return false;
+
+            // Filter by voucher type
+            if (voucherTypeFilter !== 'ALL' && entry.transactionType !== voucherTypeFilter) {
+                return false;
+            }
+
+            // Exclude reporting-only entries
+            if ((entry as any).isReportingOnly) {
+                return false;
+            }
+
+            return true;
+        });
+
+        // Group by transactionId
+        const groupedByTransaction: { [key: string]: typeof entries } = {};
+        entries.forEach(entry => {
+            if (!groupedByTransaction[entry.transactionId]) {
+                groupedByTransaction[entry.transactionId] = [];
+            }
+            groupedByTransaction[entry.transactionId].push(entry);
+        });
+
+        // Sort transactions by entry date (createdAt), then by transaction ID
+        const sortedTransactions = Object.entries(groupedByTransaction).sort(([txIdA, entriesA], [txIdB, entriesB]) => {
+            // Get entry date (createdAt) for sorting
+            const getEntryDate = (entry: typeof entriesA[0]) => {
+                const entryWithCreatedAt = entry as any;
+                if (entryWithCreatedAt.createdAt) {
+                    if (entryWithCreatedAt.createdAt.toDate) {
+                        return entryWithCreatedAt.createdAt.toDate().getTime();
+                    } else if (entryWithCreatedAt.createdAt.seconds) {
+                        return entryWithCreatedAt.createdAt.seconds * 1000;
+                    } else {
+                        return new Date(entryWithCreatedAt.createdAt).getTime();
+                    }
+                }
+                // Fallback to transaction date
+                return new Date(entry.date).getTime();
+            };
+            
+            const dateA = getEntryDate(entriesA[0]);
+            const dateB = getEntryDate(entriesB[0]);
+            if (dateA !== dateB) return dateA - dateB;
+            return txIdA.localeCompare(txIdB);
+        });
+
+        return sortedTransactions;
+    }, [state.ledger, selectedDate, voucherTypeFilter]);
+
+    // Get voucher type label
+    const getVoucherTypeLabel = (type: TransactionType | string) => {
+        const labels: { [key: string]: string } = {
+            [TransactionType.SALES_INVOICE]: 'Sales Invoice (SI)',
+            [TransactionType.PURCHASE_INVOICE]: 'Purchase Invoice (PI)',
+            [TransactionType.RECEIPT_VOUCHER]: 'Receipt Voucher (RV)',
+            [TransactionType.PAYMENT_VOUCHER]: 'Payment Voucher (PV)',
+            [TransactionType.EXPENSE_VOUCHER]: 'Expense Voucher (EV)',
+            [TransactionType.JOURNAL_VOUCHER]: 'Journal Voucher (JV)',
+            [TransactionType.INTERNAL_TRANSFER]: 'Transfer (TR)',
+            [TransactionType.PURCHASE_BILL]: 'Purchase Bill (PB)',
+            [TransactionType.BALANCING_DISCREPANCY]: 'Balance Discrepancy (BD)',
+            [TransactionType.INVENTORY_ADJUSTMENT]: 'Inventory Adjustment (IA)',
+            [TransactionType.OPENING_BALANCE]: 'Opening Balance (OB)',
+        };
+        return labels[type] || type;
+    };
+
+    // Calculate totals for a transaction
+    const getTransactionTotals = (entries: typeof state.ledger) => {
+        const totalDebit = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+        const totalCredit = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+        return { totalDebit, totalCredit };
+    };
+
+    // Get voucher entries for detail view
+    const voucherEntries = useMemo(() => {
+        if (!viewVoucherId) return [];
+        return state.ledger.filter(e => e.transactionId === viewVoucherId);
+    }, [state.ledger, viewVoucherId]);
+
+    return (
+        <div className="space-y-6 animate-in fade-in h-full flex flex-col">
+            {/* Filters */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4 items-end shrink-0">
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Entry Date</label>
+                    <input 
+                        type="date" 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={selectedDate} 
+                        onChange={e => setSelectedDate(e.target.value)} 
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Voucher Type</label>
+                    <select 
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm" 
+                        value={voucherTypeFilter} 
+                        onChange={e => setVoucherTypeFilter(e.target.value)}
+                    >
+                        <option value="ALL">All Types</option>
+                        {transactionTypes.map(type => (
+                            <option key={type} value={type}>{getVoucherTypeLabel(type)}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => {
+                            const printWindow = window.open('', '_blank');
+                            if (printWindow) {
+                                printWindow.document.write(`
+                                    <html>
+                                        <head><title>Day Book - ${selectedDate}</title></head>
+                                        <body>
+                                            <h2>Day Book - ${selectedDate}</h2>
+                                            <table border="1" cellpadding="5" style="border-collapse: collapse; width: 100%;">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Voucher</th><th>Date</th><th>Type</th><th>Account</th><th>Debit</th><th>Credit</th><th>Narration</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    ${filteredEntries.flatMap(([txId, entries]) => 
+                                                        entries.map(entry => `
+                                                            <tr>
+                                                                <td>${txId}</td>
+                                                                <td>${entry.date}</td>
+                                                                <td>${getVoucherTypeLabel(entry.transactionType)}</td>
+                                                                <td>${entry.accountName}</td>
+                                                                <td>${entry.debit > 0 ? entry.debit.toFixed(2) : ''}</td>
+                                                                <td>${entry.credit > 0 ? entry.credit.toFixed(2) : ''}</td>
+                                                                <td>${entry.narration}</td>
+                                                            </tr>
+                                                        `).join('')
+                                                    ).join('')}
+                                                </tbody>
+                                            </table>
+                                        </body>
+                                    </html>
+                                `);
+                                printWindow.document.close();
+                                printWindow.print();
+                            }
+                        }}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold flex items-center gap-2"
+                    >
+                        <Printer size={16} />
+                        Print
+                    </button>
+                </div>
+            </div>
+
+            {/* Report Title */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm shrink-0">
+                <h2 className="text-lg font-bold text-slate-800">
+                    Day Book - {new Date(selectedDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                    Showing all entries {voucherTypeFilter !== 'ALL' ? `of type ${getVoucherTypeLabel(voucherTypeFilter)}` : ''} entered on this date
+                </p>
+            </div>
+
+            {/* Transactions List */}
+            <div className="flex-1 overflow-auto bg-white rounded-xl border border-slate-200 shadow-sm">
+                {filteredEntries.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400">
+                        <Calendar size={48} className="mx-auto mb-4 opacity-50" />
+                        <p className="text-lg font-semibold">No entries found</p>
+                        <p className="text-sm mt-2">No vouchers were entered on {new Date(selectedDate).toLocaleDateString()}</p>
+                    </div>
+                ) : (
+                    <div className="divide-y divide-slate-100">
+                        {filteredEntries.map(([transactionId, entries]) => {
+                            const totals = getTransactionTotals(entries);
+                            const firstEntry = entries[0];
+                            const voucherType = getVoucherTypeLabel(firstEntry.transactionType);
+                            
+                            return (
+                                <div key={transactionId} className="p-4 hover:bg-slate-50 transition-colors">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-3">
+                                            <button
+                                                onClick={() => setViewVoucherId(viewVoucherId === transactionId ? null : transactionId)}
+                                                className="text-blue-600 hover:text-blue-800"
+                                            >
+                                                {viewVoucherId === transactionId ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                                            </button>
+                                            <div>
+                                                <span className="font-mono font-bold text-slate-800">{transactionId}</span>
+                                                <span className="ml-3 text-sm text-slate-500">{voucherType}</span>
+                                            </div>
+                                            <span className="text-sm text-slate-400">{firstEntry.date}</span>
+                                        </div>
+                                        <div className="flex items-center gap-4 text-sm">
+                                            <span className="text-slate-600">
+                                                Debit: <span className="font-bold text-green-700">${totals.totalDebit.toFixed(2)}</span>
+                                            </span>
+                                            <span className="text-slate-600">
+                                                Credit: <span className="font-bold text-red-700">${totals.totalCredit.toFixed(2)}</span>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    
+                                    {viewVoucherId === transactionId && (
+                                        <div className="mt-3 ml-7 bg-slate-50 rounded-lg p-3 border border-slate-200">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 text-slate-600 font-bold">
+                                                    <tr>
+                                                        <th className="px-3 py-2 text-left">Account</th>
+                                                        <th className="px-3 py-2 text-right">Debit ($)</th>
+                                                        <th className="px-3 py-2 text-right">Credit ($)</th>
+                                                        <th className="px-3 py-2 text-left">Narration</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {entries.map((entry, idx) => (
+                                                        <tr key={idx} className="hover:bg-white">
+                                                            <td className="px-3 py-2 font-medium">{entry.accountName}</td>
+                                                            <td className="px-3 py-2 text-right font-mono">
+                                                                {entry.debit > 0 ? entry.debit.toFixed(2) : '-'}
+                                                            </td>
+                                                            <td className="px-3 py-2 text-right font-mono">
+                                                                {entry.credit > 0 ? entry.credit.toFixed(2) : '-'}
+                                                            </td>
+                                                            <td className="px-3 py-2 text-slate-500 italic">{entry.narration}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                                <tfoot className="bg-slate-100 font-bold">
+                                                    <tr>
+                                                        <td className="px-3 py-2">Total</td>
+                                                        <td className="px-3 py-2 text-right text-green-700">${totals.totalDebit.toFixed(2)}</td>
+                                                        <td className="px-3 py-2 text-right text-red-700">${totals.totalCredit.toFixed(2)}</td>
+                                                        <td className="px-3 py-2"></td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 // --- AUDIT LOG REPORT ---
 const AuditLogReport: React.FC = () => {
     const { state } = useData();
@@ -4734,8 +5038,8 @@ const AuditLogReport: React.FC = () => {
 
 export const ReportsModuleV2: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
-    const tabFromUrl = searchParams.get('tab') as 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP' | null;
-    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP'>(tabFromUrl || 'BI');
+    const tabFromUrl = searchParams.get('tab') as 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'DAYBOOK' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP' | null;
+    const [activeTab, setActiveTab] = useState<'BI' | 'INV' | 'FIN' | 'LEDGER' | 'DAYBOOK' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP'>(tabFromUrl || 'BI');
     
     // Update URL when tab changes
     useEffect(() => {
@@ -4744,7 +5048,7 @@ export const ReportsModuleV2: React.FC = () => {
         }
     }, [tabFromUrl]);
     
-    const handleTabChange = (tab: 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP') => {
+    const handleTabChange = (tab: 'BI' | 'INV' | 'FIN' | 'LEDGER' | 'DAYBOOK' | 'PROD' | 'EXP' | 'CASH' | 'AR' | 'AP') => {
         setActiveTab(tab);
         setSearchParams({ tab });
     };
@@ -4790,6 +5094,7 @@ export const ReportsModuleV2: React.FC = () => {
                     { id: 'INV', label: 'Inventory Intelligence', icon: Package },
                     { id: 'FIN', label: 'Financial Statements', icon: FileText },
                     { id: 'LEDGER', label: 'General Ledger', icon: BookOpen },
+                    { id: 'DAYBOOK', label: 'Day Book', icon: Calendar },
                     { id: 'PROD', label: 'Production Yield', icon: Factory },
                     { id: 'EXP', label: 'Smart Explorer', icon: Search },
                     { id: 'CASH', label: 'Cash Movement', icon: Wallet },
@@ -4804,6 +5109,7 @@ export const ReportsModuleV2: React.FC = () => {
                 {activeTab === 'INV' && <InventoryIntelligence />}
                 {activeTab === 'FIN' && <FinancialStatementsContainer />}
                 {activeTab === 'LEDGER' && <LedgerReport />}
+                {activeTab === 'DAYBOOK' && <DayBookReport />}
                 {activeTab === 'PROD' && <ProductionYield />}
                 {activeTab === 'EXP' && <SmartExplorer />}
                 {activeTab === 'CASH' && <CashMovementReport />}
