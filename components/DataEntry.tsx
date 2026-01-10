@@ -2068,10 +2068,12 @@ export const DataEntry: React.FC = () => {
 
         const qty = parseFloat(siItemQty);
         // Rate is per UNIT (not per kg), in USD
-        let rate = siItemRate ? parseFloat(siItemRate) : (item.salePrice || 0);
+        // Allow zero and negative values for business requirements
+        let rate = siItemRate ? parseFloat(siItemRate) : (item.salePrice !== undefined && item.salePrice !== null ? item.salePrice : 0);
         
-        if (rate <= 0) {
-            alert("Please enter a Rate/Unit (USD) or set a Sale Price in Setup.");
+        // Only validate that rate is a valid number (not NaN)
+        if (isNaN(rate)) {
+            alert("Please enter a valid Rate/Unit (USD) or set a Sale Price in Setup.");
             return;
         }
 
