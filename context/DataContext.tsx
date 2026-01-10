@@ -694,7 +694,7 @@ interface DataContextType {
     addPurchase: (purchase: Purchase) => void;
     updatePurchase: (purchase: Purchase) => Promise<void>;
     addBundlePurchase: (purchase: BundlePurchase) => void;
-    saveLogisticsEntry: (entry: LogisticsEntry) => void;
+    saveLogisticsEntry: (entry: LogisticsEntry) => Promise<void>;
     addSalesInvoice: (invoice: SalesInvoice) => void;
     updateSalesInvoice: (invoice: SalesInvoice) => void;
     postSalesInvoice: (invoice: SalesInvoice) => void;
@@ -4180,22 +4180,115 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         dispatch({ type: 'ADD_PRODUCTION', payload: productionEntries }); postTransaction(journalEntries);
     };
-    const saveLogisticsEntry = (entry: LogisticsEntry) => {
+    const saveLogisticsEntry = async (entry: LogisticsEntry) => {
         if (!isFirestoreLoaded) {
-            console.warn('⚠️ Firebase not loaded, logistics entry not saved to database');
-            return;
+            const errorMsg = '⚠️ Firebase not loaded yet. Logistics entry cannot be saved.\n\nPlease wait a few seconds and try again.';
+            console.warn(errorMsg);
+            alert(errorMsg);
+            throw new Error('Firebase not loaded');
+        }
+        
+        if (!currentFactory?.id) {
+            const errorMsg = '⚠️ No factory selected. Logistics entry cannot be saved.';
+            console.error(errorMsg);
+            alert(errorMsg);
+            throw new Error('No factory selected');
         }
         
         const entryWithFactory = {
             ...entry,
-            factoryId: currentFactory?.id || ''
+            factoryId: currentFactory.id
         };
         
-        // Save to Firebase
-        const { purchaseId, ...entryData } = entryWithFactory;
-        addDoc(collection(db, 'logisticsEntries'), { ...entryData, purchaseId, createdAt: serverTimestamp() })
-            .then(() => console.log('✅ Logistics entry saved to Firebase'))
-            .catch((error) => console.error('❌ Error saving logistics entry:', error));
+        try {
+            // Check if entry already exists in Firebase (by purchaseId and purchaseType)
+            // First check local state for non-placeholder entries
+            const existingEntry = state.logisticsEntries.find(
+                e => e.purchaseId === entry.purchaseId && 
+                     e.purchaseType === entry.purchaseType &&
+                     !e.id.startsWith('PLACEHOLDER')
+            );
+            
+            // Also check Firebase directly to be sure (query by purchaseId and purchaseType)
+            let firebaseEntryId: string | null = null;
+            if (existingEntry && existingEntry.id) {
+                firebaseEntryId = existingEntry.id;
+            } else {
+                // Query Firebase to check if entry exists (might not be in local state yet)
+                const logisticsQuery = query(
+                    collection(db, 'logisticsEntries'),
+                    where('factoryId', '==', currentFactory.id),
+                    where('purchaseId', '==', entry.purchaseId),
+                    where('purchaseType', '==', entry.purchaseType)
+                );
+                const snapshot = await getDocs(logisticsQuery);
+                if (!snapshot.empty) {
+                    firebaseEntryId = snapshot.docs[0].id;
+                    console.log('🔍 Found existing entry in Firebase:', firebaseEntryId);
+                }
+            }
+            
+            // Prepare entry data (remove id and purchaseId, they're handled separately)
+            const { id, purchaseId, ...entryData } = entryWithFactory;
+            // Clean undefined values and null values that should be omitted
+            const cleanedData: any = {};
+            Object.keys(entryData).forEach(key => {
+                const value = (entryData as any)[key];
+                if (value !== undefined && value !== null) {
+                    cleanedData[key] = value;
+                }
+            });
+            
+            let finalEntryId: string;
+            
+            if (firebaseEntryId) {
+                // Update existing entry in Firebase
+                await updateDoc(doc(db, 'logisticsEntries', firebaseEntryId), { 
+                    ...cleanedData, 
+                    purchaseId,
+                    updatedAt: serverTimestamp() 
+                });
+                console.log('✅ Logistics entry updated in Firebase:', firebaseEntryId);
+                finalEntryId = firebaseEntryId;
+            } else {
+                // Create new entry in Firebase
+                const docRef = await addDoc(collection(db, 'logisticsEntries'), { 
+                    ...cleanedData, 
+                    purchaseId, 
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                });
+                console.log('✅ Logistics entry saved to Firebase:', docRef.id);
+                finalEntryId = docRef.id;
+            }
+            
+            // Dispatch to local state immediately for instant UI update (use Firebase ID)
+            dispatch({ type: 'SAVE_LOGISTICS_ENTRY', payload: { ...entryWithFactory, id: finalEntryId } });
+            
+            // Update purchase status if it's an ORIGINAL purchase and status is 'Arrived'
+            if (entry.purchaseType === 'ORIGINAL' && entry.status === 'Arrived') {
+                const purchase = state.purchases.find(p => p.id === entry.purchaseId);
+                if (purchase && purchase.status !== 'Arrived') {
+                    try {
+                        await updateDoc(doc(db, 'purchases', purchase.id), { 
+                            status: 'Arrived',
+                            updatedAt: serverTimestamp()
+                        });
+                        const updatedPurchase = { ...purchase, status: 'Arrived' as const };
+                        dispatch({ type: 'UPDATE_PURCHASE', payload: updatedPurchase });
+                        console.log('✅ Purchase status updated to Arrived:', purchase.id);
+                    } catch (err) {
+                        console.warn('⚠️ Could not update purchase status:', err);
+                        // Don't fail the whole operation if purchase update fails
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error saving logistics entry:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            alert(`Failed to save logistics entry: ${errorMessage}\n\nPlease check the console for details and try again.`);
+            throw error;
+        }
     };
     const addSalesInvoice = (invoice: SalesInvoice) => {
         if (!isFirestoreLoaded) {

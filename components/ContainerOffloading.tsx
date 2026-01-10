@@ -235,6 +235,8 @@ export const ContainerOffloading: React.FC = () => {
     };
 
     const handleSave = async () => {
+        console.log('🔵 Finalize Off-Loading button clicked');
+        
         if (!activeShipment) {
             alert('Please select a container to off-load.');
             return;
@@ -243,6 +245,14 @@ export const ContainerOffloading: React.FC = () => {
             alert('Please select a warehouse destination.');
             return;
         }
+        
+        console.log('📋 Active shipment:', {
+            id: activeShipment.id,
+            purchaseId: activeShipment.purchaseId,
+            purchaseType: activeShipment.purchaseType,
+            containerNumber: activeShipment.containerNumber,
+            warehouseId: warehouseId
+        });
 
         let finalReceivedWeight = 0;
         let finalTallyItems: any[] | undefined = undefined;
@@ -302,14 +312,26 @@ export const ContainerOffloading: React.FC = () => {
             addProduction(productionEntries);
         }
 
-        await saveLogisticsEntry(entry);
-        alert('Container Off-loaded Successfully!');
+        console.log('💾 Saving logistics entry:', entry);
         
-        // Reset and refresh
-        setSelectedContainerId('');
-        setReceivedWeight('');
-        setTallyList([]);
-        setFilterStatus('In Transit'); // Reset filter to hide the just arrived item (refresh list)
+        try {
+            await saveLogisticsEntry(entry);
+            console.log('✅ Container Off-loaded Successfully!');
+            alert('✅ Container Off-loaded Successfully!');
+            
+            // Reset and refresh
+            setSelectedContainerId('');
+            setReceivedWeight('');
+            setTallyList([]);
+            setArrivalDate(new Date().toISOString().split('T')[0]);
+            // Don't reset filter status - let user see the updated entry in "Arrived" filter
+            setFilterStatus('Arrived');
+        } catch (error) {
+            console.error('❌ Error finalizing off-loading:', error);
+            console.error('❌ Entry that failed:', entry);
+            // Error message is already shown by saveLogisticsEntry
+            // Don't reset form on error - allow user to fix and retry
+        }
     };
 
     // Calculate live shortage for UI display
