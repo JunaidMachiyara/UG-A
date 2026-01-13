@@ -18,7 +18,7 @@ import { CentralItemDatabase } from './CentralItemDatabase';
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem, fixMissingPurchaseLedgerEntries } = useData();
+    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem, fixMissingPurchaseLedgerEntries, fixMissingSalesInvoiceLedgerEntries } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -45,6 +45,8 @@ export const AdminModule: React.FC = () => {
     const [sectionFixResult, setSectionFixResult] = useState<{ success: boolean; message: string; updated: number; errors: string[] } | null>(null);
     const [fixingPurchaseLedgers, setFixingPurchaseLedgers] = useState(false);
     const [purchaseLedgerFixResult, setPurchaseLedgerFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
+    const [fixingSalesInvoiceLedgers, setFixingSalesInvoiceLedgers] = useState(false);
+    const [salesInvoiceLedgerFixResult, setSalesInvoiceLedgerFixResult] = useState<{ success: boolean; message: string; fixed: number; errors: string[] } | null>(null);
     const [diagnosingProductionBalance, setDiagnosingProductionBalance] = useState(false);
     const [productionBalanceDiagnosis, setProductionBalanceDiagnosis] = useState<{ 
         totalProductions: number; 
@@ -1292,6 +1294,86 @@ export const AdminModule: React.FC = () => {
                 )}
             </div>
 
+            {/* Fix Missing Sales Invoice Ledger Entries Section */}
+            <div className="bg-green-50 border-2 border-green-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <RefreshCw className="text-green-600" size={24} />
+                    <h3 className="text-lg font-bold text-green-900">Fix Missing Sales Invoice Ledger Entries</h3>
+                </div>
+                
+                <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-green-800 mb-2">
+                        This utility fixes sales invoices that were saved but don't have complete ledger entries.
+                        It will:
+                    </p>
+                    <ul className="text-sm text-green-800 list-disc list-inside space-y-1">
+                        <li>Find sales invoices without ledger entries or with unbalanced entries</li>
+                        <li>Delete any incomplete/unbalanced entries</li>
+                        <li>Create new, properly balanced ledger entries</li>
+                        <li>Include all revenue, COGS, inventory reduction, discounts, surcharges, and additional costs</li>
+                    </ul>
+                    <p className="text-sm text-green-600 mt-2 font-semibold">
+                        ⚠️ Use this if you have sales invoices that were never posted or have missing entries.
+                    </p>
+                </div>
+
+                <button
+                    onClick={async () => {
+                        if (!confirm('This will fix ledger entries for all sales invoices that need them.\n\nContinue?')) {
+                            return;
+                        }
+                        setFixingSalesInvoiceLedgers(true);
+                        setSalesInvoiceLedgerFixResult(null);
+                        try {
+                            await fixMissingSalesInvoiceLedgerEntries();
+                            // The function shows its own alert, so we don't need to set result here
+                        } catch (error: any) {
+                            setSalesInvoiceLedgerFixResult({
+                                success: false,
+                                message: error.message || 'Unknown error',
+                                fixed: 0,
+                                errors: [error.message || 'Unknown error']
+                            });
+                        } finally {
+                            setFixingSalesInvoiceLedgers(false);
+                        }
+                    }}
+                    disabled={fixingSalesInvoiceLedgers}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                    {fixingSalesInvoiceLedgers ? (
+                        <>
+                            <RefreshCw className="animate-spin" size={16} />
+                            Fixing...
+                        </>
+                    ) : (
+                        <>
+                            <CheckCircle size={16} />
+                            Fix Missing Sales Invoice Ledger Entries
+                        </>
+                    )}
+                </button>
+
+                {salesInvoiceLedgerFixResult && (
+                    <div className={`mt-4 p-4 rounded-lg ${salesInvoiceLedgerFixResult.success ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'}`}>
+                        <p className={`font-semibold ${salesInvoiceLedgerFixResult.success ? 'text-green-800' : 'text-red-800'}`}>
+                            {salesInvoiceLedgerFixResult.success ? '✅ Success!' : '❌ Error'}
+                        </p>
+                        <p className="text-sm mt-1">{salesInvoiceLedgerFixResult.message}</p>
+                        {salesInvoiceLedgerFixResult.errors.length > 0 && (
+                            <div className="mt-2">
+                                <p className="text-sm font-semibold">Errors:</p>
+                                <ul className="text-sm list-disc list-inside">
+                                    {salesInvoiceLedgerFixResult.errors.map((err, idx) => (
+                                        <li key={idx}>{err}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
             {/* Diagnostic: What System Missed Section */}
             <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 mt-8">
                 <div className="flex items-center gap-3 mb-4">
@@ -1403,6 +1485,27 @@ export const AdminModule: React.FC = () => {
                             }
                         });
 
+                        // Check for BD transactions with only 1 entry (critical issue)
+                        const bdTransactionsWithSingleEntry: any[] = [];
+                        Object.entries(transactionGroups).forEach(([txId, entries]) => {
+                            // Check if this is a BD transaction
+                            const isBD = txId.startsWith('BD-') || entries.some(e => e.transactionType === TransactionType.BALANCING_DISCREPANCY);
+                            
+                            if (isBD && entries.length === 1) {
+                                bdTransactionsWithSingleEntry.push({
+                                    transactionId: txId,
+                                    entryCount: entries.length,
+                                    entry: entries[0],
+                                    hasDebit: entries[0].debit > 0,
+                                    hasCredit: entries[0].credit > 0,
+                                    amount: entries[0].debit || entries[0].credit || 0
+                                });
+                            }
+                        });
+                        
+                        // Add to details for reporting
+                        details.bdTransactionsWithSingleEntry = bdTransactionsWithSingleEntry;
+
                         Object.entries(transactionGroups).forEach(([txId, entries]) => {
                             const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
                             const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
@@ -1490,6 +1593,21 @@ export const AdminModule: React.FC = () => {
                                 report += `  • ${inv.invoiceNo} (${inv.date}): ${inv.customer} - $${inv.total.toFixed(2)}\n`;
                             });
                             report += '\n';
+                        }
+
+                        // Add BD transactions with single entry to report
+                        if (details.bdTransactionsWithSingleEntry && details.bdTransactionsWithSingleEntry.length > 0) {
+                            report += `❌ CRITICAL: BD TRANSACTIONS WITH ONLY 1 ENTRY (${details.bdTransactionsWithSingleEntry.length}):\n`;
+                            report += `These BD vouchers are missing their second entry (debit or credit). This causes balance sheet imbalance!\n\n`;
+                            details.bdTransactionsWithSingleEntry.forEach((bd: any) => {
+                                report += `  • ${bd.transactionId}: Only ${bd.entryCount} entry found\n`;
+                                report += `    - Account: ${bd.entry.accountName}\n`;
+                                report += `    - ${bd.hasDebit ? 'Debit' : 'Credit'}: $${bd.amount.toFixed(2)}\n`;
+                                report += `    - Missing: ${bd.hasDebit ? 'Credit entry' : 'Debit entry'}\n`;
+                                report += `    - Date: ${bd.entry.date}\n`;
+                            });
+                            report += '\n';
+                            report += `💡 SOLUTION: Delete these BD transactions and recreate them properly with both debit and credit entries.\n\n`;
                         }
 
                         if (details.unbalancedTransactions.length > 0) {
