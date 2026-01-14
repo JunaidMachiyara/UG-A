@@ -2128,14 +2128,36 @@ export const Accounting: React.FC = () => {
                 // For PARTNERS (Suppliers): Debit partner (decreases liability), Credit Discrepancy
                 
                 if (isLiabilityEntity) {
-                    // LIABILITY: Debit liability account (decreases liability), Credit Discrepancy (increases discrepancy)
+                    // LIABILITY: Debit liability account (decreases liability)
                     entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    
+                    // CRITICAL FIX: When both accounts are liabilities, using Math.abs() in Balance Sheet causes double-counting
+                    // Solution: Use EQUITY account (Owner's Capital) instead of Discrepancy account when both are liabilities
                     if (isEquityAccount) {
                         // If Discrepancy is EQUITY: Credit Discrepancy (increases equity) to balance
                         entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                     } else {
-                        // If Discrepancy is LIABILITY: Credit Discrepancy (increases liability) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        // CRITICAL FIX: If Discrepancy is LIABILITY and we're decreasing another liability:
+                        // Problem: Math.abs() in Balance Sheet causes double-counting when both are liabilities
+                        // When you Debit a liability with negative balance, Math.abs() makes it show as MORE positive
+                        // This causes: regularLiabilitiesTotal increases + discrepancyAdjustment increases = DOUBLE counting
+                        // Solution: Use EQUITY account (Owner's Capital) instead of Discrepancy account for the offset
+                        // This way: Debit MOHAMMAD (decreases liability), Credit Capital (increases equity)
+                        // Balance Sheet: Liabilities decrease, Equity increases = Balanced ✓
+                        const capitalAccount = state.accounts.find(a => 
+                            (a.name.includes('Capital') || a.name.includes('Owner\'s Capital')) &&
+                            a.type === AccountType.EQUITY
+                        ) || state.accounts.find(a => a.type === AccountType.EQUITY && a.code === '3000');
+                        
+                        if (capitalAccount) {
+                            // Credit Capital (increases equity) to balance - this correctly offsets the liability decrease
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            console.log('⚠️ BD Entry: Both accounts are liabilities. Using Capital account instead of Discrepancy to avoid Balance Sheet double-counting.');
+                        } else {
+                            // Fallback: Use Discrepancy but warn user about potential imbalance
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            console.warn('⚠️ BD Entry: Both accounts are liabilities. This may cause Balance Sheet imbalance due to Math.abs() calculation. Consider using Owner\'s Capital instead.');
+                        }
                     }
                 } else {
                     // ASSET or CUSTOMER: Credit account/partner (decreases asset), Debit Discrepancy

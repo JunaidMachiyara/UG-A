@@ -716,6 +716,8 @@ interface DataContextType {
     addCustomsDocument: (doc: CustomsDocument) => void;
     cleanupOrphanedLedger: () => Promise<void>;
     markSubSupplierEntriesAsReportingOnly: () => Promise<void>;
+    fixMissingPurchaseLedgerEntries: () => Promise<void>;
+    fixMissingSalesInvoiceLedgerEntries: () => Promise<void>;
     alignBalance: (entityId: string, entityType: 'partner' | 'account', targetBalance: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }>;
     alignFinishedGoodsStock: () => Promise<void>;
     alignOriginalStock: () => Promise<void>;
@@ -6319,6 +6321,134 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => window.location.reload(), 2000);
     };
 
+    const fixMissingSalesInvoiceLedgerEntries = async () => {
+        if (!currentFactory?.id) {
+            alert('No factory selected');
+            return;
+        }
+
+        if (!isFirestoreLoaded) {
+            alert('Firebase not loaded yet. Please wait a few seconds and try again.');
+            return;
+        }
+
+        // Find all sales invoices for this factory
+        const factoryInvoices = state.salesInvoices.filter(inv => inv.factoryId === currentFactory.id);
+        
+        if (factoryInvoices.length === 0) {
+            alert('No sales invoices found for this factory.');
+            return;
+        }
+
+        // Find invoices that don't have ledger entries or have incomplete entries
+        const invoicesNeedingFix: { invoice: SalesInvoice; existingEntries: LedgerEntry[]; needsFix: boolean }[] = [];
+        
+        for (const invoice of factoryInvoices) {
+            const transactionId = `INV-${invoice.invoiceNo}`;
+            const existingEntries = state.ledger.filter(e => 
+                e.transactionId === transactionId && 
+                !(e as any).isReportingOnly // Exclude reporting-only entries
+            );
+            
+            // Check if entries are balanced
+            const totalDebits = existingEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalCredits = existingEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+            const imbalance = Math.abs(totalDebits - totalCredits);
+            
+            // Needs fix if: no entries, or entries are unbalanced
+            const needsFix = existingEntries.length === 0 || imbalance > 0.01;
+            
+            if (needsFix) {
+                invoicesNeedingFix.push({ invoice, existingEntries, needsFix });
+            }
+        }
+
+        if (invoicesNeedingFix.length === 0) {
+            alert('✅ All sales invoices have complete and balanced ledger entries!');
+            return;
+        }
+
+        const confirmMessage = `Found ${invoicesNeedingFix.length} sales invoice(s) that need ledger entries fixed:\n\n` +
+            invoicesNeedingFix.map(({ invoice }) => `- Invoice ${invoice.invoiceNo} (${invoice.date})`).join('\n') +
+            `\n\nThis will:\n` +
+            `1. Delete any existing incomplete/unbalanced ledger entries for these invoices\n` +
+            `2. Create new, properly balanced ledger entries\n\n` +
+            `Continue?`;
+
+        if (!confirm(confirmMessage)) {
+            return;
+        }
+
+        let fixedCount = 0;
+        const errors: string[] = [];
+
+        for (const { invoice, existingEntries } of invoicesNeedingFix) {
+            try {
+                const transactionId = `INV-${invoice.invoiceNo}`;
+                
+                // Delete existing entries first (if any)
+                if (existingEntries.length > 0) {
+                    console.log(`🗑️ Deleting ${existingEntries.length} existing entries for ${transactionId}`);
+                    // Delete from Firebase
+                    for (const entry of existingEntries) {
+                        if (entry.id) {
+                            try {
+                                await deleteDoc(doc(db, 'ledger', entry.id));
+                            } catch (err) {
+                                console.warn(`Could not delete entry ${entry.id}:`, err);
+                            }
+                        }
+                    }
+                    // Remove from local state using the transaction ID
+                    dispatch({ type: 'DELETE_LEDGER_ENTRIES', payload: { transactionId, reason: 'Fixing incomplete entries', user: 'System' } });
+                }
+
+                // Use the same logic as postSalesInvoice to create entries
+                // This ensures consistency with normal posting flow
+                await postSalesInvoice(invoice);
+                
+                fixedCount++;
+                console.log(`✅ Fixed ledger entries for invoice ${invoice.invoiceNo}`);
+            } catch (error) {
+                const errorMsg = `Invoice ${invoice.invoiceNo}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+                errors.push(errorMsg);
+                console.error(`❌ Error fixing invoice ${invoice.invoiceNo}:`, error);
+            }
+        }
+
+        // Update invoice statuses to Posted
+        for (const { invoice } of invoicesNeedingFix) {
+            if (invoice.status !== 'Posted') {
+                dispatch({ type: 'POST_SALES_INVOICE', payload: invoice });
+                // Update in Firebase
+                try {
+                    const invoicesRef = collection(db, 'salesInvoices');
+                    const q = query(
+                        invoicesRef, 
+                        where('invoiceNo', '==', invoice.invoiceNo),
+                        where('factoryId', '==', invoice.factoryId || currentFactory.id)
+                    );
+                    const snapshot = await getDocs(q);
+                    if (!snapshot.empty) {
+                        const docRef = snapshot.docs[0].ref;
+                        await updateDoc(docRef, { 
+                            status: 'Posted',
+                            updatedAt: serverTimestamp()
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Error updating invoice status for ${invoice.invoiceNo}:`, error);
+                }
+            }
+        }
+
+        if (errors.length > 0) {
+            alert(`⚠️ Fixed ${fixedCount} invoice(s), but encountered ${errors.length} error(s):\n\n${errors.join('\n')}`);
+        } else {
+            alert(`✅ Successfully fixed ledger entries for ${fixedCount} sales invoice(s)!`);
+        }
+    };
+
     // Migration function: Mark existing sub-supplier entries as reporting-only
     const markSubSupplierEntriesAsReportingOnly = async () => {
         if (!currentFactory?.id) {
@@ -6501,6 +6631,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             cleanupOrphanedLedger,
             markSubSupplierEntriesAsReportingOnly,
             fixMissingPurchaseLedgerEntries,
+            fixMissingSalesInvoiceLedgerEntries,
             alignBalance,
             alignFinishedGoodsStock,
             alignOriginalStock
