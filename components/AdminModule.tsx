@@ -1731,18 +1731,36 @@ export const AdminModule: React.FC = () => {
                 <div className="flex gap-3 flex-wrap">
                     <button
                         onClick={() => {
+                            if (!currentFactory?.id) {
+                                alert('Please select a factory first.');
+                                return;
+                            }
+
                             const results: any = {
                                 accountMismatches: [],
                                 partnerMismatches: [],
                                 totalAccountDiff: 0,
                                 totalPartnerDiff: 0,
                                 balanceSheetBefore: { assets: 0, liabilities: 0, equity: 0 },
-                                balanceSheetAfter: { assets: 0, liabilities: 0, equity: 0 }
+                                balanceSheetAfter: { assets: 0, liabilities: 0, equity: 0 },
+                                factoryId: currentFactory.id,
+                                factoryName: currentFactory.name
                             };
 
-                            // 1. Recalculate ALL account balances from ledger
-                            state.accounts.forEach((account: any) => {
-                                const entries = state.ledger.filter((e: any) => 
+                            // Filter accounts and partners for current factory
+                            const factoryAccounts = state.accounts.filter((a: any) => 
+                                !a.factoryId || a.factoryId === currentFactory.id
+                            );
+                            const factoryPartners = state.partners.filter((p: any) => 
+                                !p.factoryId || p.factoryId === currentFactory.id
+                            );
+                            const factoryLedger = state.ledger.filter((e: any) => 
+                                !e.factoryId || e.factoryId === currentFactory.id
+                            );
+
+                            // 1. Recalculate ALL account balances from ledger (for current factory only)
+                            factoryAccounts.forEach((account: any) => {
+                                const entries = factoryLedger.filter((e: any) => 
                                     e.accountId === account.id && !(e as any).isReportingOnly
                                 );
                                 
@@ -1790,9 +1808,9 @@ export const AdminModule: React.FC = () => {
                                 }
                             });
 
-                            // 2. Recalculate ALL partner balances from ledger
-                            state.partners.forEach((partner: any) => {
-                                const entries = state.ledger.filter((e: any) => 
+                            // 2. Recalculate ALL partner balances from ledger (for current factory only)
+                            factoryPartners.forEach((partner: any) => {
+                                const entries = factoryLedger.filter((e: any) => 
                                     e.accountId === partner.id && !(e as any).isReportingOnly
                                 );
                                 
@@ -1832,6 +1850,7 @@ export const AdminModule: React.FC = () => {
 
                             // Build report
                             let report = '🔍 BALANCE RECALCULATION REPORT\n\n';
+                            report += `Factory: ${results.factoryName}\n`;
                             report += `═══════════════════════════════════════\n\n`;
 
                             if (results.accountMismatches.length > 0) {
