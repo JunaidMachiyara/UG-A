@@ -2209,7 +2209,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
     
-    const addPurchase = async (purchase: Purchase) => {
+    const addPurchase = (purchase: Purchase) => {
         // 🛡️ SAFEGUARD: Don't sync if Firebase not loaded yet
         if (!isFirestoreLoaded) {
             const errorMsg = '⚠️ Firebase not loaded yet. Purchase cannot be saved.\n\nPlease wait a few seconds and try again.';
@@ -2355,24 +2355,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ];
         
             // Additional costs (freight, clearing, etc.) credited to their providers
-        // 🛡️ CRITICAL: Validate ALL providers exist BEFORE creating entries
-        let hasProviderError = false;
         purchaseWithFactory.additionalCosts.forEach(cost => {
             const provider = state.partners.find(p => p.id === cost.providerId);
             if (!provider) {
                 console.error(`❌ Provider not found for cost ${cost.costType}: ${cost.providerId}`);
-                hasProviderError = true;
+                console.error('📋 Cost details:', cost);
+                alert(`⚠️ Warning: Provider not found for ${cost.costType} cost.\n\nProvider ID: ${cost.providerId}\n\nThis cost will be skipped. Please check the purchase and correct the provider.`);
+                return;
             }
-        });
-        
-        if (hasProviderError) {
-            console.error('❌ ABORTING: One or more providers not found for additional costs');
-            alert(`❌ ERROR: Cannot create purchase ledger entries!\n\nOne or more providers for additional costs (Freight/Clearing/Commission) were not found.\n\nPlease:\n1. Check that all providers exist in Setup > Business Partners\n2. Re-enter the purchase with correct providers`);
-            return null; // Return null to prevent unbalanced entries
-        }
-        
-        purchaseWithFactory.additionalCosts.forEach(cost => {
-            const provider = state.partners.find(p => p.id === cost.providerId)!; // Safe - validated above
             
             // For "Other" costs, use customName in narration if available, otherwise use provider name
             const costDescription = (cost.costType === 'Other' && cost.customName) 
@@ -2481,35 +2471,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const entries = buildPurchaseEntries();
         if (entries && entries.length > 0) {
-            // 🛡️ CRITICAL: Validate entries are balanced BEFORE posting
-            const totalDebits = entries.filter(e => !e.isReportingOnly).reduce((sum, e) => sum + (e.debit || 0), 0);
-            const totalCredits = entries.filter(e => !e.isReportingOnly).reduce((sum, e) => sum + (e.credit || 0), 0);
-            const imbalance = Math.abs(totalDebits - totalCredits);
-            
-            if (imbalance > 0.01) {
-                console.error('❌ PURCHASE LEDGER ENTRIES ARE UNBALANCED!', {
-                    totalDebits,
-                    totalCredits,
-                    imbalance,
-                    entries: entries.map(e => ({ account: e.accountName, debit: e.debit, credit: e.credit, isReportingOnly: e.isReportingOnly }))
-                });
-                alert(`❌ ERROR: Purchase ledger entries are unbalanced!\n\nDebits: $${totalDebits.toFixed(2)}\nCredits: $${totalCredits.toFixed(2)}\nImbalance: $${imbalance.toFixed(2)}\n\nPurchase was saved but ledger entries were NOT posted.\nPlease check the console (F12) for details and contact support.`);
-                return;
-            }
-            
-            console.log('✅ Posting purchase ledger entries:', entries.length, { totalDebits, totalCredits });
-            
-            // 🛡️ CRITICAL: Use try/catch with await to ensure ledger posting completes
-            try {
-                await postTransaction(entries);
-                console.log('✅ Purchase ledger entries posted successfully');
-            } catch (error: any) {
+            console.log('✅ Posting purchase ledger entries:', entries.length);
+            postTransaction(entries).catch((error) => {
                 console.error('❌ Error posting purchase ledger entries:', error);
-                alert(`❌ CRITICAL ERROR: Failed to post ledger entries!\n\n${error.message}\n\nPurchase was saved but ledger entries were NOT created.\n\nPlease:\n1. Go to Admin > Fix Missing Purchase Ledger Entries\n2. Or delete this purchase and re-enter it`);
-            }
+                alert(`Failed to post ledger entries: ${error.message}\n\nPurchase was saved but ledger entries may be incomplete. Please check Accounting > Ledger.`);
+            });
         } else {
             console.error('❌ No ledger entries created for purchase');
-            alert('❌ ERROR: Purchase was saved but no ledger entries were created.\n\nThis will cause Balance Sheet issues.\n\nPlease:\n1. Check if all required accounts exist (Inventory - Raw Materials)\n2. Check if supplier exists\n3. Go to Admin > Fix Missing Purchase Ledger Entries');
+            alert('Warning: Purchase was saved but no ledger entries were created. Please check the console for details.');
         }
     };
     const addBundlePurchase = (bundle: BundlePurchase) => {
@@ -3158,7 +3127,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const addItem = (item: Item, openingStock: number = 0) => {
-                // Post ledger entries for opening stock if present
+        // Post ledger entries for opening stock if present
         if (openingStock > 0 && item.avgCost && item.avgCost > 0) {
             const prevYear = new Date().getFullYear() - 1;
             const date = `${prevYear}-12-31`;

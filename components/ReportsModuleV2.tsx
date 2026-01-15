@@ -1286,13 +1286,40 @@ const LedgerDetailModal: React.FC<{
                 .sort((a: any, b: any) => b.balance - a.balance);
         }
         if (type === 'netIncome') {
+            // Revenue accounts (show Sales Discounts as negative/contra-revenue)
             const revenueAccounts = state.accounts
                 .filter((a: any) => a.type === AccountType.REVENUE && (a.balance || 0) !== 0)
-                .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0), type: 'revenue' }));
+                .map((a: any) => {
+                    const isContraRevenue = a.name.toLowerCase().includes('sales discount');
+                    return { 
+                        name: a.name, 
+                        balance: isContraRevenue ? -Math.abs(a.balance || 0) : Math.abs(a.balance || 0), 
+                        type: isContraRevenue ? 'contra-revenue' : 'revenue' 
+                    };
+                });
+            
+            // Expense accounts (exclude Raw Material Consumption - it's inventory movement, not expense)
             const expenseAccounts = state.accounts
-                .filter((a: any) => a.type === AccountType.EXPENSE && (a.balance || 0) !== 0)
+                .filter((a: any) => {
+                    if (a.type !== AccountType.EXPENSE) return false;
+                    if ((a.balance || 0) === 0) return false;
+                    if (a.name.toLowerCase().includes('raw material consumption')) return false;
+                    if (a.name.toLowerCase().includes('sales discount')) return false; // Already in revenue as contra
+                    return true;
+                })
                 .map((a: any) => ({ name: a.name, balance: Math.abs(a.balance || 0), type: 'expense' }));
-            return [...revenueAccounts, ...expenseAccounts].sort((a: any, b: any) => b.balance - a.balance);
+            
+            // Show Raw Material Consumption separately as "Inventory Movement" for clarity
+            const rawMatAccount = state.accounts.find((a: any) => 
+                a.name.toLowerCase().includes('raw material consumption') && (a.balance || 0) !== 0
+            );
+            const inventoryMovements = rawMatAccount ? [{ 
+                name: `${rawMatAccount.name} (Inventory Movement - Not in P&L)`, 
+                balance: Math.abs(rawMatAccount.balance || 0), 
+                type: 'inventory-movement' 
+            }] : [];
+            
+            return [...revenueAccounts, ...expenseAccounts, ...inventoryMovements].sort((a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance));
         }
         if (type === 'accountBreakdown' && accountId) {
             // Get child accounts for the parent account
@@ -1556,11 +1583,27 @@ const BalanceSheet: React.FC = () => {
             .slice(0, 10)
     });
     
-    const revenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
-    const expenseAccounts = state.accounts.filter(a => a.type === AccountType.EXPENSE);
+    // FIX 1: Raw Material Consumption is an INVENTORY MOVEMENT, not a true expense
+    // It represents transfer from Raw Materials to WIP/Finished Goods
+    // FIX 2: Sales Discounts is a CONTRA-REVENUE - should reduce revenue, not be an expense
+    const expenseAccounts = state.accounts.filter(a => 
+        a.type === AccountType.EXPENSE && 
+        !a.name.toLowerCase().includes('raw material consumption') &&
+        !a.name.toLowerCase().includes('sales discount')
+    );
     
-    // Calculate expenses from account balances
+    // Calculate expenses from account balances (excluding Raw Material Consumption & Sales Discounts)
     let expenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    
+    // Handle Sales Discounts: subtract from revenue (contra-revenue)
+    const salesDiscountAccount = state.accounts.find(a => 
+        a.name.toLowerCase().includes('sales discount')
+    );
+    const salesDiscountValue = salesDiscountAccount ? Math.abs(salesDiscountAccount.balance || 0) : 0;
+    
+    // Revenue minus Sales Discounts
+    const grossRevenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    const revenue = grossRevenue - salesDiscountValue;
     
     // FIX: Also include expenses from orphaned ledger entries (entries where accountId doesn't match any account)
     // This handles cases where PB entries were created with account IDs that no longer exist
