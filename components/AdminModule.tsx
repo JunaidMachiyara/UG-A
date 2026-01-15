@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { UserRole, TransactionType, LedgerEntry, PartnerType, SalesInvoice, AccountType } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Download, Search, CheckSquare, Package } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, Shield, Lock, CheckCircle, XCircle, Building2, Users, ArrowRight, RefreshCw, FileText, Upload, Download, Search, CheckSquare, Package, Scale } from 'lucide-react';
 import { collection, writeBatch, doc, getDocs, getDoc, query, where, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { getExchangeRates } from '../context/DataContext';
@@ -1706,6 +1706,245 @@ export const AdminModule: React.FC = () => {
                     <Search size={16} />
                     Run Diagnostic: What System Missed
                 </button>
+            </div>
+
+            {/* COMPREHENSIVE BALANCE SHEET FIX UTILITY */}
+            <div className="bg-purple-50 border-2 border-purple-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <Scale className="text-purple-600" size={24} />
+                    <h3 className="text-lg font-bold text-purple-900">🔧 Comprehensive Balance Sheet Fix</h3>
+                </div>
+
+                <div className="bg-white border border-purple-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-purple-800 mb-2">
+                        <strong>This utility will:</strong>
+                    </p>
+                    <ul className="text-sm text-purple-700 list-disc list-inside space-y-1">
+                        <li>Recalculate ALL account balances from ledger entries</li>
+                        <li>Recalculate ALL partner balances from ledger entries</li>
+                        <li>Identify mismatches between stored balance and calculated balance</li>
+                        <li>Show exactly which accounts/partners are causing the imbalance</li>
+                        <li>Optionally fix the balances in Firebase</li>
+                    </ul>
+                </div>
+
+                <div className="flex gap-3 flex-wrap">
+                    <button
+                        onClick={() => {
+                            const results: any = {
+                                accountMismatches: [],
+                                partnerMismatches: [],
+                                totalAccountDiff: 0,
+                                totalPartnerDiff: 0,
+                                balanceSheetBefore: { assets: 0, liabilities: 0, equity: 0 },
+                                balanceSheetAfter: { assets: 0, liabilities: 0, equity: 0 }
+                            };
+
+                            // 1. Recalculate ALL account balances from ledger
+                            state.accounts.forEach((account: any) => {
+                                const entries = state.ledger.filter((e: any) => 
+                                    e.accountId === account.id && !(e as any).isReportingOnly
+                                );
+                                
+                                const totalDebits = entries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                const totalCredits = entries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                
+                                // Calculate expected balance based on account type
+                                let calculatedBalance = 0;
+                                if ([AccountType.ASSET, AccountType.EXPENSE].includes(account.type)) {
+                                    calculatedBalance = totalDebits - totalCredits;
+                                } else {
+                                    // LIABILITY, EQUITY, REVENUE
+                                    calculatedBalance = totalCredits - totalDebits;
+                                }
+                                
+                                const storedBalance = account.balance || 0;
+                                const difference = Math.abs(calculatedBalance - storedBalance);
+                                
+                                if (difference > 0.01) {
+                                    results.accountMismatches.push({
+                                        id: account.id,
+                                        code: account.code,
+                                        name: account.name,
+                                        type: account.type,
+                                        storedBalance,
+                                        calculatedBalance,
+                                        difference: calculatedBalance - storedBalance,
+                                        totalDebits,
+                                        totalCredits,
+                                        entryCount: entries.length
+                                    });
+                                    results.totalAccountDiff += (calculatedBalance - storedBalance);
+                                }
+                                
+                                // Track for balance sheet
+                                if (account.type === AccountType.ASSET) {
+                                    results.balanceSheetBefore.assets += storedBalance;
+                                    results.balanceSheetAfter.assets += calculatedBalance;
+                                } else if (account.type === AccountType.LIABILITY) {
+                                    results.balanceSheetBefore.liabilities += Math.abs(storedBalance);
+                                    results.balanceSheetAfter.liabilities += Math.abs(calculatedBalance);
+                                } else if (account.type === AccountType.EQUITY) {
+                                    results.balanceSheetBefore.equity += storedBalance;
+                                    results.balanceSheetAfter.equity += calculatedBalance;
+                                }
+                            });
+
+                            // 2. Recalculate ALL partner balances from ledger
+                            state.partners.forEach((partner: any) => {
+                                const entries = state.ledger.filter((e: any) => 
+                                    e.accountId === partner.id && !(e as any).isReportingOnly
+                                );
+                                
+                                const totalDebits = entries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+                                const totalCredits = entries.reduce((sum: number, e: any) => sum + (e.credit || 0), 0);
+                                
+                                // Partner balance calculation:
+                                // Customers: Debit increases (they owe us), Credit decreases
+                                // Suppliers/Vendors: Credit increases liability (we owe them), stored as negative
+                                let calculatedBalance = 0;
+                                if (partner.type === PartnerType.CUSTOMER) {
+                                    calculatedBalance = totalDebits - totalCredits;
+                                } else {
+                                    // Suppliers, Vendors, Agents - balance is negative when we owe them
+                                    calculatedBalance = totalDebits - totalCredits;
+                                }
+                                
+                                const storedBalance = partner.balance || 0;
+                                const difference = Math.abs(calculatedBalance - storedBalance);
+                                
+                                if (difference > 0.01) {
+                                    results.partnerMismatches.push({
+                                        id: partner.id,
+                                        code: partner.code,
+                                        name: partner.name,
+                                        type: partner.type,
+                                        storedBalance,
+                                        calculatedBalance,
+                                        difference: calculatedBalance - storedBalance,
+                                        totalDebits,
+                                        totalCredits,
+                                        entryCount: entries.length
+                                    });
+                                    results.totalPartnerDiff += (calculatedBalance - storedBalance);
+                                }
+                            });
+
+                            // Build report
+                            let report = '🔍 BALANCE RECALCULATION REPORT\n\n';
+                            report += `═══════════════════════════════════════\n\n`;
+
+                            if (results.accountMismatches.length > 0) {
+                                report += `❌ ACCOUNT BALANCE MISMATCHES (${results.accountMismatches.length}):\n\n`;
+                                results.accountMismatches.forEach((a: any) => {
+                                    report += `  📊 ${a.code} - ${a.name} (${a.type}):\n`;
+                                    report += `     Stored: $${a.storedBalance.toFixed(2)}\n`;
+                                    report += `     Calculated: $${a.calculatedBalance.toFixed(2)}\n`;
+                                    report += `     Difference: $${a.difference.toFixed(2)}\n`;
+                                    report += `     (Debits: $${a.totalDebits.toFixed(2)}, Credits: $${a.totalCredits.toFixed(2)}, Entries: ${a.entryCount})\n\n`;
+                                });
+                                report += `  TOTAL ACCOUNT DIFFERENCE: $${results.totalAccountDiff.toFixed(2)}\n\n`;
+                            } else {
+                                report += `✅ All account balances match ledger entries!\n\n`;
+                            }
+
+                            if (results.partnerMismatches.length > 0) {
+                                report += `❌ PARTNER BALANCE MISMATCHES (${results.partnerMismatches.length}):\n\n`;
+                                results.partnerMismatches.forEach((p: any) => {
+                                    report += `  👤 ${p.code || 'N/A'} - ${p.name} (${p.type}):\n`;
+                                    report += `     Stored: $${p.storedBalance.toFixed(2)}\n`;
+                                    report += `     Calculated: $${p.calculatedBalance.toFixed(2)}\n`;
+                                    report += `     Difference: $${p.difference.toFixed(2)}\n`;
+                                    report += `     (Debits: $${p.totalDebits.toFixed(2)}, Credits: $${p.totalCredits.toFixed(2)}, Entries: ${p.entryCount})\n\n`;
+                                });
+                                report += `  TOTAL PARTNER DIFFERENCE: $${results.totalPartnerDiff.toFixed(2)}\n\n`;
+                            } else {
+                                report += `✅ All partner balances match ledger entries!\n\n`;
+                            }
+
+                            report += `═══════════════════════════════════════\n\n`;
+                            report += `📈 IMPACT ON BALANCE SHEET:\n`;
+                            report += `  Before Fix - Assets: $${results.balanceSheetBefore.assets.toFixed(2)}, L: $${results.balanceSheetBefore.liabilities.toFixed(2)}, E: $${results.balanceSheetBefore.equity.toFixed(2)}\n`;
+                            report += `  After Fix  - Assets: $${results.balanceSheetAfter.assets.toFixed(2)}, L: $${results.balanceSheetAfter.liabilities.toFixed(2)}, E: $${results.balanceSheetAfter.equity.toFixed(2)}\n\n`;
+
+                            if (results.accountMismatches.length === 0 && results.partnerMismatches.length === 0) {
+                                report += `✅ NO MISMATCHES FOUND - Balances are correct!\n`;
+                                report += `\nIf Balance Sheet is still unbalanced, the issue is in the Balance Sheet calculation logic, not the stored balances.`;
+                            } else {
+                                report += `💡 Click "FIX ALL BALANCES" to update stored balances to match ledger calculations.`;
+                            }
+
+                            alert(report);
+                            console.log('🔍 Full Recalculation Results:', results);
+                            
+                            // Store results for fix button
+                            (window as any).__balanceFixResults = results;
+                        }}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-semibold flex items-center gap-2"
+                    >
+                        <Search size={16} />
+                        Analyze Balance Mismatches
+                    </button>
+
+                    <button
+                        onClick={async () => {
+                            const results = (window as any).__balanceFixResults;
+                            if (!results) {
+                                alert('Please run "Analyze Balance Mismatches" first.');
+                                return;
+                            }
+
+                            if (results.accountMismatches.length === 0 && results.partnerMismatches.length === 0) {
+                                alert('No mismatches to fix!');
+                                return;
+                            }
+
+                            const totalFixes = results.accountMismatches.length + results.partnerMismatches.length;
+                            if (!confirm(`This will update ${totalFixes} balance(s) in Firebase.\n\nAccounts: ${results.accountMismatches.length}\nPartners: ${results.partnerMismatches.length}\n\nContinue?`)) {
+                                return;
+                            }
+
+                            try {
+                                const batch = writeBatch(db);
+                                let fixCount = 0;
+
+                                // Fix account balances
+                                for (const mismatch of results.accountMismatches) {
+                                    const accountRef = doc(db, 'accounts', mismatch.id);
+                                    batch.update(accountRef, { 
+                                        balance: mismatch.calculatedBalance,
+                                        updatedAt: serverTimestamp()
+                                    });
+                                    fixCount++;
+                                }
+
+                                // Fix partner balances
+                                for (const mismatch of results.partnerMismatches) {
+                                    const partnerRef = doc(db, 'partners', mismatch.id);
+                                    batch.update(partnerRef, { 
+                                        balance: mismatch.calculatedBalance,
+                                        updatedAt: serverTimestamp()
+                                    });
+                                    fixCount++;
+                                }
+
+                                await batch.commit();
+
+                                alert(`✅ Fixed ${fixCount} balance(s) in Firebase!\n\nPlease refresh the page (F5) to see the updated Balance Sheet.`);
+                                
+                                // Clear stored results
+                                (window as any).__balanceFixResults = null;
+                            } catch (error: any) {
+                                alert(`❌ Error fixing balances: ${error.message}`);
+                                console.error('Fix balances error:', error);
+                            }
+                        }}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold flex items-center gap-2"
+                    >
+                        <CheckCircle size={16} />
+                        Fix All Balances
+                    </button>
+                </div>
             </div>
 
             {/* Delete Partners by Type Utility Section */}
