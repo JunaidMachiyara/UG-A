@@ -155,6 +155,10 @@ export const Accounting: React.FC = () => {
     const [filterVoucherId, setFilterVoucherId] = useState('');
     const [filterMinAmount, setFilterMinAmount] = useState('');
     const [filterMaxAmount, setFilterMaxAmount] = useState('');
+    
+    // Ledger table sorting state
+    const [ledgerSortColumn, setLedgerSortColumn] = useState<string>('date');
+    const [ledgerSortDirection, setLedgerSortDirection] = useState<'asc' | 'desc'>('desc');
     const [voucherToDelete, setVoucherToDelete] = useState('');
 
     // --- Auth Modal State ---
@@ -2100,14 +2104,59 @@ export const Accounting: React.FC = () => {
                 // For PARTNERS (Suppliers): Credit partner (increases liability), Debit Discrepancy
                 
                 if (isLiabilityEntity) {
-                    // LIABILITY: Credit liability account (increases liability), Debit Discrepancy (decreases discrepancy)
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                    if (isEquityAccount) {
-                        // If Discrepancy is EQUITY: Debit Discrepancy (decreases equity) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    // CRITICAL FIX: Check current balance of liability account
+                    // If balance is negative, "increase" means make it more negative (away from zero) = DEBIT
+                    // If balance is positive, "increase" means make it more positive (away from zero) = CREDIT
+                    let currentBalance = 0;
+                    if (account) {
+                        currentBalance = account.balance || 0;
+                    } else if (partner) {
+                        currentBalance = partner.balance || 0;
+                    }
+                    
+                    const isNegativeBalance = currentBalance < 0;
+                    
+                    if (isNegativeBalance) {
+                        // Negative balance: Debit to increase (make more negative, away from zero)
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        console.log(`⚠️ BD Entry: Liability account has negative balance (${currentBalance}). Using DEBIT to increase (make more negative).`);
                     } else {
-                        // If Discrepancy is LIABILITY: Debit Discrepancy (decreases liability) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        // Positive balance: Credit to increase (make more positive, away from zero)
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
+                    
+                    // Use EQUITY account (Owner's Capital) for offset to prevent Balance Sheet double-counting
+                    const capitalAccount = state.accounts.find(a => 
+                        (a.name.includes('Capital') || a.name.includes('Owner\'s Capital')) &&
+                        a.type === AccountType.EQUITY
+                    ) || state.accounts.find(a => a.type === AccountType.EQUITY && a.code === '3000');
+                    
+                    if (capitalAccount) {
+                        if (isNegativeBalance) {
+                            // Negative balance: Credit Capital (increases equity) to balance the Debit
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        } else {
+                            // Positive balance: Debit Capital (decreases equity) to balance the Credit
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        }
+                        console.log('✅ BD Entry: Using Capital account for offset to avoid Balance Sheet double-counting.');
+                    } else {
+                        // Fallback: Use Discrepancy account
+                        if (isEquityAccount) {
+                            if (isNegativeBalance) {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            } else {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            }
+                        } else {
+                            // Discrepancy is LIABILITY
+                            if (isNegativeBalance) {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            } else {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            }
+                            console.warn('⚠️ BD Entry: Discrepancy account is LIABILITY. This may cause Balance Sheet imbalance. Consider using Owner\'s Capital instead.');
+                        }
                     }
                 } else {
                     // ASSET or CUSTOMER: Debit account/partner (increases asset), Credit Discrepancy
@@ -2128,35 +2177,61 @@ export const Accounting: React.FC = () => {
                 // For PARTNERS (Suppliers): Debit partner (decreases liability), Credit Discrepancy
                 
                 if (isLiabilityEntity) {
-                    // LIABILITY: Debit liability account (decreases liability)
-                    entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    // CRITICAL FIX: Check current balance of liability account
+                    // If balance is negative, "decrease" means make it less negative (toward zero) = CREDIT
+                    // If balance is positive, "decrease" means make it less positive (toward zero) = DEBIT
+                    let currentBalance = 0;
+                    if (account) {
+                        currentBalance = account.balance || 0;
+                    } else if (partner) {
+                        currentBalance = partner.balance || 0;
+                    }
                     
-                    // CRITICAL FIX: When both accounts are liabilities, using Math.abs() in Balance Sheet causes double-counting
-                    // Solution: Use EQUITY account (Owner's Capital) instead of Discrepancy account when both are liabilities
-                    if (isEquityAccount) {
-                        // If Discrepancy is EQUITY: Credit Discrepancy (increases equity) to balance
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    // For liability accounts: negative balance = they owe us (asset), positive balance = we owe them (liability)
+                    // For DECREASE: If negative, Credit to make less negative. If positive, Debit to make less positive.
+                    const isNegativeBalance = currentBalance < 0;
+                    
+                    if (isNegativeBalance) {
+                        // Negative balance: Credit to decrease (make less negative, toward zero)
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        console.log(`⚠️ BD Entry: Liability account has negative balance (${currentBalance}). Using CREDIT to decrease (make less negative).`);
                     } else {
-                        // CRITICAL FIX: If Discrepancy is LIABILITY and we're decreasing another liability:
-                        // Problem: Math.abs() in Balance Sheet causes double-counting when both are liabilities
-                        // When you Debit a liability with negative balance, Math.abs() makes it show as MORE positive
-                        // This causes: regularLiabilitiesTotal increases + discrepancyAdjustment increases = DOUBLE counting
-                        // Solution: Use EQUITY account (Owner's Capital) instead of Discrepancy account for the offset
-                        // This way: Debit MOHAMMAD (decreases liability), Credit Capital (increases equity)
-                        // Balance Sheet: Liabilities decrease, Equity increases = Balanced ✓
-                        const capitalAccount = state.accounts.find(a => 
-                            (a.name.includes('Capital') || a.name.includes('Owner\'s Capital')) &&
-                            a.type === AccountType.EQUITY
-                        ) || state.accounts.find(a => a.type === AccountType.EQUITY && a.code === '3000');
-                        
-                        if (capitalAccount) {
-                            // Credit Capital (increases equity) to balance - this correctly offsets the liability decrease
-                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                            console.log('⚠️ BD Entry: Both accounts are liabilities. Using Capital account instead of Discrepancy to avoid Balance Sheet double-counting.');
+                        // Positive balance: Debit to decrease (make less positive, toward zero)
+                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                    }
+                    
+                    // CRITICAL FIX: Always use EQUITY account (Owner's Capital) for offset when decreasing liability
+                    // This prevents Balance Sheet double-counting caused by Math.abs() calculation
+                    const capitalAccount = state.accounts.find(a => 
+                        (a.name.includes('Capital') || a.name.includes('Owner\'s Capital')) &&
+                        a.type === AccountType.EQUITY
+                    ) || state.accounts.find(a => a.type === AccountType.EQUITY && a.code === '3000');
+                    
+                    if (capitalAccount) {
+                        if (isNegativeBalance) {
+                            // Negative balance: Debit Capital (decreases equity) to balance the Credit
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                         } else {
-                            // Fallback: Use Discrepancy but warn user about potential imbalance
-                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                            console.warn('⚠️ BD Entry: Both accounts are liabilities. This may cause Balance Sheet imbalance due to Math.abs() calculation. Consider using Owner\'s Capital instead.');
+                            // Positive balance: Credit Capital (increases equity) to balance the Debit
+                            entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: capitalAccount.id, accountName: capitalAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                        }
+                        console.log('✅ BD Entry: Using Capital account for offset to avoid Balance Sheet double-counting.');
+                    } else {
+                        // Fallback: Use Discrepancy account
+                        if (isEquityAccount) {
+                            if (isNegativeBalance) {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            } else {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            }
+                        } else {
+                            // Discrepancy is LIABILITY - warn about potential imbalance
+                            if (isNegativeBalance) {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            } else {
+                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                            }
+                            console.warn('⚠️ BD Entry: Discrepancy account is LIABILITY. This may cause Balance Sheet imbalance. Consider using Owner\'s Capital instead.');
                         }
                     }
                 } else {
@@ -2481,16 +2556,58 @@ export const Accounting: React.FC = () => {
         // Sort only if we have entries (avoid unnecessary sort on empty array)
         if (filtered.length === 0) return [];
         
-        // Optimized sort: cache timestamps to avoid recalculating
-        const entriesWithTimestamps = filtered.map(entry => ({
-            entry,
-            timestamp: new Date(entry.date).getTime()
-        }));
+        // Sort based on selected column and direction
+        const sorted = [...filtered].sort((a, b) => {
+            let aValue: any;
+            let bValue: any;
+            
+            switch (ledgerSortColumn) {
+                case 'date':
+                    aValue = new Date(a.date).getTime();
+                    bValue = new Date(b.date).getTime();
+                    break;
+                case 'voucher':
+                    aValue = a.transactionId || '';
+                    bValue = b.transactionId || '';
+                    break;
+                case 'account':
+                    aValue = a.accountName || '';
+                    bValue = b.accountName || '';
+                    break;
+                case 'amount':
+                    aValue = a.fcyAmount || 0;
+                    bValue = b.fcyAmount || 0;
+                    break;
+                case 'debit':
+                    aValue = a.debit || 0;
+                    bValue = b.debit || 0;
+                    break;
+                case 'credit':
+                    aValue = a.credit || 0;
+                    bValue = b.credit || 0;
+                    break;
+                case 'narration':
+                    aValue = a.narration || '';
+                    bValue = b.narration || '';
+                    break;
+                default:
+                    // Default to date sorting
+                    aValue = new Date(a.date).getTime();
+                    bValue = new Date(b.date).getTime();
+            }
+            
+            // Handle comparison
+            if (typeof aValue === 'string' && typeof bValue === 'string') {
+                const comparison = aValue.localeCompare(bValue);
+                return ledgerSortDirection === 'asc' ? comparison : -comparison;
+            } else {
+                const comparison = aValue - bValue;
+                return ledgerSortDirection === 'asc' ? comparison : -comparison;
+            }
+        });
         
-        entriesWithTimestamps.sort((a, b) => b.timestamp - a.timestamp);
-        
-        return entriesWithTimestamps.map(item => item.entry);
-    }, [state.ledger, filterDateFromTimestamp, filterDateToTimestamp, filterType, filterAccountId, filterVoucherId, filterMinAmountNum, filterMaxAmountNum]);
+        return sorted;
+    }, [state.ledger, filterDateFromTimestamp, filterDateToTimestamp, filterType, filterAccountId, filterVoucherId, filterMinAmountNum, filterMaxAmountNum, ledgerSortColumn, ledgerSortDirection]);
     
     // PERFORMANCE: Pre-index partners by ID to avoid O(n*m) lookups in map
     const partnerIndex = useMemo(() => {
@@ -5540,15 +5657,134 @@ export const Accounting: React.FC = () => {
                             <table className="w-full text-left text-sm min-w-full">
                             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 text-xs">
                                 <tr>
-                                        <th className="px-4 py-4 whitespace-nowrap">Date</th>
-                                        <th className="px-4 py-4 whitespace-nowrap">Voucher</th>
-                                        <th className="px-4 py-4 whitespace-nowrap min-w-[200px]">Account</th>
+                                        <th 
+                                            className="px-4 py-4 whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'date') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('date');
+                                                    setLedgerSortDirection('desc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                Date
+                                                {ledgerSortColumn === 'date' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
+                                        <th 
+                                            className="px-4 py-4 whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'voucher') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('voucher');
+                                                    setLedgerSortDirection('asc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                Voucher
+                                                {ledgerSortColumn === 'voucher' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
+                                        <th 
+                                            className="px-4 py-4 whitespace-nowrap min-w-[200px] cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'account') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('account');
+                                                    setLedgerSortDirection('asc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                Account
+                                                {ledgerSortColumn === 'account' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
                                         <th className="px-4 py-4 whitespace-nowrap">Account ID</th>
-                                        <th className="px-4 py-4 text-right bg-blue-50/50 whitespace-nowrap">Amount (FCY)</th>
+                                        <th 
+                                            className="px-4 py-4 text-right bg-blue-50/50 whitespace-nowrap cursor-pointer hover:bg-blue-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'amount') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('amount');
+                                                    setLedgerSortDirection('desc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center justify-end gap-1">
+                                                Amount (FCY)
+                                                {ledgerSortColumn === 'amount' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
                                         <th className="px-4 py-4 text-center whitespace-nowrap">Rate</th>
-                                        <th className="px-4 py-4 text-right whitespace-nowrap">Debit ($)</th>
-                                        <th className="px-4 py-4 text-right whitespace-nowrap">Credit ($)</th>
-                                        <th className="px-4 py-4 min-w-[300px]">Narration</th>
+                                        <th 
+                                            className="px-4 py-4 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'debit') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('debit');
+                                                    setLedgerSortDirection('desc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center justify-end gap-1">
+                                                Debit ($)
+                                                {ledgerSortColumn === 'debit' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
+                                        <th 
+                                            className="px-4 py-4 text-right whitespace-nowrap cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'credit') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('credit');
+                                                    setLedgerSortDirection('desc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center justify-end gap-1">
+                                                Credit ($)
+                                                {ledgerSortColumn === 'credit' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
+                                        <th 
+                                            className="px-4 py-4 min-w-[300px] cursor-pointer hover:bg-slate-100 select-none"
+                                            onClick={() => {
+                                                if (ledgerSortColumn === 'narration') {
+                                                    setLedgerSortDirection(ledgerSortDirection === 'asc' ? 'desc' : 'asc');
+                                                } else {
+                                                    setLedgerSortColumn('narration');
+                                                    setLedgerSortDirection('asc');
+                                                }
+                                            }}
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                Narration
+                                                {ledgerSortColumn === 'narration' && (
+                                                    ledgerSortDirection === 'asc' ? <ChevronUp size={16} className="text-blue-600" /> : <ChevronDown size={16} className="text-blue-600" />
+                                                )}
+                                            </div>
+                                        </th>
                                         <th className="px-4 py-4 text-center whitespace-nowrap">Manage</th>
                                 </tr>
                             </thead>
