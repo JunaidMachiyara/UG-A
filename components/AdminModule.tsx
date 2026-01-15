@@ -1485,39 +1485,43 @@ export const AdminModule: React.FC = () => {
                             }
                         });
 
-                        // Check for BD transactions with only 1 entry (critical issue)
-                        const bdTransactionsWithSingleEntry: any[] = [];
+                        // Check for transactions with only 1 entry (critical issue - violates double-entry)
+                        const transactionsWithSingleEntry: any[] = [];
                         Object.entries(transactionGroups).forEach(([txId, entries]) => {
-                            // Check if this is a BD transaction
-                            const isBD = txId.startsWith('BD-') || entries.some(e => e.transactionType === TransactionType.BALANCING_DISCREPANCY);
-                            
-                            if (isBD && entries.length === 1) {
-                                bdTransactionsWithSingleEntry.push({
+                            // Any transaction with only 1 entry is a problem (violates double-entry accounting)
+                            if (entries.length === 1) {
+                                transactionsWithSingleEntry.push({
                                     transactionId: txId,
                                     entryCount: entries.length,
                                     entry: entries[0],
-                                    hasDebit: entries[0].debit > 0,
-                                    hasCredit: entries[0].credit > 0,
-                                    amount: entries[0].debit || entries[0].credit || 0
+                                    hasDebit: (entries[0].debit || 0) > 0,
+                                    hasCredit: (entries[0].credit || 0) > 0,
+                                    amount: entries[0].debit || entries[0].credit || 0,
+                                    accountName: entries[0].accountName,
+                                    date: entries[0].date,
+                                    transactionType: entries[0].transactionType
                                 });
                             }
                         });
                         
                         // Add to details for reporting
-                        details.bdTransactionsWithSingleEntry = bdTransactionsWithSingleEntry;
+                        details.transactionsWithSingleEntry = transactionsWithSingleEntry;
 
+                        // Check for unbalanced transactions (debits != credits)
                         Object.entries(transactionGroups).forEach(([txId, entries]) => {
                             const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
                             const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
                             const imbalance = Math.abs(totalDebits - totalCredits);
                             
-                            if (imbalance > 0.01 && !details.unbalancedTransactions.find(u => u.transactionId === txId)) {
+                            // Only report if truly unbalanced (not just single entry which is reported separately)
+                            if (imbalance > 0.01 && entries.length > 1 && !details.unbalancedTransactions.find((u: any) => u.transactionId === txId)) {
                                 details.unbalancedTransactions.push({
                                     transactionId: txId,
-                                    type: 'Other',
+                                    type: entries[0].transactionType || 'Other',
                                     debits: totalDebits,
                                     credits: totalCredits,
-                                    imbalance
+                                    imbalance,
+                                    entryCount: entries.length
                                 });
                             }
                         });
@@ -1575,9 +1579,39 @@ export const AdminModule: React.FC = () => {
                             }
                         });
 
+                        // 6. Calculate current Balance Sheet difference
+                        const assetAccounts = state.accounts.filter((a: any) => a.type === AccountType.ASSET);
+                        const liabilityAccounts = state.accounts.filter((a: any) => a.type === AccountType.LIABILITY);
+                        const equityAccounts = state.accounts.filter((a: any) => a.type === AccountType.EQUITY);
+                        
+                        const totalAssets = assetAccounts.reduce((sum: number, a: any) => sum + (a.balance || 0), 0);
+                        const totalLiabilities = liabilityAccounts.reduce((sum: number, a: any) => sum + Math.abs(a.balance || 0), 0);
+                        const totalEquity = equityAccounts.reduce((sum: number, a: any) => sum + (a.balance || 0), 0);
+                        const balanceSheetDiff = totalAssets - (totalLiabilities + totalEquity);
+                        
+                        details.balanceSheetSummary = {
+                            totalAssets,
+                            totalLiabilities,
+                            totalEquity,
+                            difference: balanceSheetDiff
+                        };
+
                         // Build report message
                         let report = '📊 DIAGNOSTIC REPORT: What System Missed\n\n';
                         report += `═══════════════════════════════════════\n\n`;
+                        
+                        // Show Balance Sheet summary first
+                        report += `📈 BALANCE SHEET SUMMARY:\n`;
+                        report += `  Total Assets: $${totalAssets.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+                        report += `  Total Liabilities: $${totalLiabilities.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+                        report += `  Total Equity: $${totalEquity.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+                        report += `  L&E Total: $${(totalLiabilities + totalEquity).toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+                        if (Math.abs(balanceSheetDiff) > 0.01) {
+                            report += `  ❌ DIFFERENCE: $${balanceSheetDiff.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+                        } else {
+                            report += `  ✅ BALANCED!\n`;
+                        }
+                        report += `\n`;
 
                         if (details.purchasesWithoutEntries.length > 0) {
                             report += `❌ PURCHASES WITHOUT LEDGER ENTRIES (${details.purchasesWithoutEntries.length}):\n`;
@@ -1595,19 +1629,20 @@ export const AdminModule: React.FC = () => {
                             report += '\n';
                         }
 
-                        // Add BD transactions with single entry to report
-                        if (details.bdTransactionsWithSingleEntry && details.bdTransactionsWithSingleEntry.length > 0) {
-                            report += `❌ CRITICAL: BD TRANSACTIONS WITH ONLY 1 ENTRY (${details.bdTransactionsWithSingleEntry.length}):\n`;
-                            report += `These BD vouchers are missing their second entry (debit or credit). This causes balance sheet imbalance!\n\n`;
-                            details.bdTransactionsWithSingleEntry.forEach((bd: any) => {
-                                report += `  • ${bd.transactionId}: Only ${bd.entryCount} entry found\n`;
-                                report += `    - Account: ${bd.entry.accountName}\n`;
-                                report += `    - ${bd.hasDebit ? 'Debit' : 'Credit'}: $${bd.amount.toFixed(2)}\n`;
-                                report += `    - Missing: ${bd.hasDebit ? 'Credit entry' : 'Debit entry'}\n`;
-                                report += `    - Date: ${bd.entry.date}\n`;
+                        // Add transactions with single entry to report (CRITICAL - violates double-entry)
+                        if (details.transactionsWithSingleEntry && details.transactionsWithSingleEntry.length > 0) {
+                            report += `❌ CRITICAL: TRANSACTIONS WITH ONLY 1 ENTRY (${details.transactionsWithSingleEntry.length}):\n`;
+                            report += `These transactions violate double-entry accounting - they have only a debit OR credit, not both!\n`;
+                            report += `This DIRECTLY causes Balance Sheet imbalance.\n\n`;
+                            details.transactionsWithSingleEntry.forEach((tx: any) => {
+                                report += `  • ${tx.transactionId} (${tx.transactionType || 'Unknown'}):\n`;
+                                report += `    - Account: ${tx.accountName}\n`;
+                                report += `    - ${tx.hasDebit ? 'Debit' : 'Credit'}: $${tx.amount.toFixed(2)}\n`;
+                                report += `    - Missing: ${tx.hasDebit ? 'Credit entry' : 'Debit entry'}\n`;
+                                report += `    - Date: ${tx.date}\n`;
                             });
                             report += '\n';
-                            report += `💡 SOLUTION: Delete these BD transactions and recreate them properly with both debit and credit entries.\n\n`;
+                            report += `💡 SOLUTION: Delete these transactions and recreate them properly.\n\n`;
                         }
 
                         if (details.unbalancedTransactions.length > 0) {
@@ -1646,10 +1681,11 @@ export const AdminModule: React.FC = () => {
                         if (details.purchasesWithoutEntries.length === 0 && 
                             details.salesInvoicesWithoutEntries.length === 0 && 
                             details.unbalancedTransactions.length === 0 && 
-                            details.missingAccounts.length === 0) {
+                            details.missingAccounts.length === 0 &&
+                            (!details.transactionsWithSingleEntry || details.transactionsWithSingleEntry.length === 0)) {
                             report += `✅ NO ISSUES FOUND!\n\n`;
                             report += `All purchases and sales invoices have complete ledger entries.\n`;
-                            report += `All transactions are balanced.\n`;
+                            report += `All transactions are balanced (have both debit and credit).\n`;
                             if (details.balanceDiscrepancyBreakdown) {
                                 report += `\nNote: Balance Discrepancy account has ${details.balanceDiscrepancyBreakdown.entryCount} entries with a balance of $${details.balanceDiscrepancyBreakdown.balance.toFixed(2)}.\n`;
                                 report += `This is normal if you've used the Balance Discrepancy utility to adjust accounts.\n`;
