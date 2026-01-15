@@ -3639,7 +3639,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         console.log(`📝 Processing negative value item: ${prod.itemName} (Value: $${finishedGoodsValue.toFixed(2)}) - This will create a credit entry for Finished Goods`);
                     }
                     
-                    // Match WIP by batch (FIFO) - consume from Original Opening entries
                     // Calculate total available WIP balance (only if WIP account exists)
                     const totalWipBalance = wipId ? state.ledger
                         .filter(e => e.accountId === wipId && e.factoryId === prod.factoryId)
@@ -3647,70 +3646,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     
                     let wipValueConsumed = 0;
                     
-                    // If WIP balance exists and WIP account exists, consume FIFO from opening entries
-                    if (wipId && totalWipBalance > 0 && totalKg > 0) {
-                        // Get all Original Opening entries sorted by date (FIFO)
-                        const availableOpenings = state.originalOpenings
-                            .filter(o => o.factoryId === prod.factoryId)
-                            .sort((a, b) => {
-                                const dateDiff = new Date(a.date).getTime() - new Date(b.date).getTime();
-                                if (dateDiff !== 0) return dateDiff;
-                                return (a.batchNumber || '').localeCompare(b.batchNumber || '');
+                    // SIMPLIFIED WIP CONSUMPTION LOGIC:
+                    // Production Flow: Raw Material → WIP → Finished Goods
+                    // When producing, consume WIP up to the production value (or available WIP, whichever is less)
+                    // Production Gain = Finished Goods Value - WIP consumed
+                    
+                    if (wipId && totalWipBalance > 0) {
+                        // Calculate available WIP after accounting for this batch's cumulative consumption
+                        const availableWip = Math.max(0, totalWipBalance - cumulativeWipConsumedInBatch);
+                        
+                        if (availableWip > 0) {
+                            // Consume WIP up to production value or available WIP
+                            wipValueConsumed = Math.min(availableWip, Math.abs(finishedGoodsValue));
+                            cumulativeWipConsumedInBatch += wipValueConsumed;
+                            
+                            console.log('📊 WIP Consumption (Simplified):', {
+                                totalWipBalance,
+                                availableWip,
+                                finishedGoodsValue,
+                                wipValueConsumed,
+                                cumulativeWipConsumedInBatch
                             });
-                        
-                        // Calculate total WIP credits from previous productions (already consumed)
-                        const totalWipCreditsFromLedger = state.ledger
-                            .filter(e => 
-                                e.transactionId?.startsWith('PROD-') &&
-                                e.accountId === wipId &&
-                                e.credit > 0 &&
-                                e.factoryId === prod.factoryId
-                            )
-                            .reduce((sum, e) => sum + (e.credit || 0), 0);
-                        
-                        let remainingKgToConsume = totalKg;
-                        const totalConsumedFromLedger = totalWipCreditsFromLedger;
-                        let sumOfPreviousOpenings = 0;
-                        
-                        // Consume FIFO from openings until we've consumed enough or run out
-                        for (const opening of availableOpenings) {
-                            if (remainingKgToConsume <= 0) break;
-                            
-                            // Get opening's WIP value (from its ledger debit entry)
-                            const openingWipDebit = state.ledger
-                                .filter(e => 
-                                    e.transactionId === `OO-${opening.id}` && 
-                                    e.accountId === wipId &&
-                                    e.debit > 0
-                                )
-                                .reduce((sum, e) => sum + (e.debit || 0), 0);
-                            
-                            if (openingWipDebit > 0 && opening.costPerKg > 0) {
-                                // FIFO logic: 
-                                // - sumOfPreviousOpenings = total value of all openings before this one
-                                // - consumedFromPrevious = min(totalConsumed, sumOfPreviousOpenings)
-                                // - consumedFromThis = max(0, totalConsumed - sumOfPreviousOpenings)
-                                // - available = opening value - consumedFromThis
-                                const consumedFromThisOpening = Math.max(0, totalConsumedFromLedger + cumulativeWipConsumedInBatch - sumOfPreviousOpenings);
-                                const availableValue = Math.max(0, openingWipDebit - consumedFromThisOpening);
-                                const availableKgFromThisOpening = availableValue / opening.costPerKg;
-                                
-                                if (availableKgFromThisOpening > 0 && remainingKgToConsume > 0) {
-                                    const kgToConsume = Math.min(remainingKgToConsume, availableKgFromThisOpening);
-                                    const valueToConsume = kgToConsume * opening.costPerKg;
-                                    
-                                    wipValueConsumed += valueToConsume;
-                                    cumulativeWipConsumedInBatch += valueToConsume;
-                                    remainingKgToConsume -= kgToConsume;
-                                }
-                                
-                                // Update sum for next iteration
-                                sumOfPreviousOpenings += openingWipDebit;
-                            }
                         }
-                        
-                        // Cap WIP consumption at available balance
-                        wipValueConsumed = Math.min(wipValueConsumed, totalWipBalance);
                     }
                     
                     // If no WIP available or remaining after consumption, remainder goes to Capital
