@@ -481,15 +481,25 @@ export const DataEntry: React.FC = () => {
         }
     }, [dsCustomer, state.partners]);
 
-    // Update rate when currency changes manually
+    // Update rate when currency changes manually - Use rates from Setup (state.currencies) not hardcoded constants
     useEffect(() => {
-        setPurExchangeRate(EXCHANGE_RATES[purCurrency] || 1);
-        setBpExchangeRate(EXCHANGE_RATES[bpCurrency] || 1);
-        setAcExchangeRate(EXCHANGE_RATES[acCurrency] || 1);
-        setSiExchangeRate(EXCHANGE_RATES[siCurrency] || 1);
-        setSiCostRate(EXCHANGE_RATES[siCostCurrency] || 1);
-        setDsExchangeRate(EXCHANGE_RATES[dsCurrency] || 1);
-    }, [purCurrency, bpCurrency, acCurrency, siCurrency, siCostCurrency, dsCurrency]);
+        // Get exchange rate from state.currencies (updated in Setup) or fallback to constant
+        const getExchangeRate = (currency: Currency): number => {
+            const currencyData = state.currencies.find(c => c.code === currency);
+            if (currencyData && currencyData.exchangeRate) {
+                return currencyData.exchangeRate;
+            }
+            // Fallback to constant if not found in state
+            return EXCHANGE_RATES[currency] || 1;
+        };
+        
+        setPurExchangeRate(getExchangeRate(purCurrency));
+        setBpExchangeRate(getExchangeRate(bpCurrency));
+        setAcExchangeRate(getExchangeRate(acCurrency));
+        setSiExchangeRate(getExchangeRate(siCurrency));
+        setSiCostRate(getExchangeRate(siCostCurrency));
+        setDsExchangeRate(getExchangeRate(dsCurrency));
+    }, [purCurrency, bpCurrency, acCurrency, siCurrency, siCostCurrency, dsCurrency, state.currencies]);
 
     // Derived Lists for Purchase Form
     const filteredProducts = useMemo(() => {
