@@ -465,13 +465,24 @@ export const DataEntry: React.FC = () => {
     useEffect(() => {
         if (siCustomer) {
             const p = state.partners.find(x => x.id === siCustomer);
-            if (p) {
-                if (p.defaultCurrency) setSiCurrency(p.defaultCurrency);
+            if (p && p.defaultCurrency) {
+                setSiCurrency(p.defaultCurrency);
+                // Immediately update exchange rate when customer currency is set
+                const currencyData = state.currencies.find(c => c.code === p.defaultCurrency);
+                if (currencyData && currencyData.exchangeRate) {
+                    console.log(`💱 Sales Invoice: Updated exchange rate for ${p.defaultCurrency} from Setup:`, currencyData.exchangeRate);
+                    setSiExchangeRate(currencyData.exchangeRate);
+                } else {
+                    // Fallback to constant if not found in state
+                    const fallbackRate = EXCHANGE_RATES[p.defaultCurrency] || 1;
+                    console.warn(`⚠️ Sales Invoice: Currency ${p.defaultCurrency} not found in state.currencies, using fallback rate:`, fallbackRate);
+                    setSiExchangeRate(fallbackRate);
+                }
                 if (p.divisionId) setSiDivision(p.divisionId);
                 if (p.subDivisionId) setSiSubDivision(p.subDivisionId);
             }
         }
-    }, [siCustomer, state.partners]);
+    }, [siCustomer, state.partners, state.currencies]);
 
     // Auto-Update Customer Details (Direct Sales)
     useEffect(() => {
