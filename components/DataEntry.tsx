@@ -3807,9 +3807,48 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
-                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Material Cost (Base USD):</span><span className="font-mono font-bold">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                        <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        {(() => {
+                                            const materialCostUSD = purCart.reduce((s,i)=>s+i.totalCostUSD,0);
+                                            const additionalCostsUSD = additionalCosts.reduce((s, c) => s + c.amountUSD, 0);
+                                            const totalUSD = materialCostUSD + additionalCostsUSD;
+                                            
+                                            // Convert to supplier currency for display verification
+                                            const materialCostFCY = purCurrency !== 'USD' ? materialCostUSD * purExchangeRate : materialCostUSD;
+                                            const additionalCostsFCY = purCurrency !== 'USD' ? additionalCostsUSD * purExchangeRate : additionalCostsUSD;
+                                            const totalFCY = purCurrency !== 'USD' ? totalUSD * purExchangeRate : totalUSD;
+                                            
+                                            return (
+                                                <>
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-slate-500">Material Cost:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold">{purCurrency} {materialCostFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold">${materialCostUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-slate-500">Additional Costs:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold">{purCurrency} {additionalCostsFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold">${additionalCostsUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2">
+                                                        <span className="text-blue-800 font-bold">Total Landed Cost:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold text-blue-800">{purCurrency} {totalFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold text-blue-800">${totalUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                     
                                     {/* Bulk Upload CSV Section */}
@@ -4129,9 +4168,48 @@ export const DataEntry: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
-                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Material Cost (Base USD):</span><span className="font-mono font-bold">${purCart.reduce((s,i)=>s+i.totalCostUSD,0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                        <div className="flex justify-between text-sm"><span className="text-slate-500">Additional Costs (Base USD):</span><span className="font-mono font-bold">${additionalCosts.reduce((s, c) => s + c.amountUSD, 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                        <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2"><span className="text-blue-800 font-bold">Total Landed Cost (USD):</span><span className="font-mono font-bold text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
+                                        {(() => {
+                                            const materialCostUSD = purCart.reduce((s,i)=>s+i.totalCostUSD,0);
+                                            const additionalCostsUSD = additionalCosts.reduce((s, c) => s + c.amountUSD, 0);
+                                            const totalUSD = materialCostUSD + additionalCostsUSD;
+                                            
+                                            // Convert to supplier currency for display verification
+                                            const materialCostFCY = purCurrency !== 'USD' ? materialCostUSD * purExchangeRate : materialCostUSD;
+                                            const additionalCostsFCY = purCurrency !== 'USD' ? additionalCostsUSD * purExchangeRate : additionalCostsUSD;
+                                            const totalFCY = purCurrency !== 'USD' ? totalUSD * purExchangeRate : totalUSD;
+                                            
+                                            return (
+                                                <>
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-slate-500">Material Cost:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold">{purCurrency} {materialCostFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold">${materialCostUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-slate-500">Additional Costs:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold">{purCurrency} {additionalCostsFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold">${additionalCostsUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex justify-between text-lg border-t border-blue-200 pt-2 mt-2">
+                                                        <span className="text-blue-800 font-bold">Total Landed Cost:</span>
+                                                        <span className="flex gap-3">
+                                                            {purCurrency !== 'USD' && (
+                                                                <span className="font-mono font-bold text-blue-800">{purCurrency} {totalFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                            )}
+                                                            <span className="font-mono font-bold text-blue-800">${totalUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                        </span>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                     <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors shadow-sm mt-4 flex items-center justify-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed" disabled={!purSupplier || purCart.length === 0}><FileText size={18} /> Review & Submit</button>
                                 </form>
@@ -5186,11 +5264,56 @@ export const DataEntry: React.FC = () => {
                             </div>
                             <table className="w-full text-sm text-left mb-8"><thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold border-b border-slate-200"><tr><th className="px-4 py-3 text-right">Sub Supplier</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right">Weight (Kg)</th><th className="px-4 py-3 text-right">Net Rate ({purCurrency})</th><th className="px-4 py-3 text-right">Total ({purCurrency})</th></tr></thead><tbody className="divide-y divide-slate-100">{purCart.map(item => ( <tr key={item.id}><td className="px-4 py-3 text-right">{item.subSupplierId ? (state.partners.find(p => p.id === item.subSupplierId)?.name || '-') : '-'}</td><td className="px-4 py-3 font-medium">{item.originalType}</td><td className="px-4 py-3 text-right">{(item.weightPurchased || 0).toFixed(2)}</td><td className="px-4 py-3 text-right">{(item.costPerKgFCY - (item.discountPerKgFCY||0) + (item.surchargePerKgFCY||0)).toFixed(2)}</td><td className="px-4 py-3 text-right font-bold">{(item.totalCostFCY || 0).toFixed(2)}</td></tr> ))}<tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={4}>TOTAL</td><td className="px-4 py-3 text-right">{purCart.reduce((s,i)=>s+(i.totalCostFCY || 0),0).toFixed(2)}</td></tr></tbody></table>
                             
-                             <div className="border-t border-slate-200 pt-6"><h4 className="font-bold text-slate-700 mb-4">Landed Cost Calculation (Base USD)</h4><div className="space-y-2 text-sm max-w-sm ml-auto">
-                                <div className="flex justify-between border-b border-slate-100 pb-1 mb-1"><span className="text-slate-700 font-medium">Net Material Cost:</span><span className="font-mono text-slate-800 font-medium">${purCart.reduce((s,i)=>s+(i.totalCostUSD || 0),0).toFixed(2)}</span></div>
-                                {additionalCosts.map(ac => ( <div key={ac.id} className="flex justify-between"><span className="text-slate-500">{ac.costType} ({state.partners.find(p=>p.id===ac.providerId)?.name}):</span><span className="font-mono text-slate-800">${(ac.amountUSD || 0).toFixed(2)}</span></div> ))} 
-                                <div className="flex justify-between border-t border-slate-300 pt-2 font-bold text-lg"><span className="text-blue-800">Total Landed Cost:</span><span className="font-mono text-blue-800">${( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                                <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / purCart.reduce((s,i)=>s+i.weightPurchased,0)).toFixed(3)}</span></div></div>
+                             <div className="border-t border-slate-200 pt-6"><h4 className="font-bold text-slate-700 mb-4">Landed Cost Calculation</h4><div className="space-y-2 text-sm max-w-sm ml-auto">
+                                {(() => {
+                                    const materialCostUSD = purCart.reduce((s,i)=>s+(i.totalCostUSD || 0),0);
+                                    const additionalCostsUSD = additionalCosts.reduce((s, c) => s + c.amountUSD, 0);
+                                    const totalUSD = materialCostUSD + additionalCostsUSD;
+                                    
+                                    // Convert to supplier currency for display verification
+                                    const materialCostFCY = purCurrency !== 'USD' ? materialCostUSD * purExchangeRate : materialCostUSD;
+                                    const additionalCostsFCY = purCurrency !== 'USD' ? additionalCostsUSD * purExchangeRate : additionalCostsUSD;
+                                    const totalFCY = purCurrency !== 'USD' ? totalUSD * purExchangeRate : totalUSD;
+                                    
+                                    return (
+                                        <>
+                                            <div className="flex justify-between border-b border-slate-100 pb-1 mb-1">
+                                                <span className="text-slate-700 font-medium">Net Material Cost:</span>
+                                                <span className="flex gap-3">
+                                                    {purCurrency !== 'USD' && (
+                                                        <span className="font-mono text-slate-800 font-medium">{purCurrency} {materialCostFCY.toFixed(2)}</span>
+                                                    )}
+                                                    <span className="font-mono text-slate-800 font-medium">${materialCostUSD.toFixed(2)}</span>
+                                                </span>
+                                            </div>
+                                            {additionalCosts.map(ac => {
+                                                const acFCY = ac.currency !== 'USD' ? (ac.amountUSD || 0) * (ac.exchangeRate || 1) : (ac.amountUSD || 0);
+                                                return (
+                                                    <div key={ac.id} className="flex justify-between">
+                                                        <span className="text-slate-500">{ac.costType} ({state.partners.find(p=>p.id===ac.providerId)?.name}):</span>
+                                                        <span className="flex gap-3">
+                                                            {ac.currency !== 'USD' && (
+                                                                <span className="font-mono text-slate-800">{ac.currency} {acFCY.toFixed(2)}</span>
+                                                            )}
+                                                            <span className="font-mono text-slate-800">${(ac.amountUSD || 0).toFixed(2)}</span>
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })} 
+                                            <div className="flex justify-between border-t border-slate-300 pt-2 font-bold text-lg">
+                                                <span className="text-blue-800">Total Landed Cost:</span>
+                                                <span className="flex gap-3">
+                                                    {purCurrency !== 'USD' && (
+                                                        <span className="font-mono text-blue-800">{purCurrency} {totalFCY.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                    )}
+                                                    <span className="font-mono text-blue-800">${totalUSD.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Cost per Kg:</span><span className="font-mono">${(( purCart.reduce((s,i)=>s+i.totalCostUSD,0) + additionalCosts.reduce((s, c) => s + c.amountUSD, 0) ) / purCart.reduce((s,i)=>s+i.weightPurchased,0)).toFixed(3)}</span></div>
+                                        </>
+                                    );
+                                })()}
+                             </div></div>
                              </div>
                         </div>
                         <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center"><button onClick={() => setShowPurSummary(false)} className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium">Cancel</button><div className="flex gap-3"><button onClick={handlePrint} disabled={purPrinted} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Printer size={18} /> {purPrinted ? 'Ready to Save' : 'Print Invoice'}</button><button type="button" onClick={handleFinalPurchaseSave} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm flex items-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed"><Download size={18} /> Save & Exit</button></div></div>
