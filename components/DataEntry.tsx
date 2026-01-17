@@ -4307,13 +4307,13 @@ export const DataEntry: React.FC = () => {
                                         {/* Core Info */}
                                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-6">
                                             <div>
-                                                <label className="block text-sm font-medium text-slate-600 mb-1">Customer</label>
+                                                <label className="block text-sm font-medium text-slate-600 mb-1">Customer / Supplier</label>
                                                 <EntitySelector 
-                                                    entities={state.partners.filter(p => p.type === 'CUSTOMER')} 
+                                                    entities={state.partners.filter(p => p.type === 'CUSTOMER' || p.type === 'SUPPLIER')} 
                                                     selectedId={siCustomer} 
                                                     onSelect={setSiCustomer} 
-                                                    placeholder="Select Customer..." 
-                                                    onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig, { type: PartnerType.CUSTOMER })}
+                                                    placeholder="Select Customer or Supplier..." 
+                                                    onQuickAdd={() => openQuickAdd(setupConfigs.partnerConfig)}
                                                 />
                                             </div>
                                             <div><label className="block text-sm font-medium text-slate-600 mb-1">Invoice #</label><input type="text" className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 font-mono font-bold" value={siInvoiceNo} onChange={e => setSiInvoiceNo(e.target.value)} /></div>
