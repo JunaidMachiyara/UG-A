@@ -5314,7 +5314,6 @@ export const DataEntry: React.FC = () => {
                                     );
                                 })()}
                              </div></div>
-                             </div>
                         </div>
                         <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center"><button onClick={() => setShowPurSummary(false)} className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium">Cancel</button><div className="flex gap-3"><button onClick={handlePrint} disabled={purPrinted} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Printer size={18} /> {purPrinted ? 'Ready to Save' : 'Print Invoice'}</button><button type="button" onClick={handleFinalPurchaseSave} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-sm flex items-center gap-2 disabled:bg-slate-400 disabled:cursor-not-allowed"><Download size={18} /> Save & Exit</button></div></div>
                     </div>
