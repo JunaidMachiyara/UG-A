@@ -2102,8 +2102,12 @@ export const DataEntry: React.FC = () => {
 
         // Convert rate to USD if entered in customer currency
         let rateUSD = rateEntered;
+        let originalRate = rateEntered;
+        let originalCurrency: Currency | undefined = undefined;
         if (siRateCurrency === 'customer' && siCurrency !== 'USD') {
             // Rate entered in customer currency, convert to USD
+            originalRate = rateEntered; // Store original entered rate
+            originalCurrency = siCurrency; // Store original currency
             rateUSD = rateEntered / siExchangeRate;
             console.log(`💱 Rate conversion: ${rateEntered} ${siCurrency} ÷ ${siExchangeRate} = ${rateUSD.toFixed(4)} USD`);
         }
@@ -2115,7 +2119,11 @@ export const DataEntry: React.FC = () => {
             qty,
             rate: rateUSD, // Always store in USD for accounting
             total: qty * rateUSD, // Total in USD
-            totalKg: qty * item.weightPerUnit
+            totalKg: qty * item.weightPerUnit,
+            // Store original entered rate and currency for display verification (when entered in customer currency)
+            currency: originalCurrency || siCurrency,
+            exchangeRate: siRateCurrency === 'customer' && siCurrency !== 'USD' ? siExchangeRate : undefined,
+            originalEnteredRate: siRateCurrency === 'customer' && siCurrency !== 'USD' ? originalRate : undefined
         };
 
         setSiCart([...siCart, newItem]);
@@ -4444,10 +4452,51 @@ export const DataEntry: React.FC = () => {
                                                  </div>
                                              </div>
                                              <table className="w-full text-sm text-left border border-slate-200 rounded-lg overflow-hidden">
-                                                 <thead className="bg-slate-50 font-bold text-slate-600 border-b border-slate-200"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2 text-right">Qty</th><th className="px-4 py-2 text-right">Total Kg</th><th className="px-4 py-2 text-right">Rate (USD)</th><th className="px-4 py-2 text-right">Total (USD)</th><th className="px-4 py-2 text-center">Action</th></tr></thead>
+                                                 <thead className="bg-slate-50 font-bold text-slate-600 border-b border-slate-200">
+                                                     <tr>
+                                                         <th className="px-4 py-2">Item</th>
+                                                         <th className="px-4 py-2 text-right">Qty</th>
+                                                         <th className="px-4 py-2 text-right">Total Kg</th>
+                                                         <th className="px-4 py-2 text-right">Rate {siRateCurrency === 'customer' && siCurrency !== 'USD' ? `(${siCurrency})` : '(USD)'}</th>
+                                                         <th className="px-4 py-2 text-right">Total {siRateCurrency === 'customer' && siCurrency !== 'USD' ? `(${siCurrency})` : '(USD)'}</th>
+                                                         {siRateCurrency === 'customer' && siCurrency !== 'USD' && (
+                                                             <>
+                                                                 <th className="px-4 py-2 text-right text-xs text-slate-500">Rate (USD)</th>
+                                                                 <th className="px-4 py-2 text-right text-xs text-slate-500">Total (USD)</th>
+                                                             </>
+                                                         )}
+                                                         <th className="px-4 py-2 text-center">Action</th>
+                                                     </tr>
+                                                 </thead>
                                                  <tbody className="divide-y divide-slate-100">
-                                                     {siCart.map(item => ( <tr key={item.id} className="hover:bg-slate-50"><td className="px-4 py-2">{item.itemName}</td><td className="px-4 py-2 text-right">{item.qty}</td><td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td><td className="px-4 py-2 text-right">{(item.rate || 0).toFixed(2)}</td><td className="px-4 py-2 text-right font-bold">{(item.total || 0).toFixed(2)}</td><td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr> ))}
-                                                     {siCart.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 italic">No items added</td></tr>}
+                                                     {siCart.map(item => {
+                                                         const originalRate = item.originalEnteredRate || (item.exchangeRate && item.exchangeRate > 0 ? item.rate * item.exchangeRate : item.rate);
+                                                         const originalTotal = item.originalEnteredRate ? item.qty * item.originalEnteredRate : (item.exchangeRate && item.exchangeRate > 0 ? item.total * item.exchangeRate : item.total);
+                                                         const showOriginal = siRateCurrency === 'customer' && siCurrency !== 'USD' && (item.currency === siCurrency || item.originalEnteredRate);
+                                                         
+                                                         return (
+                                                             <tr key={item.id} className="hover:bg-slate-50">
+                                                                 <td className="px-4 py-2">{item.itemName}</td>
+                                                                 <td className="px-4 py-2 text-right">{item.qty}</td>
+                                                                 <td className="px-4 py-2 text-right text-slate-500">{item.totalKg}</td>
+                                                                 {showOriginal ? (
+                                                                     <>
+                                                                         <td className="px-4 py-2 text-right font-semibold">{originalRate.toFixed(2)}</td>
+                                                                         <td className="px-4 py-2 text-right font-bold">{originalTotal.toFixed(2)}</td>
+                                                                         <td className="px-4 py-2 text-right text-slate-400 text-xs">({(item.rate || 0).toFixed(2)})</td>
+                                                                         <td className="px-4 py-2 text-right text-slate-400 text-xs">({(item.total || 0).toFixed(2)})</td>
+                                                                     </>
+                                                                 ) : (
+                                                                     <>
+                                                                         <td className="px-4 py-2 text-right">{(item.rate || 0).toFixed(2)}</td>
+                                                                         <td className="px-4 py-2 text-right font-bold">{(item.total || 0).toFixed(2)}</td>
+                                                                     </>
+                                                                 )}
+                                                                 <td className="px-4 py-2 text-center"><button onClick={() => setSiCart(siCart.filter(x => x.id !== item.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td>
+                                                             </tr>
+                                                         );
+                                                     })}
+                                                     {siCart.length === 0 && <tr><td colSpan={siRateCurrency === 'customer' && siCurrency !== 'USD' ? 8 : 6} className="text-center py-4 text-slate-400 italic">No items added</td></tr>}
                                                  </tbody>
                                              </table>
                                         </div>

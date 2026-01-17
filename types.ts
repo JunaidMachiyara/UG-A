@@ -535,13 +535,16 @@ export interface SalesInvoiceItem {
     itemId: string;
     itemName: string;
     qty: number; // Units
-    rate: number; // Per Unit
-    total: number;
+    rate: number; // Per Unit (in USD for accounting)
+    total: number; // Total (in USD for accounting)
     totalKg: number;
     
     // Per-row currency override (Optional, defaults to Invoice Currency)
     currency?: Currency;
     exchangeRate?: number;
+    
+    // Store original entered rate/currency for display verification (when entered in customer currency)
+    originalEnteredRate?: number; // Original rate entered by user (in customer currency if applicable)
     
     // For Direct Sales: Link back to the original raw material batch
     originalPurchaseId?: string;
