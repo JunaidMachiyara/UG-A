@@ -5411,20 +5411,26 @@ export const DataEntry: React.FC = () => {
                                             <th className="px-3 py-2 text-left">Item</th>
                                             <th className="px-3 py-2 text-center">Qty</th>
                                             <th className="px-3 py-2 text-center">Kg</th>
-                                            <th className="px-3 py-2 text-right">Rate</th>
-                                            <th className="px-3 py-2 text-right">Total</th>
+                                            <th className="px-3 py-2 text-right">Rate ({siCurrency})</th>
+                                            <th className="px-3 py-2 text-right">Total ({siCurrency})</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                        {siCart.map((item, idx) => (
-                                            <tr key={idx}>
-                                                <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name}</td>
-                                                <td className="px-3 py-2 text-center">{item.qty || 0}</td>
-                                                <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
-                                                <td className="px-3 py-2 text-right font-mono">{(item.ratePerUnit || 0).toFixed(2)}</td>
-                                                <td className="px-3 py-2 text-right font-mono font-bold">{(item.total || 0).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
+                                        {siCart.map((item, idx) => {
+                                            // For display: show original entered rate/total if entered in customer currency, otherwise show USD
+                                            const displayRate = item.originalEnteredRate || item.rate || 0;
+                                            const displayTotal = item.originalEnteredRate ? (item.qty || 0) * item.originalEnteredRate : (item.total || 0);
+                                            
+                                            return (
+                                                <tr key={idx}>
+                                                    <td className="px-3 py-2">{state.items.find(i => i.id === item.itemId)?.name}</td>
+                                                    <td className="px-3 py-2 text-center">{item.qty || 0}</td>
+                                                    <td className="px-3 py-2 text-center">{item.totalKg || 0}</td>
+                                                    <td className="px-3 py-2 text-right font-mono">{displayRate.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 text-right font-mono font-bold">{displayTotal.toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
                                         {siCart.length > 0 && (
                                             <tr className="bg-slate-50 font-semibold">
                                                 <td className="px-3 py-2 text-right">Totals:</td>
@@ -5444,34 +5450,57 @@ export const DataEntry: React.FC = () => {
 
                             {/* Summary */}
                             <div className="bg-slate-50 p-4 rounded-lg">
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-slate-600">Gross Total</span>
-                                        <span className="font-mono font-bold">{siCurrency} {siCart.reduce((s, i) => s + (i.total || 0), 0).toFixed(2)}</span>
-                                    </div>
-                                    {parseFloat(siDiscount || '0') > 0 && (
-                                        <div className="flex justify-between text-sm text-red-600">
-                                            <span>Discount</span>
-                                            <span className="font-mono">-{parseFloat(siDiscount || '0').toFixed(2)}</span>
+                                {(() => {
+                                    // Calculate all totals in USD first (for accounting)
+                                    const grossTotalUSD = siCart.reduce((s, i) => s + (i.total || 0), 0);
+                                    const discountUSD = parseFloat(siDiscount || '0');
+                                    const surchargeUSD = parseFloat(siSurcharge || '0');
+                                    // Additional costs: convert each cost to USD, then sum
+                                    // If cost currency is USD, amount is already USD. Otherwise, amount / exchangeRate = USD
+                                    const additionalCostsUSD = siCosts.reduce((s, c) => {
+                                        const costUSD = c.currency === 'USD' ? (c.amount || 0) : (c.amount || 0) / (c.exchangeRate || 1);
+                                        return s + costUSD;
+                                    }, 0);
+                                    const netTotalUSD = grossTotalUSD - discountUSD + surchargeUSD + additionalCostsUSD;
+                                    
+                                    // Convert to customer currency for display verification
+                                    const grossTotalFCY = siCurrency !== 'USD' ? grossTotalUSD * siExchangeRate : grossTotalUSD;
+                                    const discountFCY = siCurrency !== 'USD' ? discountUSD * siExchangeRate : discountUSD;
+                                    const surchargeFCY = siCurrency !== 'USD' ? surchargeUSD * siExchangeRate : surchargeUSD;
+                                    const additionalCostsFCY = siCurrency !== 'USD' ? additionalCostsUSD * siExchangeRate : additionalCostsUSD;
+                                    const netTotalFCY = siCurrency !== 'USD' ? netTotalUSD * siExchangeRate : netTotalUSD;
+                                    
+                                    return (
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-slate-600">Gross Total</span>
+                                                <span className="font-mono font-bold">{siCurrency} {grossTotalFCY.toFixed(2)}</span>
+                                            </div>
+                                            {discountFCY > 0 && (
+                                                <div className="flex justify-between text-sm text-red-600">
+                                                    <span>Discount</span>
+                                                    <span className="font-mono">-{discountFCY.toFixed(2)}</span>
+                                                </div>
+                                            )}
+                                            {surchargeFCY > 0 && (
+                                                <div className="flex justify-between text-sm text-emerald-600">
+                                                    <span>Surcharge</span>
+                                                    <span className="font-mono">+{surchargeFCY.toFixed(2)}</span>
+                                                </div>
+                                            )}
+                                            {siCosts.length > 0 && (
+                                                <div className="flex justify-between text-sm text-blue-600">
+                                                    <span>Additional Costs</span>
+                                                    <span className="font-mono">+{additionalCostsFCY.toFixed(2)}</span>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
+                                                <span>Net Total</span>
+                                                <span className="font-mono">{siCurrency} {netTotalFCY.toFixed(2)}</span>
+                                            </div>
                                         </div>
-                                    )}
-                                    {parseFloat(siSurcharge || '0') > 0 && (
-                                        <div className="flex justify-between text-sm text-emerald-600">
-                                            <span>Surcharge</span>
-                                            <span className="font-mono">+{parseFloat(siSurcharge || '0').toFixed(2)}</span>
-                                        </div>
-                                    )}
-                                    {siCosts.length > 0 && (
-                                        <div className="flex justify-between text-sm text-blue-600">
-                                            <span>Additional Costs</span>
-                                            <span className="font-mono">+{siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0).toFixed(2)}</span>
-                                        </div>
-                                    )}
-                                    <div className="flex justify-between text-lg font-bold text-slate-800 pt-2 border-t border-slate-300">
-                                        <span>Net Total</span>
-                                        <span className="font-mono">{siCurrency} {(siCart.reduce((s, i) => s + (i.total || 0), 0) - parseFloat(siDiscount || '0') + parseFloat(siSurcharge || '0') + siCosts.reduce((s, c) => s + ((c.amount || 0) * ((c.exchangeRate || 1) / (siExchangeRate || 1))), 0)).toFixed(2)}</span>
-                                    </div>
-                                </div>
+                                    );
+                                })()}
                             </div>
                         </div>
 
