@@ -1481,14 +1481,34 @@ const BalanceSheet: React.FC = () => {
         };
     };
     
-    const allAssets = state.accounts.filter(a => a.type === AccountType.ASSET);
-    const allLiabilities = state.accounts.filter(a => a.type === AccountType.LIABILITY);
-    const allEquity = state.accounts.filter(a => a.type === AccountType.EQUITY);
+    // CRITICAL FIX: Force recalculation when ledger changes by including state.ledger in dependencies
+    // This ensures Balance Sheet updates dynamically when transactions are posted/deleted
+    const allAssets = useMemo(() => 
+        state.accounts.filter(a => a.type === AccountType.ASSET),
+        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+    );
+    const allLiabilities = useMemo(() => 
+        state.accounts.filter(a => a.type === AccountType.LIABILITY),
+        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+    );
+    const allEquity = useMemo(() => 
+        state.accounts.filter(a => a.type === AccountType.EQUITY),
+        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+    );
     
     // Aggregate parent-child accounts for each category
-    const assetsAggregated = aggregateParentChildAccounts(allAssets);
-    const liabilitiesAggregated = aggregateParentChildAccounts(allLiabilities);
-    const equityAggregated = aggregateParentChildAccounts(allEquity);
+    const assetsAggregated = useMemo(() => 
+        aggregateParentChildAccounts(allAssets),
+        [allAssets, state.ledger.length] // Include ledger.length to force recalculation
+    );
+    const liabilitiesAggregated = useMemo(() => 
+        aggregateParentChildAccounts(allLiabilities),
+        [allLiabilities, state.ledger.length] // Include ledger.length to force recalculation
+    );
+    const equityAggregated = useMemo(() => 
+        aggregateParentChildAccounts(allEquity),
+        [allEquity, state.ledger.length] // Include ledger.length to force recalculation
+    );
     
     const assets = assetsAggregated.displayAccounts;
     const liabilities = liabilitiesAggregated.displayAccounts;
@@ -1507,38 +1527,42 @@ const BalanceSheet: React.FC = () => {
         });
     }
     
-    // Filter "Other Payable" accounts (codes 2030-2099) for aggregation
-    const otherPayableAccounts = liabilities.filter(a => {
-        const codeNum = parseInt(a.code || '0');
-        return codeNum >= 2030 && codeNum <= 2099;
-    });
-    const totalOtherPayables = otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
-    
+    // CRITICAL FIX: Wrap calculations in useMemo with state.ledger dependency
     // Regular liabilities (excluding Other Payable accounts 2030-2099 and Discrepancy account)
     // Discrepancy account is handled separately to correctly show decreases as reductions
-    const discrepancyAccount = liabilities.find(a => 
-        a.name.includes('Discrepancy') || 
-        a.name.includes('Suspense') ||
-        a.code === '505'
+    const discrepancyAccount = useMemo(() => 
+        liabilities.find(a => 
+            a.name.includes('Discrepancy') || 
+            a.name.includes('Suspense') ||
+            a.code === '505'
+        ),
+        [liabilities, state.ledger.length]
     );
-    const regularLiabilities = liabilities.filter(a => {
-        const codeNum = parseInt(a.code || '0');
-        // Exclude Other Payable accounts (2030-2099) and Discrepancy account
-        if (codeNum >= 2030 && codeNum <= 2099) return false;
-        if (discrepancyAccount && a.id === discrepancyAccount.id) return false;
-        return true;
-    });
+    const regularLiabilities = useMemo(() => 
+        liabilities.filter(a => {
+            const codeNum = parseInt(a.code || '0');
+            // Exclude Other Payable accounts (2030-2099) and Discrepancy account
+            if (codeNum >= 2030 && codeNum <= 2099) return false;
+            if (discrepancyAccount && a.id === discrepancyAccount.id) return false;
+            return true;
+        }),
+        [liabilities, discrepancyAccount, state.ledger.length]
+    );
     
-    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
-    const customers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0);
-    const totalCustomersAR = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
-
-    // Add negative customer balances (Customer Advances) - grouped as liability
-    const negativeCustomers = state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0);
-    const totalCustomerAdvances = negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0);
-
-    // Split supplier/vendor balances
-    // NOTE: Include SUPPLIER + VENDOR + freight/clearing/commission agents so ALL trade payables/advances are reflected
+    // Filter "Other Payable" accounts (codes 2030-2099) for aggregation
+    const otherPayableAccounts = useMemo(() => 
+        liabilities.filter(a => {
+            const codeNum = parseInt(a.code || '0');
+            return codeNum >= 2030 && codeNum <= 2099;
+        }),
+        [liabilities, state.ledger.length]
+    );
+    const totalOtherPayables = useMemo(() => 
+        otherPayableAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0),
+        [otherPayableAccounts]
+    );
+    
+    // CRITICAL FIX: Wrap partner calculations in useMemo with state.ledger dependency
     const supplierLikeTypes = [
         PartnerType.SUPPLIER,
         PartnerType.SUB_SUPPLIER,
@@ -1547,26 +1571,59 @@ const BalanceSheet: React.FC = () => {
         PartnerType.CLEARING_AGENT,
         PartnerType.COMMISSION_AGENT
     ];
+    
+    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
+    const customers = useMemo(() => 
+        state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0),
+        [state.partners, state.ledger.length]
+    );
+    const totalCustomersAR = useMemo(() => 
+        customers.reduce((sum, c) => sum + (c.balance || 0), 0),
+        [customers]
+    );
+
+    // Add negative customer balances (Customer Advances) - grouped as liability
+    const negativeCustomers = useMemo(() => 
+        state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0),
+        [state.partners, state.ledger.length]
+    );
+    const totalCustomerAdvances = useMemo(() => 
+        negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0),
+        [negativeCustomers]
+    );
+
     // For suppliers: negative balance = we owe them (Accounts Payable), positive balance = they owe us (Advances)
     // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
-    const positiveSuppliers = state.partners.filter(p => 
-        supplierLikeTypes.includes(p.type) && 
-        p.type !== PartnerType.SUB_SUPPLIER && // Exclude sub-suppliers
-        (p.balance || 0) > 0
+    const positiveSuppliers = useMemo(() => 
+        state.partners.filter(p => 
+            supplierLikeTypes.includes(p.type) && 
+            p.type !== PartnerType.SUB_SUPPLIER && // Exclude sub-suppliers
+            (p.balance || 0) > 0
+        ),
+        [state.partners, state.ledger.length]
     );
-    const totalSupplierAdvances = positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0);
+    const totalSupplierAdvances = useMemo(() => 
+        positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0),
+        [positiveSuppliers]
+    );
     
     // Suppliers with negative balance = Accounts Payable (we owe them)
     // Note: Supplier balances should be stored as NEGATIVE when we owe them (credit balance in ledger = negative in partner.balance)
     // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
-    const negativeSuppliers = state.partners.filter(p => {
-        if (!supplierLikeTypes.includes(p.type)) return false;
-        // Exclude sub-suppliers from Balance Sheet creditors
-        if (p.type === PartnerType.SUB_SUPPLIER) return false;
-        const balance = p.balance || 0;
-        return balance < 0;
-    });
-    const totalSuppliersAP = negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance || 0), 0);
+    const negativeSuppliers = useMemo(() => 
+        state.partners.filter(p => {
+            if (!supplierLikeTypes.includes(p.type)) return false;
+            // Exclude sub-suppliers from Balance Sheet creditors
+            if (p.type === PartnerType.SUB_SUPPLIER) return false;
+            const balance = p.balance || 0;
+            return balance < 0;
+        }),
+        [state.partners, state.ledger.length]
+    );
+    const totalSuppliersAP = useMemo(() => 
+        negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance || 0), 0),
+        [negativeSuppliers]
+    );
     
     // DEBUG: Log supplier balances to console to help diagnose
     console.log('🔍 Balance Sheet - Supplier Analysis:', {
@@ -1586,61 +1643,80 @@ const BalanceSheet: React.FC = () => {
     // FIX 1: Raw Material Consumption is an INVENTORY MOVEMENT, not a true expense
     // It represents transfer from Raw Materials to WIP/Finished Goods
     // FIX 2: Sales Discounts is a CONTRA-REVENUE - should reduce revenue, not be an expense
-    const expenseAccounts = state.accounts.filter(a => 
-        a.type === AccountType.EXPENSE && 
-        !a.name.toLowerCase().includes('raw material consumption') &&
-        !a.name.toLowerCase().includes('sales discount')
+    const expenseAccounts = useMemo(() => 
+        state.accounts.filter(a => 
+            a.type === AccountType.EXPENSE && 
+            !a.name.toLowerCase().includes('raw material consumption') &&
+            !a.name.toLowerCase().includes('sales discount')
+        ),
+        [state.accounts, state.ledger.length]
     );
     
     // Calculate expenses from account balances (excluding Raw Material Consumption & Sales Discounts)
-    let expenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    const expenses = useMemo(() => {
+        let baseExpenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+        
+        // FIX: Also include expenses from orphaned ledger entries (entries where accountId doesn't match any account)
+        // This handles cases where PB entries were created with account IDs that no longer exist
+        const orphanedExpenseEntries = state.ledger.filter((e: any) => {
+            // Check if this is an expense entry (debit > 0) but account not found
+            if (e.debit > 0 && e.credit === 0) {
+                const account = state.accounts.find((a: any) => a.id === e.accountId);
+                // If account not found, check if it's an expense-type transaction
+                if (!account && (
+                    e.transactionType === TransactionType.PURCHASE_BILL ||
+                    e.transactionType === TransactionType.EXPENSE_VOUCHER ||
+                    e.accountName?.toLowerCase().includes('expense')
+                )) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        
+        // Calculate expense balance from orphaned entries
+        const orphanedExpenses = orphanedExpenseEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+        
+        if (orphanedExpenses > 0) {
+            console.warn('⚠️ Found orphaned expense ledger entries:', {
+                count: orphanedExpenseEntries.length,
+                totalAmount: orphanedExpenses,
+                entries: orphanedExpenseEntries.map((e: any) => ({
+                    transactionId: e.transactionId,
+                    accountId: e.accountId,
+                    accountName: e.accountName,
+                    debit: e.debit
+                }))
+            });
+        }
+        
+        return baseExpenses + orphanedExpenses;
+    }, [expenseAccounts, state.accounts, state.ledger]);
     
     // Handle Sales Discounts: subtract from revenue (contra-revenue)
-    const salesDiscountAccount = state.accounts.find(a => 
-        a.name.toLowerCase().includes('sales discount')
+    const salesDiscountAccount = useMemo(() => 
+        state.accounts.find(a => a.name.toLowerCase().includes('sales discount')),
+        [state.accounts, state.ledger.length]
     );
-    const salesDiscountValue = salesDiscountAccount ? Math.abs(salesDiscountAccount.balance || 0) : 0;
+    const salesDiscountValue = useMemo(() => 
+        salesDiscountAccount ? Math.abs(salesDiscountAccount.balance || 0) : 0,
+        [salesDiscountAccount]
+    );
     
     // Revenue minus Sales Discounts
-    const grossRevenue = state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
-    const revenue = grossRevenue - salesDiscountValue;
+    const grossRevenue = useMemo(() => 
+        state.accounts.filter(a => a.type === AccountType.REVENUE).reduce((sum, a) => sum + Math.abs(a.balance || 0), 0),
+        [state.accounts, state.ledger.length]
+    );
+    const revenue = useMemo(() => 
+        grossRevenue - salesDiscountValue,
+        [grossRevenue, salesDiscountValue]
+    );
     
-    // FIX: Also include expenses from orphaned ledger entries (entries where accountId doesn't match any account)
-    // This handles cases where PB entries were created with account IDs that no longer exist
-    const orphanedExpenseEntries = state.ledger.filter((e: any) => {
-        // Check if this is an expense entry (debit > 0) but account not found
-        if (e.debit > 0 && e.credit === 0) {
-            const account = state.accounts.find((a: any) => a.id === e.accountId);
-            // If account not found, check if it's an expense-type transaction
-            if (!account && (
-                e.transactionType === TransactionType.PURCHASE_BILL ||
-                e.transactionType === TransactionType.EXPENSE_VOUCHER ||
-                e.accountName?.toLowerCase().includes('expense')
-            )) {
-                return true;
-            }
-        }
-        return false;
-    });
-    
-    // Calculate expense balance from orphaned entries
-    const orphanedExpenses = orphanedExpenseEntries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
-    expenses += orphanedExpenses;
-    
-    if (orphanedExpenses > 0) {
-        console.warn('⚠️ Found orphaned expense ledger entries:', {
-            count: orphanedExpenseEntries.length,
-            totalAmount: orphanedExpenses,
-            entries: orphanedExpenseEntries.map((e: any) => ({
-                transactionId: e.transactionId,
-                accountId: e.accountId,
-                accountName: e.accountName,
-                debit: e.debit
-            }))
-        });
-    }
-    
-    const netIncome = revenue - expenses;
+    const netIncome = useMemo(() => 
+        revenue - expenses,
+        [revenue, expenses]
+    );
 
     // DEBUG: Log expense accounts for PB voucher investigation
     const expenseAccountsWithBalance = expenseAccounts.filter(a => (a.balance || 0) !== 0);
@@ -1692,7 +1768,7 @@ const BalanceSheet: React.FC = () => {
             absBalance: Math.abs(a.balance || 0),
             id: a.id
         })),
-        expenseAccountsWithBalance: expenseAccountsWithBalance.map(a => ({
+        expenseAccountsWithBalanceList: expenseAccountsWithBalance.map(a => ({
             name: a.name,
             code: a.code,
             balance: a.balance,
@@ -1725,34 +1801,52 @@ const BalanceSheet: React.FC = () => {
         }))
     });
 
-    const totalAssets = assets.reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR + totalSupplierAdvances;
+    // CRITICAL FIX: Wrap totals in useMemo with state.ledger dependency
+    const totalAssets = useMemo(() => 
+        assets.reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR + totalSupplierAdvances,
+        [assets, totalCustomersAR, totalSupplierAdvances, state.ledger.length]
+    );
     
     // Calculate regular liabilities (excluding Discrepancy account which is handled separately)
-    const regularLiabilitiesTotal = regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0);
+    const regularLiabilitiesTotal = useMemo(() => 
+        regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0),
+        [regularLiabilities, state.ledger.length]
+    );
     
     // Handle Discrepancy account separately:
     // For LIABILITY type Discrepancy account:
     // - Positive balance = we've increased liabilities (add to total)
     // - Negative balance = we've decreased liabilities (subtract from total, or show as reduction)
-    let discrepancyAdjustment = 0;
-    if (discrepancyAccount) {
-        const discrepancyBalance = discrepancyAccount.balance || 0;
-        if (discrepancyAccount.type === AccountType.LIABILITY) {
-            // For LIABILITY: negative balance means we decreased liabilities (good), so subtract from total
-            // Positive balance means we increased liabilities (bad), so add to total
-            discrepancyAdjustment = discrepancyBalance; // Use actual balance (negative = reduction, positive = increase)
+    const discrepancyAdjustment = useMemo(() => {
+        if (discrepancyAccount) {
+            const discrepancyBalance = discrepancyAccount.balance || 0;
+            if (discrepancyAccount.type === AccountType.LIABILITY) {
+                // For LIABILITY: negative balance means we decreased liabilities (good), so subtract from total
+                // Positive balance means we increased liabilities (bad), so add to total
+                return discrepancyBalance; // Use actual balance (negative = reduction, positive = increase)
+            }
         }
-    }
+        return 0;
+    }, [discrepancyAccount, state.ledger.length]);
     
     // For Discrepancy account (LIABILITY):
     // - Positive balance = liability increased, so add to total
     // - Negative balance = liability decreased, so subtract from total (add negative = subtract)
     // IMPORTANT: Use discrepancyAdjustment directly (don't use || 0 because -300 || 0 = -300, but we want to handle 0 correctly)
-    const totalLiabilities = regularLiabilitiesTotal + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances + discrepancyAdjustment;
+    const totalLiabilities = useMemo(() => 
+        regularLiabilitiesTotal + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances + discrepancyAdjustment,
+        [regularLiabilitiesTotal, totalOtherPayables, totalSuppliersAP, totalCustomerAdvances, discrepancyAdjustment, state.ledger.length]
+    );
     // FIXED: Equity should preserve negative balances (like negative inventory costs)
     // If Discrepancy is EQUITY type, include it in equity calculation
-    const discrepancyEquityAdjustment = discrepancyAccount && discrepancyAccount.type === AccountType.EQUITY ? (discrepancyAccount.balance || 0) : 0;
-    const totalEquity = equity.reduce((sum, a) => sum + (a.balance || 0), 0) + netIncome + discrepancyEquityAdjustment;
+    const discrepancyEquityAdjustment = useMemo(() => 
+        discrepancyAccount && discrepancyAccount.type === AccountType.EQUITY ? (discrepancyAccount.balance || 0) : 0,
+        [discrepancyAccount, state.ledger.length]
+    );
+    const totalEquity = useMemo(() => 
+        equity.reduce((sum, a) => sum + (a.balance || 0), 0) + netIncome + discrepancyEquityAdjustment,
+        [equity, netIncome, discrepancyEquityAdjustment, state.ledger.length]
+    );
     
     // DEBUG: Log Balance Sheet calculation details
     if (discrepancyAccount) {

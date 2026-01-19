@@ -155,6 +155,37 @@ export const Accounting: React.FC = () => {
     const [filterVoucherId, setFilterVoucherId] = useState('');
     const [filterMinAmount, setFilterMinAmount] = useState('');
     const [filterMaxAmount, setFilterMaxAmount] = useState('');
+    const [ledgerVisibleCount, setLedgerVisibleCount] = useState<number>(200);
+    
+    // PERFORMANCE: Debounce ledger filters so typing/clicking doesn't re-filter 10k+ rows on every change
+    const [debouncedLedgerFilters, setDebouncedLedgerFilters] = useState({
+        filterDateFrom: '',
+        filterDateTo: '',
+        filterType: '',
+        filterAccountId: '',
+        filterVoucherId: '',
+        filterMinAmount: '',
+        filterMaxAmount: ''
+    });
+    
+    useEffect(() => {
+        // Reset pagination whenever filters change
+        setLedgerVisibleCount(200);
+        
+        const handle = setTimeout(() => {
+            setDebouncedLedgerFilters({
+                filterDateFrom,
+                filterDateTo,
+                filterType,
+                filterAccountId,
+                filterVoucherId,
+                filterMinAmount,
+                filterMaxAmount
+            });
+        }, 250);
+        
+        return () => clearTimeout(handle);
+    }, [filterDateFrom, filterDateTo, filterType, filterAccountId, filterVoucherId, filterMinAmount, filterMaxAmount]);
     
     // Ledger table sorting state
     const [ledgerSortColumn, setLedgerSortColumn] = useState<string>('date');
@@ -169,6 +200,10 @@ export const Accounting: React.FC = () => {
     // --- Edit Mode State (to prevent data loss) ---
     const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
     const [originalEntries, setOriginalEntries] = useState<LedgerEntry[]>([]);
+    
+    // Loading and Progress States
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [processingMessage, setProcessingMessage] = useState('');
 
     // --- Computed Options ---
     const cashBankAccounts = useMemo(() => 
@@ -189,18 +224,20 @@ export const Accounting: React.FC = () => {
         return [...accounts, ...partners];
     }, [state.accounts, state.partners]);
 
+    // PERFORMANCE: Building voucher list can be expensive on large ledgers.
+    // Only compute when user is on General Ledger tab.
     const uniqueVouchers = useMemo(() => {
-        // Get unique voucher IDs from ledger
+        if (activeTab !== 'ledger') return [];
         return Array.from(new Set(state.ledger.map(e => e.transactionId)))
-            .map(tid => ({
-                id: tid,
-                name: tid
-            }))
+            .map(tid => ({ id: tid, name: tid }))
             .sort((a, b) => a.name.localeCompare(b.name));
-    }, [state.ledger]);
+    }, [activeTab, state.ledger]);
 
-    // Calculate original stock data for IAO
+    // PERFORMANCE: Original Stock Data parsing is heavy (and very noisy in console).
+    // It should only run when needed (Original Stock Adjustment / Stock Alignment screens).
     const originalStockData = useMemo(() => {
+        const needsOriginalStockData = activeTab === 'stock-alignment' || vType === 'IAO' || vType === 'MJV';
+        if (!needsOriginalStockData) return [];
         const summary = new Map<string, {
             key: string;
             originalTypeId: string;
@@ -864,7 +901,7 @@ export const Accounting: React.FC = () => {
         // Don't filter by weight > 0 because adjustments may have reduced weight to 0 or negative
         return Array.from(summary.values())
             .sort((a, b) => b.weightInHand - a.weightInHand);
-    }, [state.purchases, state.originalOpenings, state.salesInvoices, state.partners, state.originalTypes, state.originalProducts, state.ledger]);
+    }, [activeTab, vType, state.purchases, state.originalOpenings, state.salesInvoices, state.partners, state.originalTypes, state.originalProducts, state.ledger]);
 
     const payees = useMemo(() => {
         // PV: Used for Suppliers, Vendors, Employees, OR paying off Liability/Equity (Drawings)
@@ -899,9 +936,10 @@ export const Accounting: React.FC = () => {
     }, [state.ledger]);
 
     // --- Form Reset Logic ---
-    const resetForm = (type: VoucherType) => {
+    const resetForm = (type: VoucherType, preCalculatedVoucherNo?: string) => {
         setVType(type);
-        setVoucherNo(generateVoucherId(type));
+        // Use pre-calculated voucher number if provided, otherwise generate new one
+        setVoucherNo(preCalculatedVoucherNo || generateVoucherId(type));
         // Reset new transaction type states
         setIaItemAdjustments({});
         setIaTargets({});
@@ -977,6 +1015,12 @@ export const Accounting: React.FC = () => {
 
     // --- Actions ---
     const handleSave = async () => {
+        // Prevent double-clicks and concurrent processing
+        if (isProcessing) {
+            console.warn('⚠️ Save operation already in progress. Please wait...');
+            return;
+        }
+        
         if (!date) return alert("Date is required");
         
         // Variable to store item stock update function for IA vouchers
@@ -989,16 +1033,65 @@ export const Accounting: React.FC = () => {
         if (vType === 'TR' && (!fromAmount || !toAmount)) return alert("Both Send and Receive amounts are required");
         if (vType !== 'JV' && vType !== 'IA' && vType !== 'IAO' && vType !== 'RTS' && vType !== 'WO' && vType !== 'BD' && !description) return alert("Description is required");
         
+        // CRITICAL: Preserve voucher number when editing - DO NOT regenerate
+        // Store the original transaction ID and voucher number before any processing
+        const isEditing = !!editingTransactionId;
+        const originalTransactionId = editingTransactionId;
+        const originalVoucherNo = voucherNo; // Preserve the voucher number from edit mode
+        
         // If we're editing, delete the old transaction FIRST (before creating new one)
         // This ensures we don't lose data if save fails
-        const transactionIdToDelete = editingTransactionId;
-        if (transactionIdToDelete) {
+        if (originalTransactionId) {
             try {
-                await deleteTransaction(transactionIdToDelete, 'Edit Reversal', authPin);
-                // Clear edit state after successful deletion
-                setEditingTransactionId(null);
-                setOriginalEntries([]);
+                setIsProcessing(true);
+                setProcessingMessage('🔄 Deleting old transaction...');
+                
+                console.log(`🔄 Editing transaction: ${originalTransactionId}, preserving voucher number: ${originalVoucherNo}`);
+                await deleteTransaction(originalTransactionId, 'Edit Reversal', authPin);
+                
+                setProcessingMessage('⏳ Verifying deletion...');
+                // CRITICAL: Wait a moment for Firestore to sync the deletion
+                // This prevents race conditions where new entries are posted before old ones are deleted
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Verify deletion by checking Firebase directly (not state, which may be stale)
+                const ledgerQuery = query(
+                    collection(db, 'ledger'), 
+                    where('transactionId', '==', originalTransactionId),
+                    where('factoryId', '==', state.currentFactory?.id || '')
+                );
+                const ledgerSnapshot = await getDocs(ledgerQuery);
+                
+                if (!ledgerSnapshot.empty) {
+                    console.warn(`⚠️ Warning: ${ledgerSnapshot.size} entries still exist in Firebase after deletion. Retrying...`);
+                    setProcessingMessage('🔄 Retrying deletion...');
+                    // Retry deletion
+                    await deleteTransaction(originalTransactionId, 'Edit Reversal (Retry)', authPin);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Verify again after retry
+                    const retrySnapshot = await getDocs(ledgerQuery);
+                    if (!retrySnapshot.empty) {
+                        setIsProcessing(false);
+                        setProcessingMessage('');
+                        throw new Error(`Failed to delete ${retrySnapshot.size} existing entries for transaction ${originalTransactionId}. Please delete them manually before editing.`);
+                    }
+                }
+                
+                console.log(`✅ Old transaction deleted successfully: ${originalTransactionId}`);
+                setProcessingMessage('⏳ Syncing balances...');
+                
+                // CRITICAL: Wait longer for Firebase balance updates and listeners to complete
+                // This ensures balances are fully synced and all Firebase listeners have processed before posting new entries
+                // Increased from 300ms to 800ms to handle multiple Firebase listener updates
+                await new Promise(resolve => setTimeout(resolve, 800));
+                
+                // CRITICAL: Keep editingTransactionId set until AFTER new entries are posted
+                // This prevents race conditions and ensures we can verify deletion
             } catch (error) {
+                setIsProcessing(false);
+                setProcessingMessage('');
+                console.error('❌ Failed to delete original transaction:', error);
                 alert('Failed to delete original transaction. Edit cancelled.');
                 return;
             }
@@ -2118,7 +2211,7 @@ export const Accounting: React.FC = () => {
                     
                     if (isNegativeBalance) {
                         // Negative balance: Debit to increase (make more negative, away from zero)
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                         console.log(`⚠️ BD Entry: Liability account has negative balance (${currentBalance}). Using DEBIT to increase (make more negative).`);
                     } else {
                         // Positive balance: Credit to increase (make more positive, away from zero)
@@ -2144,8 +2237,8 @@ export const Accounting: React.FC = () => {
                         // Fallback: Use Discrepancy account
                         if (isEquityAccount) {
                             if (isNegativeBalance) {
-                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
-                            } else {
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+            } else {
                                 entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Increase: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                             }
                         } else {
@@ -2193,7 +2286,7 @@ export const Accounting: React.FC = () => {
                     
                     if (isNegativeBalance) {
                         // Negative balance: Credit to decrease (make less negative, toward zero)
-                        entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: bdAccountId, accountName: entityName, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                         console.log(`⚠️ BD Entry: Liability account has negative balance (${currentBalance}). Using CREDIT to decrease (make less negative).`);
                     } else {
                         // Positive balance: Debit to decrease (make less positive, toward zero)
@@ -2220,7 +2313,7 @@ export const Accounting: React.FC = () => {
                         // Fallback: Use Discrepancy account
                         if (isEquityAccount) {
                             if (isNegativeBalance) {
-                                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
+                entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: baseAmount, credit: 0, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                             } else {
                                 entries.push({ date: bdDate, transactionId: voucherNo, transactionType: TransactionType.BALANCING_DISCREPANCY, accountId: discrepancyAccount.id, accountName: discrepancyAccount.name, currency, exchangeRate, fcyAmount, debit: 0, credit: baseAmount, narration: `Balance Decrease: ${entityName} - ${bdReason}`, factoryId: state.currentFactory?.id || '' });
                             }
@@ -2291,49 +2384,8 @@ export const Accounting: React.FC = () => {
             }
         }
 
-        // If we're editing, delete the old transaction FIRST (before creating new one)
-        // This ensures we don't lose data if save fails
-        if (editingTransactionId) {
-            try {
-                console.log(`🗑️ Deleting old transaction before edit: ${editingTransactionId}`);
-                await deleteTransaction(editingTransactionId, 'Edit Reversal', authPin);
-                
-                // CRITICAL: Wait a moment for Firestore to sync the deletion
-                // This prevents race conditions where new entries are posted before old ones are deleted
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Verify deletion by checking Firebase directly (not state, which may be stale)
-                const ledgerQuery = query(
-                    collection(db, 'ledger'), 
-                    where('transactionId', '==', editingTransactionId),
-                    where('factoryId', '==', state.currentFactory?.id || '')
-                );
-                const ledgerSnapshot = await getDocs(ledgerQuery);
-                
-                if (!ledgerSnapshot.empty) {
-                    console.warn(`⚠️ Warning: ${ledgerSnapshot.size} entries still exist in Firebase after deletion. Retrying...`);
-                    // Retry deletion
-                    await deleteTransaction(editingTransactionId, 'Edit Reversal (Retry)', authPin);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    
-                    // Verify again after retry
-                    const retrySnapshot = await getDocs(ledgerQuery);
-                    if (!retrySnapshot.empty) {
-                        throw new Error(`Failed to delete ${retrySnapshot.size} existing entries for transaction ${editingTransactionId}. Please delete them manually before editing.`);
-                    }
-                }
-                
-                console.log(`✅ Old transaction deleted successfully: ${editingTransactionId}`);
-                
-                // Clear edit state after successful deletion
-                setEditingTransactionId(null);
-                setOriginalEntries([]);
-            } catch (error) {
-                console.error('❌ Failed to delete original transaction:', error);
-                alert('Failed to delete original transaction. Edit cancelled. Please try again or delete the transaction manually.');
-                return;
-            }
-        }
+        // NOTE: Old transaction deletion is handled at the beginning of handleSave (lines 992-1005)
+        // This duplicate check has been removed to prevent confusion and ensure voucher number is preserved
 
         // Log entries before posting to verify account IDs (for IA vouchers)
         if (vType === 'IA' && inventoryAccount && adjustmentAccount) {
@@ -2400,9 +2452,29 @@ export const Accounting: React.FC = () => {
             });
         }
 
+        if (!isProcessing) {
+            setIsProcessing(true);
+        }
+        setProcessingMessage('📤 Posting new transaction...');
+        
         await postTransaction(entries);
             console.log('✅ Transaction posted successfully:', voucherNo);
+            
+            setProcessingMessage('⏳ Syncing balances...');
+            // CRITICAL: Wait longer for balance updates to complete in Firebase
+            // This ensures balances are fully synced and all Firebase listeners have processed
+            // Increased from 300ms to 800ms to handle multiple Firebase listener updates during edit
+            await new Promise(resolve => setTimeout(resolve, 800));
+            
+            if (isEditing) {
+                console.log(`✅ Edit complete: Old transaction ${originalTransactionId} deleted, new transaction ${voucherNo} posted with balances synced`);
+            }
+            
+            setIsProcessing(false);
+            setProcessingMessage('');
         } catch (error: any) {
+            setIsProcessing(false);
+            setProcessingMessage('');
             console.error('❌ Error posting transaction:', error);
             alert(`Failed to post transaction: ${error?.message || error}`);
             return;
@@ -2413,7 +2485,14 @@ export const Accounting: React.FC = () => {
             await pendingItemUpdates();
         }
         
-        const wasEditing = !!transactionIdToDelete;
+        // CRITICAL: Clear edit state AFTER successful posting
+        // This ensures the voucher number is preserved during the entire edit process
+        const wasEditing = !!originalTransactionId;
+        if (originalTransactionId) {
+            console.log(`✅ Edit complete: Transaction ${originalTransactionId} replaced with voucher ${voucherNo}`);
+            setEditingTransactionId(null);
+            setOriginalEntries([]);
+        }
         
         // For IA vouchers, add reminder about Balance Sheet
         if (vType === 'IA') {
@@ -2439,14 +2518,34 @@ export const Accounting: React.FC = () => {
         alert(`${voucherNo} Posted Successfully!${wasEditing ? ' (Original entry replaced)' : ''}`);
         }
         
-        // Clear edit state if it was set (should already be cleared, but just in case)
-        if (editingTransactionId) {
-            setEditingTransactionId(null);
-            setOriginalEntries([]);
+        // CRITICAL: Generate next voucher number BEFORE resetting form
+        // This ensures consecutive saves get unique numbers even if state.ledger hasn't updated yet
+        // Parse the current voucher number and increment it directly
+        const prefix = vType + '-';
+        let nextVoucherNo: string;
+        
+        if (voucherNo && voucherNo.startsWith(prefix)) {
+            // Extract number from current voucher (e.g., "JV-1001" -> 1001)
+            const currentNum = parseInt(voucherNo.replace(prefix, ''));
+            if (!isNaN(currentNum)) {
+                // Increment directly from the voucher that was just posted
+                nextVoucherNo = `${prefix}${currentNum + 1}`;
+                console.log(`🔄 Generated next voucher number: ${nextVoucherNo} (from ${voucherNo})`);
+            } else {
+                // Fallback to generateVoucherId if parsing fails
+                nextVoucherNo = generateVoucherId(vType);
+            }
+        } else {
+            // Fallback to generateVoucherId if voucherNo doesn't match pattern
+            nextVoucherNo = generateVoucherId(vType);
         }
         
-        // Reset for next entry
-        resetForm(vType);
+        // Reset form with the pre-calculated voucher number
+        resetForm(vType, nextVoucherNo);
+        
+        // Ensure processing state is cleared (safety check)
+        setIsProcessing(false);
+        setProcessingMessage('');
     };
 
     // JV Helpers
@@ -2502,20 +2601,20 @@ export const Accounting: React.FC = () => {
     // --- Ledger Logic ---
     // PERFORMANCE: Pre-convert date filters to timestamps for faster comparison
     const filterDateFromTimestamp = useMemo(() => 
-        filterDateFrom ? new Date(filterDateFrom).getTime() : null, 
-        [filterDateFrom]
+        debouncedLedgerFilters.filterDateFrom ? new Date(debouncedLedgerFilters.filterDateFrom).getTime() : null, 
+        [debouncedLedgerFilters.filterDateFrom]
     );
     const filterDateToTimestamp = useMemo(() => 
-        filterDateTo ? new Date(filterDateTo).getTime() : null, 
-        [filterDateTo]
+        debouncedLedgerFilters.filterDateTo ? new Date(debouncedLedgerFilters.filterDateTo).getTime() : null, 
+        [debouncedLedgerFilters.filterDateTo]
     );
     const filterMinAmountNum = useMemo(() => 
-        filterMinAmount ? parseFloat(filterMinAmount) : null, 
-        [filterMinAmount]
+        debouncedLedgerFilters.filterMinAmount ? parseFloat(debouncedLedgerFilters.filterMinAmount) : null, 
+        [debouncedLedgerFilters.filterMinAmount]
     );
     const filterMaxAmountNum = useMemo(() => 
-        filterMaxAmount ? parseFloat(filterMaxAmount) : null, 
-        [filterMaxAmount]
+        debouncedLedgerFilters.filterMaxAmount ? parseFloat(debouncedLedgerFilters.filterMaxAmount) : null, 
+        [debouncedLedgerFilters.filterMaxAmount]
     );
     
     const filteredLedger = useMemo(() => {
@@ -2525,8 +2624,8 @@ export const Accounting: React.FC = () => {
         // Filter with optimized comparisons (numeric timestamps instead of string dates)
         const filtered = state.ledger.filter(entry => {
             // Fast path: if no filters, return all entries
-            if (!filterDateFromTimestamp && !filterDateToTimestamp && !filterType && 
-                !filterAccountId && !filterVoucherId && !filterMinAmountNum && !filterMaxAmountNum) {
+            if (!filterDateFromTimestamp && !filterDateToTimestamp && !debouncedLedgerFilters.filterType && 
+                !debouncedLedgerFilters.filterAccountId && !debouncedLedgerFilters.filterVoucherId && !filterMinAmountNum && !filterMaxAmountNum) {
                 return true;
             }
             
@@ -2538,13 +2637,13 @@ export const Accounting: React.FC = () => {
             }
             
             // Type filter (fast string comparison)
-            if (filterType && entry.transactionType !== filterType) return false;
+            if (debouncedLedgerFilters.filterType && entry.transactionType !== debouncedLedgerFilters.filterType) return false;
             
             // Account filter (fast string comparison)
-            if (filterAccountId && entry.accountId !== filterAccountId) return false;
+            if (debouncedLedgerFilters.filterAccountId && entry.accountId !== debouncedLedgerFilters.filterAccountId) return false;
             
             // Voucher filter (fast string comparison)
-            if (filterVoucherId && entry.transactionId !== filterVoucherId) return false;
+            if (debouncedLedgerFilters.filterVoucherId && entry.transactionId !== debouncedLedgerFilters.filterVoucherId) return false;
             
             // Amount filters (numeric comparison)
             if (filterMinAmountNum !== null && (entry.fcyAmount || 0) < filterMinAmountNum) return false;
@@ -2607,7 +2706,13 @@ export const Accounting: React.FC = () => {
         });
         
         return sorted;
-    }, [state.ledger, filterDateFromTimestamp, filterDateToTimestamp, filterType, filterAccountId, filterVoucherId, filterMinAmountNum, filterMaxAmountNum, ledgerSortColumn, ledgerSortDirection]);
+    }, [state.ledger, filterDateFromTimestamp, filterDateToTimestamp, debouncedLedgerFilters.filterType, debouncedLedgerFilters.filterAccountId, debouncedLedgerFilters.filterVoucherId, filterMinAmountNum, filterMaxAmountNum, ledgerSortColumn, ledgerSortDirection]);
+    
+    // PERFORMANCE: Only render the first N rows; user can load more
+    const visibleLedger = useMemo(() => {
+        if (activeTab !== 'ledger') return [];
+        return filteredLedger.slice(0, ledgerVisibleCount);
+    }, [activeTab, filteredLedger, ledgerVisibleCount]);
     
     // PERFORMANCE: Pre-index partners by ID to avoid O(n*m) lookups in map
     const partnerIndex = useMemo(() => {
@@ -2734,6 +2839,22 @@ export const Accounting: React.FC = () => {
 
     return (
         <div className="space-y-6 w-full">
+            {/* Processing Overlay */}
+            {isProcessing && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full mx-4">
+                        <div className="flex flex-col items-center gap-4">
+                            <RefreshCw size={48} className="animate-spin text-blue-600" />
+                            <h3 className="text-xl font-bold text-slate-800">Processing Transaction</h3>
+                            <p className="text-slate-600 text-center">{processingMessage || 'Please wait...'}</p>
+                            <div className="w-full bg-slate-200 rounded-full h-2 mt-2">
+                                <div className="bg-blue-600 h-2 rounded-full animate-pulse" style={{ width: '100%' }}></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
             {/* Navigation Tabs */}
             <div className="flex gap-4 border-b border-slate-200">
                 <button onClick={() => {
@@ -5518,9 +5639,18 @@ export const Accounting: React.FC = () => {
                         <div className="border-t border-slate-100 pt-6 flex justify-end">
                             <button 
                                 onClick={handleSave}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform active:scale-95 flex items-center gap-2"
+                                disabled={isProcessing}
+                                className={`${isProcessing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform active:scale-95 flex items-center gap-2 disabled:opacity-70`}
                             >
-                                <CheckCircle size={20} /> Post {vType} Voucher
+                                {isProcessing ? (
+                                    <>
+                                        <RefreshCw size={20} className="animate-spin" /> Processing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <CheckCircle size={20} /> Post {vType} Voucher
+                                    </>
+                                )}
                             </button>
                         </div>
                     </div>
@@ -5585,7 +5715,9 @@ export const Accounting: React.FC = () => {
                             <input type="number" placeholder="Max" className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-sm w-24" value={filterMaxAmount} onChange={e => setFilterMaxAmount(e.target.value)} />
                         </div>
                         <div className="flex-1 text-right">
-                            <span className="text-xs text-slate-400">Showing {filteredLedger.length} records</span>
+                            <span className="text-xs text-slate-400">
+                                Showing {Math.min(filteredLedger.length, ledgerVisibleCount)} of {filteredLedger.length} records
+                            </span>
                         </div>
                     </div>
 
@@ -5789,7 +5921,7 @@ export const Accounting: React.FC = () => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200 text-slate-700">
-                                    {filteredLedger.map((entry) => {
+                                    {visibleLedger.map((entry) => {
                                         // Fast O(1) lookup instead of O(n) find/some
                                         const partner = partnerIndex[entry.accountId];
                                         const isPartner = !!partner;
@@ -5858,6 +5990,18 @@ export const Accounting: React.FC = () => {
                         </table>
                         </div>
                     </div>
+                    
+                    {/* Pagination / Load more */}
+                    {filteredLedger.length > visibleLedger.length && (
+                        <div className="flex justify-center">
+                            <button
+                                onClick={() => setLedgerVisibleCount(prev => Math.min(prev + 200, filteredLedger.length))}
+                                className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                            >
+                                Load 200 more ({visibleLedger.length} / {filteredLedger.length})
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 

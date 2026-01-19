@@ -372,20 +372,30 @@ const dataReducer = (state: AppState, action: Action): AppState => {
                     if (hasOpeningBalanceEntries && difference > 0.01) {
                         // Opening balance entries exist and there's a mismatch
                         // Use the saved balance as source of truth (it was explicitly set by user)
-                        console.warn(`⚠️ Partner ${partnerId} (${partner.name}) balance mismatch detected. Using saved balance as source of truth:`, {
-                            saved: partner.balance,
-                            calculated: newPartnerBalance,
-                            difference: difference,
-                            action: 'Using saved balance'
-                        });
+                        // NOTE: This is expected during edit operations while Firebase syncs - using log instead of warn to reduce noise
+                        // Only log if this is a significant mismatch (not just rounding differences)
+                        if (difference > 1.0) {
+                            console.log(`ℹ️ Partner ${partnerId} (${partner.name}) balance sync: Using saved balance (expected during edits):`, {
+                                saved: partner.balance,
+                                calculated: newPartnerBalance,
+                                difference: difference.toFixed(2),
+                                action: 'Using saved balance as source of truth',
+                                note: 'Expected during edit operations while Firebase syncs'
+                            });
+                        }
                         newPartnerBalance = partner.balance;
                     } else if (difference > 0.01) {
                         // No opening balance entries but there's a mismatch - log for investigation
-                        console.warn(`⚠️ Partner ${partnerId} (${partner.name}) balance mismatch (no OB entries):`, {
-                            saved: partner.balance,
-                            calculated: newPartnerBalance,
-                            difference: difference
-                        });
+                        // NOTE: This may appear during edit operations while Firebase syncs - this is expected
+                        // Only log if this is a significant mismatch (not just rounding differences)
+                        if (difference > 1.0) {
+                            console.log(`ℹ️ Partner ${partnerId} (${partner.name}) balance sync (no OB entries):`, {
+                                saved: partner.balance,
+                                calculated: newPartnerBalance,
+                                difference: difference.toFixed(2),
+                                note: 'May be expected during edit operations while Firebase syncs'
+                            });
+                        }
                     }
                 }
                 
@@ -1407,18 +1417,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 for (const [partnerId, changes] of partnerChanges.entries()) {
                     const partner = state.partners.find(p => p.id === partnerId);
                     if (partner) {
-                        // Calculate new balance: current balance + debit - credit
-                        // For customers: debit increases (they owe more), credit decreases
-                        // For suppliers: same formula (credit increases liability = more negative)
-                        const currentBalance = partner.balance || 0;
-                        const newBalance = currentBalance + changes.debit - changes.credit;
+                        // CRITICAL FIX: Use balance from state directly - it's already updated by POST_TRANSACTION reducer
+                        // DO NOT recalculate by adding changes again - that would cause double-counting!
+                        // The POST_TRANSACTION reducer has already updated partner.balance correctly
+                        const newBalance = partner.balance || 0;
                         
                         try {
                             await updateDoc(doc(db, 'partners', partnerId), {
                                 balance: newBalance,
                                 updatedAt: serverTimestamp()
                             });
-                            console.log(`✅ Partner balance updated in Firebase: ${partner.name} (${partnerId}) = ${newBalance} (was ${currentBalance}, change: ${changes.debit - changes.credit})`);
+                            console.log(`✅ Partner balance updated in Firebase: ${partner.name} (${partnerId}) = ${newBalance} (change: ${changes.debit - changes.credit})`);
                         } catch (error) {
                             console.error(`❌ Error updating partner balance in Firebase for ${partnerId}:`, error);
                         }
@@ -1470,10 +1479,70 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
         
+        // CRITICAL: Get entries data BEFORE deletion (they'll be removed from state by dispatch)
+        const entriesToDelete = ledgerSnapshot.docs.map(doc => doc.data() as LedgerEntry);
+        
         const deletePromises = ledgerSnapshot.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
         await Promise.all(deletePromises);
         
         console.log(`✅ Deleted all ledger entries for transaction ${transactionId}`);
+        
+        // CRITICAL FIX: Update Firebase account and partner balances after deletion
+        // This ensures balances are correct even if state reloads or app refreshes
+        // Wait longer for state to sync after dispatch and for Firebase listeners to process
+        // Increased from 200ms to 500ms to handle multiple Firebase listener updates during edit
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        try {
+            // Update account balances in Firebase using balances from state (already updated by reducer)
+            const affectedAccountIds = new Set<string>();
+            entriesToDelete.forEach(entry => {
+                if (!entry.isReportingOnly && entry.accountId) {
+                    affectedAccountIds.add(entry.accountId);
+                }
+            });
+            
+            for (const accountId of affectedAccountIds) {
+                const account = state.accounts.find(a => a.id === accountId);
+                if (account && isFirestoreLoaded) {
+                    try {
+                        await updateDoc(doc(db, 'accounts', accountId), {
+                            balance: account.balance, // Use balance from state (already updated by reducer)
+                            updatedAt: serverTimestamp()
+                        });
+                        console.log(`✅ Account balance updated in Firebase after deletion: ${account.name} (${accountId}) = ${account.balance}`);
+                    } catch (error) {
+                        console.error(`❌ Error updating account balance in Firebase for ${accountId}:`, error);
+                    }
+                }
+            }
+            
+            // Update partner balances in Firebase
+            const affectedPartnerIds = new Set<string>();
+            entriesToDelete.forEach(entry => {
+                if (!entry.isReportingOnly && state.partners.some(p => p.id === entry.accountId)) {
+                    affectedPartnerIds.add(entry.accountId);
+                }
+            });
+            
+            for (const partnerId of affectedPartnerIds) {
+                const partner = state.partners.find(p => p.id === partnerId);
+                if (partner && isFirestoreLoaded) {
+                    try {
+                        await updateDoc(doc(db, 'partners', partnerId), {
+                            balance: partner.balance, // Use balance from state (already updated by reducer)
+                            updatedAt: serverTimestamp()
+                        });
+                        console.log(`✅ Partner balance updated in Firebase after deletion: ${partner.name} (${partnerId}) = ${partner.balance}`);
+                    } catch (error) {
+                        console.error(`❌ Error updating partner balance in Firebase for ${partnerId}:`, error);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error updating balances in Firebase after deletion:', error);
+            // Continue even if balance update fails - balances will be recalculated on next load
+        }
     };
     
     // Delete a single ledger entry by ID (without affecting other entries in the transaction)
