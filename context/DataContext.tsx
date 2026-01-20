@@ -1494,11 +1494,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await new Promise(resolve => setTimeout(resolve, 500));
         
         try {
-            // Update account balances in Firebase using balances from state (already updated by reducer)
+            // Update account balances in Firebase
+            // CRITICAL: Calculate new balance directly from deleted entries, don't rely on state (which may be stale)
             const affectedAccountIds = new Set<string>();
+            const accountBalanceChanges = new Map<string, { debitRemoved: number; creditRemoved: number }>();
+            
             entriesToDelete.forEach(entry => {
                 if (!entry.isReportingOnly && entry.accountId) {
                     affectedAccountIds.add(entry.accountId);
+                    if (!accountBalanceChanges.has(entry.accountId)) {
+                        accountBalanceChanges.set(entry.accountId, { debitRemoved: 0, creditRemoved: 0 });
+                    }
+                    const changes = accountBalanceChanges.get(entry.accountId)!;
+                    changes.debitRemoved += entry.debit || 0;
+                    changes.creditRemoved += entry.credit || 0;
                 }
             });
             
@@ -1506,11 +1515,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const account = state.accounts.find(a => a.id === accountId);
                 if (account && isFirestoreLoaded) {
                     try {
+                        const changes = accountBalanceChanges.get(accountId)!;
+                        // Calculate new balance: reverse the effect of deleted entries
+                        let newBalance = account.balance;
+                        if ([AccountType.ASSET, AccountType.EXPENSE].includes(account.type)) {
+                            // Assets/Expenses: removing debit decreases balance, removing credit increases balance
+                            newBalance = account.balance - changes.debitRemoved + changes.creditRemoved;
+                        } else {
+                            // Liabilities/Equity/Revenue: removing credit decreases balance, removing debit increases balance
+                            newBalance = account.balance - changes.creditRemoved + changes.debitRemoved;
+                        }
+                        
                         await updateDoc(doc(db, 'accounts', accountId), {
-                            balance: account.balance, // Use balance from state (already updated by reducer)
+                            balance: newBalance,
                             updatedAt: serverTimestamp()
                         });
-                        console.log(`✅ Account balance updated in Firebase after deletion: ${account.name} (${accountId}) = ${account.balance}`);
+                        console.log(`✅ Account balance updated in Firebase after deletion: ${account.name} (${accountId}) = ${newBalance} (was ${account.balance}, removed Dr: ${changes.debitRemoved}, Cr: ${changes.creditRemoved})`);
                     } catch (error) {
                         console.error(`❌ Error updating account balance in Firebase for ${accountId}:`, error);
                     }
@@ -1518,10 +1538,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             
             // Update partner balances in Firebase
+            // CRITICAL: Calculate new balance directly from deleted entries, don't rely on state (which may be stale)
             const affectedPartnerIds = new Set<string>();
+            const partnerBalanceChanges = new Map<string, { debitRemoved: number; creditRemoved: number }>();
+            
             entriesToDelete.forEach(entry => {
                 if (!entry.isReportingOnly && state.partners.some(p => p.id === entry.accountId)) {
                     affectedPartnerIds.add(entry.accountId);
+                    if (!partnerBalanceChanges.has(entry.accountId)) {
+                        partnerBalanceChanges.set(entry.accountId, { debitRemoved: 0, creditRemoved: 0 });
+                    }
+                    const changes = partnerBalanceChanges.get(entry.accountId)!;
+                    changes.debitRemoved += entry.debit || 0;
+                    changes.creditRemoved += entry.credit || 0;
                 }
             });
             
@@ -1529,11 +1558,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const partner = state.partners.find(p => p.id === partnerId);
                 if (partner && isFirestoreLoaded) {
                     try {
+                        const changes = partnerBalanceChanges.get(partnerId)!;
+                        // Calculate new balance: reverse the effect of deleted entries
+                        // For customers: debit increases AR (balance becomes more negative), credit decreases AR (balance becomes less negative)
+                        // Removing debit decreases balance, removing credit increases balance
+                        let newBalance = partner.balance;
+                        if ([PartnerType.CUSTOMER].includes(partner.type)) {
+                            // Customers: removing debit decreases balance, removing credit increases balance
+                            newBalance = partner.balance - changes.debitRemoved + changes.creditRemoved;
+                        } else {
+                            // Suppliers: removing credit decreases liability (balance becomes less negative), removing debit increases liability (balance becomes more negative)
+                            newBalance = partner.balance + changes.creditRemoved - changes.debitRemoved;
+                        }
+                        
                         await updateDoc(doc(db, 'partners', partnerId), {
-                            balance: partner.balance, // Use balance from state (already updated by reducer)
+                            balance: newBalance,
                             updatedAt: serverTimestamp()
                         });
-                        console.log(`✅ Partner balance updated in Firebase after deletion: ${partner.name} (${partnerId}) = ${partner.balance}`);
+                        console.log(`✅ Partner balance updated in Firebase after deletion: ${partner.name} (${partnerId}) = ${newBalance} (was ${partner.balance}, removed Dr: ${changes.debitRemoved}, Cr: ${changes.creditRemoved})`);
                     } catch (error) {
                         console.error(`❌ Error updating partner balance in Firebase for ${partnerId}:`, error);
                     }

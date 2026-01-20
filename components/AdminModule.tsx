@@ -18,7 +18,7 @@ import { CentralItemDatabase } from './CentralItemDatabase';
 type ResetType = 'transactions' | 'complete' | 'factory' | null;
 
 export const AdminModule: React.FC = () => {
-    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem, fixMissingPurchaseLedgerEntries, fixMissingSalesInvoiceLedgerEntries } = useData();
+    const { state, postTransaction, deleteTransaction, addOriginalOpening, updateItem, fixMissingPurchaseLedgerEntries, fixMissingSalesInvoiceLedgerEntries, postSalesInvoice } = useData();
     const { currentUser, currentFactory } = useAuth();
     const navigate = useNavigate();
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -846,7 +846,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <RefreshCw className="text-green-600" size={24} />
                     <h3 className="text-lg font-bold text-green-900">✅ FIX: Recalculate Supplier Balances from Ledger</h3>
-                </div>
+                    </div>
 
                 <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-green-800 mb-2 font-bold">
@@ -979,13 +979,13 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <AlertTriangle className="text-yellow-600" size={24} />
                     <h3 className="text-lg font-bold text-yellow-900">🔍 Diagnose: Supplier Balances in Balance Sheet</h3>
-                    </div>
+                            </div>
                 
                 <div className="bg-white border border-yellow-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-yellow-800 mb-2">
                         Check which suppliers have balances and why they might not be showing in the Balance Sheet.
                     </p>
-                </div>
+                        </div>
 
                     <button
                     onClick={() => {
@@ -1052,7 +1052,7 @@ export const AdminModule: React.FC = () => {
                         <li><strong>If no backup:</strong> Refresh the page (F5) to reload from Firebase, then manually fix balances in Setup &gt; Business Partners</li>
                         <li><strong>Or use the button below:</strong> This will trigger the system&apos;s own balance calculation (same as when ledger loads)</li>
                     </ol>
-                            </div>
+                    </div>
 
                 <div className="flex gap-3">
                                     <button
@@ -1064,13 +1064,13 @@ export const AdminModule: React.FC = () => {
                     >
                         🔄 Refresh Page (Reload from Firebase)
                                     </button>
-                    
-                                    <button
-                                        onClick={async () => {
+
+                    <button
+                        onClick={async () => {
                                                 if (!currentFactory?.id) {
                                 alert('Please select a factory first');
-                                                    return;
-                                                }
+                                return;
+                            }
 
                             const confirmFix = confirm(
                                 'This will trigger the system to recalculate partner balances using the EXACT same logic as when ledger entries load.\n\n' +
@@ -1189,8 +1189,8 @@ export const AdminModule: React.FC = () => {
                                             collection(db, 'ledger'),
                                             where('transactionId', '==', entry.transactionId),
                                             where('accountId', '==', entry.accountId),
-                                            where('factoryId', '==', currentFactory?.id || '')
-                                        );
+                                    where('factoryId', '==', currentFactory?.id || '')
+                                );
                                         const snapshot = await getDocs(ledgerQuery);
                                         const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
                                         await Promise.all(deletePromises);
@@ -1247,32 +1247,32 @@ export const AdminModule: React.FC = () => {
                         try {
                             await fixMissingPurchaseLedgerEntries();
                             // The function shows its own alert and refreshes, so we don't need to set result here
-                        } catch (error: any) {
+                            } catch (error: any) {
                             setPurchaseLedgerFixResult({
-                                success: false,
+                                    success: false,
                                 message: error.message || 'Unknown error',
                                 fixed: 0,
                                 errors: [error.message || 'Unknown error']
-                            });
-                        } finally {
+                                });
+                            } finally {
                             setFixingPurchaseLedgers(false);
-                        }
-                    }}
+                            }
+                        }}
                     disabled={fixingPurchaseLedgers}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
+                    >
                     {fixingPurchaseLedgers ? (
-                        <>
+                            <>
                             <RefreshCw className="animate-spin" size={16} />
                             Fixing...
-                        </>
-                    ) : (
-                        <>
+                            </>
+                        ) : (
+                            <>
                             <CheckCircle size={16} />
                             Fix Missing Purchase Ledger Entries
-                        </>
-                    )}
-                </button>
+                            </>
+                        )}
+                    </button>
 
                 {purchaseLedgerFixResult && (
                     <div className={`mt-4 p-4 rounded-lg ${purchaseLedgerFixResult.success ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'}`}>
@@ -1285,13 +1285,13 @@ export const AdminModule: React.FC = () => {
                                 <p className="text-sm font-semibold">Errors:</p>
                                 <ul className="text-sm list-disc list-inside">
                                     {purchaseLedgerFixResult.errors.map((err, idx) => (
-                                        <li key={idx}>{err}</li>
-                                    ))}
-                                </ul>
-                            </div>
-                        )}
-                    </div>
-                )}
+                                            <li key={idx}>{err}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
             </div>
 
             {/* Fix Missing Sales Invoice Ledger Entries Section */}
@@ -1299,7 +1299,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <RefreshCw className="text-green-600" size={24} />
                     <h3 className="text-lg font-bold text-green-900">Fix Missing Sales Invoice Ledger Entries</h3>
-                </div>
+                    </div>
                 
                 <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-green-800 mb-2">
@@ -1317,11 +1317,11 @@ export const AdminModule: React.FC = () => {
                     </p>
                 </div>
 
-                <button
-                    onClick={async () => {
+                    <button
+                        onClick={async () => {
                         if (!confirm('This will fix ledger entries for all sales invoices that need them.\n\nContinue?')) {
-                            return;
-                        }
+                                return;
+                            }
                         setFixingSalesInvoiceLedgers(true);
                         setSalesInvoiceLedgerFixResult(null);
                         try {
@@ -1352,7 +1352,7 @@ export const AdminModule: React.FC = () => {
                             Fix Missing Sales Invoice Ledger Entries
                         </>
                     )}
-                </button>
+                    </button>
 
                 {salesInvoiceLedgerFixResult && (
                     <div className={`mt-4 p-4 rounded-lg ${salesInvoiceLedgerFixResult.success ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'}`}>
@@ -1368,7 +1368,7 @@ export const AdminModule: React.FC = () => {
                                         <li key={idx}>{err}</li>
                                     ))}
                                 </ul>
-                            </div>
+                </div>
                         )}
                     </div>
                 )}
@@ -1379,7 +1379,7 @@ export const AdminModule: React.FC = () => {
                 <div className="flex items-center gap-3 mb-4">
                     <Search className="text-yellow-600" size={24} />
                     <h3 className="text-lg font-bold text-yellow-900">Diagnostic: What System Missed</h3>
-                </div>
+                    </div>
                 
                 <div className="bg-white border border-yellow-200 rounded-lg p-4 mb-4">
                     <p className="text-sm text-yellow-800 mb-2">
@@ -1395,13 +1395,14 @@ export const AdminModule: React.FC = () => {
                     </ul>
                 </div>
 
-                <button
+                    <button
                     onClick={() => {
                         const issues: string[] = [];
                         const details: any = {
                             purchasesWithoutEntries: [],
                             unbalancedTransactions: [],
                             salesInvoicesWithoutEntries: [],
+                            salesInvoicesWithWrongCustomerId: [],
                             balanceDiscrepancyBreakdown: null,
                             missingAccounts: []
                         };
@@ -1441,6 +1442,7 @@ export const AdminModule: React.FC = () => {
                         });
 
                         // 2. Check sales invoices without ledger entries
+                        details.salesInvoicesWithWrongCustomerId = [];
                         state.salesInvoices.forEach(invoice => {
                             const transactionId = `INV-${invoice.invoiceNo}`;
                             const entries = state.ledger.filter(e => 
@@ -1456,6 +1458,31 @@ export const AdminModule: React.FC = () => {
                                     total: invoice.netTotal
                                 });
                             } else {
+                                // CRITICAL CHECK: Verify customer entry has correct accountId
+                                // The customer entry should have accountId === invoice.customerId
+                                const customerEntry = entries.find(e => 
+                                    e.debit > 0 && 
+                                    e.narration?.includes('Sales Invoice')
+                                );
+                                
+                                if (customerEntry && customerEntry.accountId !== invoice.customerId) {
+                                    const expectedCustomer = state.partners.find(p => p.id === invoice.customerId);
+                                    const actualAccount = state.accounts.find(a => a.id === customerEntry.accountId);
+                                    const actualPartner = state.partners.find(p => p.id === customerEntry.accountId);
+                                    
+                                    details.salesInvoicesWithWrongCustomerId.push({
+                                        invoiceNo: invoice.invoiceNo,
+                                        date: invoice.date,
+                                        expectedCustomerId: invoice.customerId,
+                                        expectedCustomerName: expectedCustomer?.name || 'Unknown',
+                                        actualAccountId: customerEntry.accountId,
+                                        actualAccountName: actualAccount?.name || actualPartner?.name || customerEntry.accountName || 'Unknown',
+                                        factoryId: invoice.factoryId,
+                                        transactionId: transactionId,
+                                        entryNarration: customerEntry.narration
+                                    });
+                                }
+                                
                                 // Check if balanced
                                 const totalDebits = entries.reduce((sum, e) => sum + (e.debit || 0), 0);
                                 const totalCredits = entries.reduce((sum, e) => sum + (e.credit || 0), 0);
@@ -1463,7 +1490,7 @@ export const AdminModule: React.FC = () => {
                                 
                                 if (imbalance > 0.01) {
                                     details.unbalancedTransactions.push({
-                                        transactionId,
+                                            transactionId,
                                         type: 'Sales Invoice',
                                         invoiceNo: invoice.invoiceNo,
                                         debits: totalDebits,
@@ -1492,7 +1519,7 @@ export const AdminModule: React.FC = () => {
                             if (entries.length === 1) {
                                 transactionsWithSingleEntry.push({
                                     transactionId: txId,
-                                    entryCount: entries.length,
+                                        entryCount: entries.length,
                                     entry: entries[0],
                                     hasDebit: (entries[0].debit || 0) > 0,
                                     hasCredit: (entries[0].credit || 0) > 0,
@@ -1629,6 +1656,22 @@ export const AdminModule: React.FC = () => {
                             report += '\n';
                         }
 
+                        if (details.salesInvoicesWithWrongCustomerId && details.salesInvoicesWithWrongCustomerId.length > 0) {
+                            report += `❌ CRITICAL: SALES INVOICES WITH WRONG CUSTOMER ACCOUNT ID (${details.salesInvoicesWithWrongCustomerId.length}):\n`;
+                            report += `These invoices have ledger entries, but the customer entry has a DIFFERENT accountId than the invoice's customerId.\n`;
+                            report += `This causes the invoice to NOT appear in the customer's ledger!\n\n`;
+                            details.salesInvoicesWithWrongCustomerId.forEach((inv: any) => {
+                                report += `  • ${inv.invoiceNo} (${inv.date}):\n`;
+                                report += `    - Expected Customer: ${inv.expectedCustomerName} (ID: ${inv.expectedCustomerId})\n`;
+                                report += `    - Actual Account in Ledger: ${inv.actualAccountName} (ID: ${inv.actualAccountId})\n`;
+                                report += `    - Factory: ${inv.factoryId}\n`;
+                                report += `    - Transaction: ${inv.transactionId}\n`;
+                                report += `    - Entry Narration: ${inv.entryNarration}\n`;
+                            });
+                            report += '\n';
+                            report += `💡 SOLUTION: These invoices need their ledger entries corrected. The customer entry's accountId must match the invoice's customerId.\n\n`;
+                        }
+
                         // Add transactions with single entry to report (CRITICAL - violates double-entry)
                         if (details.transactionsWithSingleEntry && details.transactionsWithSingleEntry.length > 0) {
                             report += `❌ CRITICAL: TRANSACTIONS WITH ONLY 1 ENTRY (${details.transactionsWithSingleEntry.length}):\n`;
@@ -1705,7 +1748,147 @@ export const AdminModule: React.FC = () => {
                 >
                     <Search size={16} />
                     Run Diagnostic: What System Missed
-                </button>
+                                    </button>
+                                </div>
+
+            {/* Fix Sales Invoices with Wrong Customer Account ID */}
+            <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <AlertTriangle className="text-orange-600" size={24} />
+                    <h3 className="text-lg font-bold text-orange-900">🔧 Fix Sales Invoices with Wrong Customer Account ID</h3>
+                </div>
+
+                <div className="bg-white border border-orange-200 rounded-lg p-4 mb-4">
+                    <p className="text-sm text-orange-800 mb-2">
+                        <strong>Issue:</strong> Some sales invoices have ledger entries where the customer entry's accountId doesn't match the invoice's customerId.
+                        This causes the invoice to NOT appear in the customer's ledger.
+                    </p>
+                    <p className="text-sm text-orange-700 mb-2">
+                        <strong>Fix:</strong> This utility will:
+                    </p>
+                    <ul className="text-sm text-orange-700 list-disc list-inside space-y-1">
+                        <li>Find all sales invoices with mismatched customer account IDs</li>
+                        <li>Delete the incorrect ledger entries</li>
+                        <li>Re-post the sales invoice with the correct customer ID</li>
+                        </ul>
+                    <p className="text-xs text-orange-600 mt-3 font-semibold">
+                        ⚠️ Run the diagnostic first to see which invoices are affected.
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            if (!currentFactory?.id) {
+                            alert('Please select a factory first.');
+                                return;
+                            }
+
+                        // Find all sales invoices with wrong customer account ID
+                        const invoicesWithWrongCustomerId: Array<{
+                            invoice: SalesInvoice;
+                            transactionId: string;
+                            wrongEntry: LedgerEntry;
+                            expectedCustomerId: string;
+                            actualAccountId: string;
+                        }> = [];
+
+                        state.salesInvoices
+                            .filter(inv => !inv.factoryId || inv.factoryId === currentFactory.id)
+                            .forEach(invoice => {
+                                const transactionId = `INV-${invoice.invoiceNo}`;
+                                const entries = state.ledger.filter(e => 
+                                    e.transactionId === transactionId && 
+                                    !(e as any).isReportingOnly &&
+                                    (!e.factoryId || e.factoryId === currentFactory.id)
+                                );
+                                
+                                if (entries.length > 0) {
+                                    // Find the customer entry (should have debit > 0 and narration includes "Sales Invoice")
+                                    const customerEntry = entries.find(e => 
+                                        e.debit > 0 && 
+                                        e.narration?.includes('Sales Invoice')
+                                    );
+                                    
+                                    if (customerEntry && customerEntry.accountId !== invoice.customerId) {
+                                        invoicesWithWrongCustomerId.push({
+                                            invoice,
+                                            transactionId,
+                                            wrongEntry: customerEntry,
+                                            expectedCustomerId: invoice.customerId,
+                                            actualAccountId: customerEntry.accountId
+                                        });
+                                    }
+                                }
+                            });
+
+                        if (invoicesWithWrongCustomerId.length === 0) {
+                            alert('✅ No sales invoices with wrong customer account ID found!');
+                            return;
+                        }
+
+                        // Show details
+                        const details = invoicesWithWrongCustomerId.map(({ invoice, expectedCustomerId, actualAccountId }) => {
+                            const expectedCustomer = state.partners.find(p => p.id === expectedCustomerId);
+                            const actualAccount = state.accounts.find(a => a.id === actualAccountId);
+                            const actualPartner = state.partners.find(p => p.id === actualAccountId);
+                            return `${invoice.invoiceNo} (${invoice.date}):\n  Expected: ${expectedCustomer?.name || expectedCustomerId}\n  Actual: ${actualAccount?.name || actualPartner?.name || actualAccountId}`;
+                        }).join('\n\n');
+
+                        const confirmFix = confirm(
+                            `Found ${invoicesWithWrongCustomerId.length} sales invoice(s) with wrong customer account ID:\n\n${details}\n\n` +
+                            `This will:\n` +
+                            `1. Delete the incorrect ledger entries\n` +
+                            `2. Re-post the sales invoice with the correct customer ID\n\n` +
+                            `Continue?`
+                        );
+
+                        if (!confirmFix) return;
+
+                        try {
+                            let fixedCount = 0;
+                            const errors: string[] = [];
+
+                            for (const { invoice, transactionId, wrongEntry } of invoicesWithWrongCustomerId) {
+                                try {
+                                    // Step 1: Delete all ledger entries for this transaction
+                                    console.log(`🗑️ Deleting incorrect ledger entries for ${invoice.invoiceNo}...`);
+                                    await deleteTransaction(transactionId, 'Fix wrong customer account ID', currentUser?.email || 'System');
+
+                                    // Wait for deletion to complete
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                                    // Step 2: Re-post the sales invoice (this will create entries with correct customer ID)
+                                    console.log(`📤 Re-posting sales invoice ${invoice.invoiceNo} with correct customer ID...`);
+                                    await postSalesInvoice(invoice);
+
+                                    // Wait for posting to complete
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                                    fixedCount++;
+                                    console.log(`✅ Fixed invoice ${invoice.invoiceNo}`);
+                                    } catch (error: any) {
+                                    const errorMsg = `Error fixing ${invoice.invoiceNo}: ${error.message || 'Unknown error'}`;
+                                    errors.push(errorMsg);
+                                    console.error(`❌ ${errorMsg}`, error);
+                                }
+                            }
+
+                            if (errors.length > 0) {
+                                alert(`⚠️ Fixed ${fixedCount} invoice(s), but encountered ${errors.length} error(s):\n\n${errors.join('\n')}\n\nPlease check the console for details.`);
+                            } else {
+                                alert(`✅ Successfully fixed ${fixedCount} sales invoice(s)!\n\nAll invoices now have correct customer account IDs.\n\nPlease refresh the page to see updated ledgers.`);
+                                setTimeout(() => window.location.reload(), 1000);
+                            }
+                            } catch (error: any) {
+                            alert(`❌ Error: ${error.message || 'Unknown error'}`);
+                            console.error('Error fixing sales invoices:', error);
+                        }
+                    }}
+                    className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold flex items-center gap-2"
+                >
+                    <RefreshCw size={16} />
+                    Fix Sales Invoices with Wrong Customer Account ID
+                    </button>
             </div>
 
             {/* COMPREHENSIVE BALANCE SHEET FIX UTILITY */}
@@ -1725,8 +1908,8 @@ export const AdminModule: React.FC = () => {
                         <li>Identify mismatches between stored balance and calculated balance</li>
                         <li>Show exactly which accounts/partners are causing the imbalance</li>
                         <li>Optionally fix the balances in Firebase</li>
-                    </ul>
-                </div>
+                            </ul>
+                    </div>
 
                 <div className="flex gap-3 flex-wrap">
                     <button
@@ -2051,7 +2234,7 @@ const FactoryResetUtility: React.FC = () => {
         const accountsQuery = query(collection(db, 'accounts'), where('factoryId', '==', factoryId));
         const accountsSnapshot = await getDocs(accountsQuery);
         
-        let updated = 0;
+                                let updated = 0;
                                 const batch = writeBatch(db);
         
         accountsSnapshot.docs.forEach(doc => {
@@ -2113,7 +2296,7 @@ const FactoryResetUtility: React.FC = () => {
         });
         
         if (updated > 0) {
-            await batch.commit();
+                                        await batch.commit();
             addLog('success', `✅ Reset ${updated} items stock to 0.`);
         } else {
             addLog('info', 'No items found to reset.');
@@ -2558,7 +2741,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                         ⚠️ Found {partnersCount} {selectedPartnerType === 'ALL' ? 'partner(s)' : selectedPartnerType + ' partner(s)'} to delete
                     </p>
                 )}
-            </div>
+                                </div>
 
             {/* Security PIN */}
                     <div>
@@ -2576,7 +2759,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                     }}
                     disabled={!selectedFactoryId || !selectedPartnerType || isProcessing}
                 />
-                </div>
+                        </div>
 
             {/* Arming Toggle */}
             <div className="flex items-center gap-3 bg-slate-100 p-4 rounded-lg">
@@ -2592,7 +2775,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                         Arm Utility (Enable Delete Button)
                     </span>
                 </label>
-                    </div>
+            </div>
 
             {/* Execute Button */}
                     <button
@@ -2622,7 +2805,7 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                 <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-sm max-h-96 overflow-y-auto">
                     <div className="flex items-center gap-2 mb-2 text-slate-400 text-xs">
                         <span>Terminal Output</span>
-                            </div>
+                    </div>
                     {logs.map((log, idx) => (
                         <div
                             key={idx}
@@ -2637,11 +2820,11 @@ const DeletePartnersByTypeUtility: React.FC = () => {
                             }`}
                         >
                             <span className="text-slate-500">[{log.time}]</span> {log.message}
-                        </div>
+                    </div>
                     ))}
-                                </div>
+                </div>
                             )}
-                        </div>
+                    </div>
     );
 };
 
@@ -2703,8 +2886,8 @@ const DataBackupRestoreUtility: React.FC = () => {
         const factory = factories.find(f => f.id === selectedFactoryId);
         if (!factory) {
             alert('Factory not found.');
-                                return;
-                            }
+                                    return;
+                                }
 
         setIsBackingUp(true);
         setLogs([]);
