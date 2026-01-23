@@ -37,11 +37,13 @@ import {
     History,
     ChevronUp,
     Wallet,
-    Users
+    Users,
+    RefreshCw
 } from 'lucide-react';
 import { CHART_COLORS, EXCHANGE_RATES } from '../constants';
 import { EntitySelector } from './EntitySelector';
 import { Link, useSearchParams } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 
 // --- Helper Functions for Planners ---
 function getNextPeriodDates(periodType: PlannerPeriodType, currentDate: Date): { currentPeriod: string, nextPeriodStartDate: Date, lastPeriodStartDate: Date, lastPeriodEndDate: Date } {
@@ -1236,11 +1238,54 @@ const LedgerDetailModal: React.FC<{
 
     // Get breakdown data for aggregated items
     const breakdownData = useMemo(() => {
+        // Helper: build live partner balances from ledger (debits - credits), excluding reporting-only entries
+        const buildPartnerBalanceMap = () => {
+            const sums = new Map<string, { debit: number; credit: number }>();
+            (state.ledger as any[]).forEach((e: any) => {
+                if (!e?.accountId) return;
+                if (e.isReportingOnly) return;
+                const id = String(e.accountId);
+                const existing = sums.get(id) || { debit: 0, credit: 0 };
+                existing.debit += Number(e.debit || 0);
+                existing.credit += Number(e.credit || 0);
+                sums.set(id, existing);
+            });
+            const balances = new Map<string, number>();
+            sums.forEach((v, id) => {
+                balances.set(id, v.debit - v.credit);
+            });
+            return balances;
+        };
+
+        // Only build the map when we need partner-based aggregates
+        const needsPartnerBalances =
+            type === 'debtors' ||
+            type === 'creditors' ||
+            type === 'customerAdvances' ||
+            type === 'supplierAdvances';
+
+        const partnerBalanceMap = needsPartnerBalances ? buildPartnerBalanceMap() : null;
+        const getLivePartnerBalance = (partnerId: string) => {
+            if (partnerBalanceMap && partnerBalanceMap.has(partnerId)) {
+                return partnerBalanceMap.get(partnerId) || 0;
+            }
+            const partner = state.partners.find((p: any) => p.id === partnerId);
+            return partner?.balance || 0;
+        };
+
         if (type === 'debtors') {
-            return state.partners
-                .filter((p: any) => p.type === PartnerType.CUSTOMER && p.balance > 0)
-                .map((p: any) => ({ name: p.name, balance: p.balance }))
+            // Customers with net DEBIT (they owe us) – show live balances
+            const customers = state.partners
+                .filter((p: any) => p.type === PartnerType.CUSTOMER)
+                .map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    balance: getLivePartnerBalance(p.id)
+                }))
+                .filter((p: any) => (p.balance || 0) > 0)
                 .sort((a: any, b: any) => b.balance - a.balance);
+
+            return customers;
         }
         if (type === 'creditors') {
             const supplierTypes = [
@@ -1250,11 +1295,19 @@ const LedgerDetailModal: React.FC<{
                 PartnerType.CLEARING_AGENT,
                 PartnerType.COMMISSION_AGENT
             ];
-            // Exclude sub-suppliers from aggregate creditors report (only show main suppliers)
-            return state.partners
-                .filter((p: any) => supplierTypes.includes(p.type) && p.balance < 0 && p.type !== PartnerType.SUB_SUPPLIER)
-                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance) }))
+            // Suppliers with net CREDIT (we owe them) – show live balances, exclude sub-suppliers
+            const creditors = state.partners
+                .filter((p: any) => supplierTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER)
+                .map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    balance: getLivePartnerBalance(p.id)
+                }))
+                .filter((p: any) => (p.balance || 0) < 0)
+                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance || 0) }))
                 .sort((a: any, b: any) => b.balance - a.balance);
+
+            return creditors;
         }
         if (type === 'otherPayables') {
             return state.accounts
@@ -1266,10 +1319,19 @@ const LedgerDetailModal: React.FC<{
                 .sort((a: any, b: any) => b.balance - a.balance);
         }
         if (type === 'customerAdvances') {
-            return state.partners
-                .filter((p: any) => p.type === PartnerType.CUSTOMER && p.balance < 0)
-                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance) }))
+            // Customers with net CREDIT (they have paid us in advance) – show live balances
+            const advances = state.partners
+                .filter((p: any) => p.type === PartnerType.CUSTOMER)
+                .map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    balance: getLivePartnerBalance(p.id)
+                }))
+                .filter((p: any) => (p.balance || 0) < 0)
+                .map((p: any) => ({ name: p.name, balance: Math.abs(p.balance || 0) }))
                 .sort((a: any, b: any) => b.balance - a.balance);
+
+            return advances;
         }
         if (type === 'supplierAdvances') {
             const supplierTypes = [
@@ -1279,11 +1341,19 @@ const LedgerDetailModal: React.FC<{
                 PartnerType.CLEARING_AGENT,
                 PartnerType.COMMISSION_AGENT
             ];
-            // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
-            return state.partners
-                .filter((p: any) => supplierTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER && p.balance > 0)
-                .map((p: any) => ({ name: p.name, balance: p.balance }))
+            // Suppliers with net DEBIT (we have advanced them) – show live balances, exclude sub-suppliers
+            const advances = state.partners
+                .filter((p: any) => supplierTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER)
+                .map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    balance: getLivePartnerBalance(p.id)
+                }))
+                .filter((p: any) => (p.balance || 0) > 0)
+                .map((p: any) => ({ name: p.name, balance: p.balance || 0 }))
                 .sort((a: any, b: any) => b.balance - a.balance);
+
+            return advances;
         }
         if (type === 'netIncome') {
             // Revenue accounts (show Sales Discounts as negative/contra-revenue)
@@ -1444,6 +1514,17 @@ const BalanceSheet: React.FC = () => {
     const [modalTitle, setModalTitle] = useState('');
     const [modalType, setModalType] = useState<'account' | 'debtors' | 'creditors' | 'otherPayables' | 'customerAdvances' | 'supplierAdvances' | 'netIncome' | 'accountBreakdown'>('account');
     const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
+    const [refreshKey, setRefreshKey] = useState(0); // Force recalculation when data is restored
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    
+    // Force recalculation when refreshKey changes
+    useEffect(() => {
+        console.log('🔄 Balance Sheet refresh triggered, refreshKey:', refreshKey);
+        console.log('🔄 Current ledger entries:', state.ledger.length);
+        console.log('🔄 Current accounts:', state.accounts.length);
+        console.log('🔄 Current partners:', state.partners.length);
+        setIsRefreshing(false);
+    }, [refreshKey, state.ledger.length, state.accounts.length, state.partners.length]);
     
     // Helper function to aggregate parent-child accounts
     const aggregateParentChildAccounts = (accounts: any[]) => {
@@ -1452,10 +1533,18 @@ const BalanceSheet: React.FC = () => {
         // Treat undefined, null, and empty string as "no parent" (top-level account)
         const parentAccounts = accounts.filter(a => !a.parentAccountId || a.parentAccountId === '');
         const childAccounts = accounts.filter(a => a.parentAccountId && a.parentAccountId !== '');
+
+        // IMPORTANT:
+        // If a child points to a parent that is missing from this category (or is in a different AccountType),
+        // the child would be excluded from Balance Sheet totals. That can make the Balance Sheet "out"
+        // even when the voucher is perfectly balanced.
+        const parentIds = new Set(parentAccounts.map(p => p.id));
+        const orphanChildren = childAccounts.filter(c => !parentIds.has(c.parentAccountId!));
+        const attachableChildren = childAccounts.filter(c => parentIds.has(c.parentAccountId!));
         
-        // Create a map of parent ID to children
+        // Create a map of parent ID to children (only attachable children)
         const parentToChildren = new Map<string, any[]>();
-        childAccounts.forEach(child => {
+        attachableChildren.forEach(child => {
             if (!parentToChildren.has(child.parentAccountId!)) {
                 parentToChildren.set(child.parentAccountId!, []);
             }
@@ -1463,7 +1552,7 @@ const BalanceSheet: React.FC = () => {
         });
         
         // Calculate aggregated totals for parents
-        const aggregatedAccounts = parentAccounts.map(parent => {
+        const aggregatedParents = parentAccounts.map(parent => {
             const children = parentToChildren.get(parent.id) || [];
             const childrenTotal = children.reduce((sum, child) => sum + (child.balance || 0), 0);
             const aggregatedBalance = (parent.balance || 0) + childrenTotal;
@@ -1474,40 +1563,64 @@ const BalanceSheet: React.FC = () => {
                 childrenCount: children.length
             };
         });
+
+        // Treat orphan children as top-level accounts so they are not dropped from totals.
+        const orphanAsTopLevel = orphanChildren.map(child => ({
+            ...child,
+            hasChildren: false,
+            childrenCount: 0
+        }));
+
+        // Keep a stable ordering for display (by numeric code where possible)
+        const displayAccounts = [...aggregatedParents, ...orphanAsTopLevel].sort((a, b) => {
+            const aCode = parseInt(a.code || '0', 10);
+            const bCode = parseInt(b.code || '0', 10);
+            if (!Number.isNaN(aCode) && !Number.isNaN(bCode) && aCode !== bCode) return aCode - bCode;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+        });
         
         return {
-            displayAccounts: aggregatedAccounts,
+            displayAccounts,
             parentToChildrenMap: parentToChildren
         };
     };
     
-    // CRITICAL FIX: Force recalculation when ledger changes by including state.ledger in dependencies
-    // This ensures Balance Sheet updates dynamically when transactions are posted/deleted
+    // CRITICAL FIX: Create balance hash to detect when account/partner balances change
+    // This ensures Balance Sheet recalculates when data is restored (even if ledger.length doesn't change)
+    const accountBalanceHash = useMemo(() => {
+        return state.accounts.reduce((sum, a) => sum + (a.balance || 0), 0).toFixed(2) + refreshKey;
+    }, [state.accounts, refreshKey]);
+    const partnerBalanceHash = useMemo(() => {
+        return state.partners.reduce((sum, p) => sum + (p.balance || 0), 0).toFixed(2) + refreshKey;
+    }, [state.partners, refreshKey]);
+    
+    // CRITICAL FIX: Force recalculation when ledger OR balances change
+    // This ensures Balance Sheet updates dynamically when transactions are posted/deleted OR data is restored
     const allAssets = useMemo(() => 
         state.accounts.filter(a => a.type === AccountType.ASSET),
-        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+        [state.accounts, state.ledger.length, accountBalanceHash] // Include balance hash to detect balance changes
     );
     const allLiabilities = useMemo(() => 
         state.accounts.filter(a => a.type === AccountType.LIABILITY),
-        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+        [state.accounts, state.ledger.length, accountBalanceHash] // Include balance hash to detect balance changes
     );
     const allEquity = useMemo(() => 
         state.accounts.filter(a => a.type === AccountType.EQUITY),
-        [state.accounts, state.ledger.length] // Include ledger.length to force recalculation
+        [state.accounts, state.ledger.length, accountBalanceHash] // Include balance hash to detect balance changes
     );
     
     // Aggregate parent-child accounts for each category
     const assetsAggregated = useMemo(() => 
         aggregateParentChildAccounts(allAssets),
-        [allAssets, state.ledger.length] // Include ledger.length to force recalculation
+        [allAssets, state.ledger.length, accountBalanceHash, refreshKey] // Include refreshKey to force recalculation
     );
     const liabilitiesAggregated = useMemo(() => 
         aggregateParentChildAccounts(allLiabilities),
-        [allLiabilities, state.ledger.length] // Include ledger.length to force recalculation
+        [allLiabilities, state.ledger.length, accountBalanceHash, refreshKey] // Include refreshKey to force recalculation
     );
     const equityAggregated = useMemo(() => 
         aggregateParentChildAccounts(allEquity),
-        [allEquity, state.ledger.length] // Include ledger.length to force recalculation
+        [allEquity, state.ledger.length, accountBalanceHash, refreshKey] // Include refreshKey to force recalculation
     );
     
     const assets = assetsAggregated.displayAccounts;
@@ -1571,57 +1684,107 @@ const BalanceSheet: React.FC = () => {
         PartnerType.CLEARING_AGENT,
         PartnerType.COMMISSION_AGENT
     ];
+
+    // IMPORTANT:
+    // Balance Sheet should NOT rely on stored partner.balance because it can be stale right after restore
+    // (or if partner balances were not recalculated yet). Instead, compute balances directly from ledger.
+    // Convention used across the app for stored partner balance is:
+    //   partnerBalance = totalDebits - totalCredits  (customers positive when they owe us; suppliers negative when we owe them)
+    const partnerLedgerBalanceMap = useMemo(() => {
+        const map = new Map<string, { debit: number; credit: number }>();
+        for (const e of state.ledger as any[]) {
+            if (!e?.accountId) continue;
+            if ((e as any).isReportingOnly) continue;
+            const id = String(e.accountId);
+            const existing = map.get(id) || { debit: 0, credit: 0 };
+            existing.debit += Number(e.debit || 0);
+            existing.credit += Number(e.credit || 0);
+            map.set(id, existing);
+        }
+        const balMap = new Map<string, number>();
+        map.forEach((v, id) => {
+            balMap.set(id, v.debit - v.credit);
+        });
+        return balMap;
+    }, [state.ledger, refreshKey]);
+
+    const getPartnerLiveBalance = useCallback((partnerId: string) => {
+        const live = partnerLedgerBalanceMap.get(partnerId);
+        if (typeof live === 'number' && !Number.isNaN(live)) return live;
+        const fallback = state.partners.find(p => p.id === partnerId)?.balance;
+        return fallback || 0;
+    }, [partnerLedgerBalanceMap, state.partners]);
     
-    // Add customer balances (Accounts Receivable) - grouped as "Debtors"
-    const customers = useMemo(() => 
-        state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance > 0),
-        [state.partners, state.ledger.length]
-    );
+    // Add customer balances (Accounts Receivable) - grouped as "Debtors" (ledger-derived)
+    const customers = useMemo(() => {
+        const customerPartners = state.partners.filter(p => p.type === PartnerType.CUSTOMER);
+        const customersWithLiveBalance = customerPartners.map(p => {
+            const liveBalance = getPartnerLiveBalance(p.id);
+            const storedBalance = p.balance || 0;
+            if (Math.abs(liveBalance - storedBalance) > 0.01) {
+                console.log(`⚠️ Balance mismatch for customer ${p.name}:`, {
+                    stored: storedBalance,
+                    live: liveBalance,
+                    difference: liveBalance - storedBalance
+                });
+            }
+            return { ...p, balance: liveBalance };
+        }).filter(p => (p.balance || 0) > 0);
+        
+        console.log('🔍 Balance Sheet - Debtors Calculation:', {
+            totalCustomers: customerPartners.length,
+            customersWithPositiveBalance: customersWithLiveBalance.length,
+            totalDebtors: customersWithLiveBalance.reduce((sum, c: any) => sum + (c.balance || 0), 0),
+            sampleCustomers: customersWithLiveBalance.slice(0, 5).map((c: any) => ({
+                name: c.name,
+                storedBalance: customerPartners.find(p => p.id === c.id)?.balance,
+                liveBalance: c.balance
+            }))
+        });
+        
+        return customersWithLiveBalance;
+    }, [state.partners, getPartnerLiveBalance, partnerBalanceHash, refreshKey]);
     const totalCustomersAR = useMemo(() => 
-        customers.reduce((sum, c) => sum + (c.balance || 0), 0),
+        customers.reduce((sum, c: any) => sum + (c.balance || 0), 0),
         [customers]
     );
 
-    // Add negative customer balances (Customer Advances) - grouped as liability
-    const negativeCustomers = useMemo(() => 
-        state.partners.filter(p => p.type === PartnerType.CUSTOMER && p.balance < 0),
-        [state.partners, state.ledger.length]
-    );
+    // Add negative customer balances (Customer Advances) - grouped as liability (ledger-derived)
+    const negativeCustomers = useMemo(() => {
+        return state.partners
+            .filter(p => p.type === PartnerType.CUSTOMER)
+            .map(p => ({ ...p, balance: getPartnerLiveBalance(p.id) }))
+            .filter(p => (p.balance || 0) < 0);
+    }, [state.partners, getPartnerLiveBalance, partnerBalanceHash, refreshKey]);
     const totalCustomerAdvances = useMemo(() => 
-        negativeCustomers.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0),
+        negativeCustomers.reduce((sum: number, c: any) => sum + Math.abs(c.balance || 0), 0),
         [negativeCustomers]
     );
 
     // For suppliers: negative balance = we owe them (Accounts Payable), positive balance = they owe us (Advances)
     // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
-    const positiveSuppliers = useMemo(() => 
-        state.partners.filter(p => 
-            supplierLikeTypes.includes(p.type) && 
-            p.type !== PartnerType.SUB_SUPPLIER && // Exclude sub-suppliers
-            (p.balance || 0) > 0
-        ),
-        [state.partners, state.ledger.length]
-    );
+    const positiveSuppliers = useMemo(() => {
+        return state.partners
+            .filter(p => supplierLikeTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER)
+            .map(p => ({ ...p, balance: getPartnerLiveBalance(p.id) }))
+            .filter(p => (p.balance || 0) > 0);
+    }, [state.partners, supplierLikeTypes, getPartnerLiveBalance, partnerBalanceHash, refreshKey]);
     const totalSupplierAdvances = useMemo(() => 
-        positiveSuppliers.reduce((sum, s) => sum + (s.balance || 0), 0),
+        positiveSuppliers.reduce((sum: number, s: any) => sum + (s.balance || 0), 0),
         [positiveSuppliers]
     );
     
     // Suppliers with negative balance = Accounts Payable (we owe them)
     // Note: Supplier balances should be stored as NEGATIVE when we owe them (credit balance in ledger = negative in partner.balance)
     // EXCLUDE sub-suppliers from Balance Sheet (only show main suppliers)
-    const negativeSuppliers = useMemo(() => 
-        state.partners.filter(p => {
-            if (!supplierLikeTypes.includes(p.type)) return false;
-            // Exclude sub-suppliers from Balance Sheet creditors
-            if (p.type === PartnerType.SUB_SUPPLIER) return false;
-            const balance = p.balance || 0;
-            return balance < 0;
-        }),
-        [state.partners, state.ledger.length]
-    );
+    const negativeSuppliers = useMemo(() => {
+        return state.partners
+            .filter(p => supplierLikeTypes.includes(p.type) && p.type !== PartnerType.SUB_SUPPLIER)
+            .map(p => ({ ...p, balance: getPartnerLiveBalance(p.id) }))
+            .filter(p => (p.balance || 0) < 0);
+    }, [state.partners, supplierLikeTypes, getPartnerLiveBalance, partnerBalanceHash, refreshKey]);
     const totalSuppliersAP = useMemo(() => 
-        negativeSuppliers.reduce((sum, s) => sum + Math.abs(s.balance || 0), 0),
+        negativeSuppliers.reduce((sum: number, s: any) => sum + Math.abs(s.balance || 0), 0),
         [negativeSuppliers]
     );
     
@@ -1804,13 +1967,13 @@ const BalanceSheet: React.FC = () => {
     // CRITICAL FIX: Wrap totals in useMemo with state.ledger dependency
     const totalAssets = useMemo(() => 
         assets.reduce((sum, a) => sum + (a.balance || 0), 0) + totalCustomersAR + totalSupplierAdvances,
-        [assets, totalCustomersAR, totalSupplierAdvances, state.ledger.length]
+        [assets, totalCustomersAR, totalSupplierAdvances, state.ledger.length, refreshKey]
     );
     
     // Calculate regular liabilities (excluding Discrepancy account which is handled separately)
     const regularLiabilitiesTotal = useMemo(() => 
         regularLiabilities.reduce((sum, a) => sum + Math.abs(a.balance || 0), 0),
-        [regularLiabilities, state.ledger.length]
+        [regularLiabilities, state.ledger.length, refreshKey]
     );
     
     // Handle Discrepancy account separately:
@@ -1835,7 +1998,7 @@ const BalanceSheet: React.FC = () => {
     // IMPORTANT: Use discrepancyAdjustment directly (don't use || 0 because -300 || 0 = -300, but we want to handle 0 correctly)
     const totalLiabilities = useMemo(() => 
         regularLiabilitiesTotal + totalOtherPayables + totalSuppliersAP + totalCustomerAdvances + discrepancyAdjustment,
-        [regularLiabilitiesTotal, totalOtherPayables, totalSuppliersAP, totalCustomerAdvances, discrepancyAdjustment, state.ledger.length]
+        [regularLiabilitiesTotal, totalOtherPayables, totalSuppliersAP, totalCustomerAdvances, discrepancyAdjustment, state.ledger.length, refreshKey]
     );
     // FIXED: Equity should preserve negative balances (like negative inventory costs)
     // If Discrepancy is EQUITY type, include it in equity calculation
@@ -1845,7 +2008,7 @@ const BalanceSheet: React.FC = () => {
     );
     const totalEquity = useMemo(() => 
         equity.reduce((sum, a) => sum + (a.balance || 0), 0) + netIncome + discrepancyEquityAdjustment,
-        [equity, netIncome, discrepancyEquityAdjustment, state.ledger.length]
+        [equity, netIncome, discrepancyEquityAdjustment, state.ledger.length, refreshKey]
     );
     
     // DEBUG: Log Balance Sheet calculation details
@@ -1921,6 +2084,26 @@ const BalanceSheet: React.FC = () => {
 
     return (
         <div className="space-y-6 animate-in fade-in">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-slate-800">Balance Sheet</h2>
+                <button
+                    onClick={() => {
+                        console.log('🔄 Refresh button clicked, forcing Balance Sheet recalculation...');
+                        setIsRefreshing(true);
+                        setRefreshKey(prev => {
+                            const newKey = prev + 1;
+                            console.log('🔄 Refresh key updated:', newKey);
+                            return newKey;
+                        });
+                    }}
+                    disabled={isRefreshing}
+                    className={`px-4 py-2 ${isRefreshing ? 'bg-blue-400' : 'bg-blue-600'} text-white rounded-lg ${isRefreshing ? '' : 'hover:bg-blue-700'} font-semibold flex items-center gap-2 transition-colors disabled:cursor-not-allowed`}
+                    title="Refresh Balance Sheet (recalculates from current ledger data)"
+                >
+                    <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                    {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                </button>
+            </div>
             <div className="grid grid-cols-2 gap-8">
                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="text-lg font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4">Assets</h3>
@@ -4999,6 +5182,408 @@ const DayBookReport: React.FC = () => {
         return state.ledger.filter(e => e.transactionId === viewVoucherId);
     }, [state.ledger, viewVoucherId]);
 
+    // Export Daybook to Excel
+    const handleExportToExcel = () => {
+        // Prepare data for export - flatten all entries with complete details
+        const exportData: any[] = [];
+        const unbalancedTransactions: Array<{
+            transactionId: string;
+            transactionType: string;
+            totalDebit: number;
+            totalCredit: number;
+            imbalance: number;
+            entryCount: number;
+            date: string;
+        }> = [];
+        
+        filteredEntries.forEach(([transactionId, entries]) => {
+            const totals = getTransactionTotals(entries);
+            const firstEntry = entries[0];
+            const isAggregatedProd = transactionId === 'PRODUCTION-AGGREGATED';
+            
+            // Check if transaction is balanced (allow 0.01 tolerance for rounding)
+            const imbalance = Math.abs(totals.totalDebit - totals.totalCredit);
+            const isBalanced = imbalance <= 0.01;
+            
+            // Track unbalanced transactions for summary sheet
+            if (!isBalanced) {
+                unbalancedTransactions.push({
+                    transactionId,
+                    transactionType: getVoucherTypeLabel(firstEntry.transactionType),
+                    totalDebit: totals.totalDebit,
+                    totalCredit: totals.totalCredit,
+                    imbalance: totals.totalDebit - totals.totalCredit,
+                    entryCount: entries.length,
+                    date: firstEntry.date
+                });
+            }
+            
+            // Get account code if available (checks both Chart of Accounts and Partners)
+            const getAccountCode = (accountId: string) => {
+                // First check Chart of Accounts
+                const account = state.accounts.find(a => a.id === accountId);
+                if (account?.code) {
+                    return account.code;
+                }
+                // If not found, check Partners (customers, suppliers, etc.)
+                const partner = state.partners.find(p => p.id === accountId);
+                if (partner?.code) {
+                    return partner.code;
+                }
+                // Return empty if no code found
+                return '';
+            };
+            
+            // Handle aggregated production entries - group by original transaction ID
+            if (isAggregatedProd) {
+                const groupedByOriginalTx: { [key: string]: typeof entries } = {};
+                entries.forEach(entry => {
+                    if (!groupedByOriginalTx[entry.transactionId]) {
+                        groupedByOriginalTx[entry.transactionId] = [];
+                    }
+                    groupedByOriginalTx[entry.transactionId].push(entry);
+                });
+                
+                // Export each original production transaction separately
+                Object.entries(groupedByOriginalTx).forEach(([originalTxId, txEntries]) => {
+                    const txTotals = getTransactionTotals(txEntries);
+                    
+                    txEntries.forEach((entry, index) => {
+                        const accountCode = getAccountCode(entry.accountId);
+                        const entryWithCreatedAt = entry as any;
+                        
+                        // Get entry timestamp if available
+                        let entryTimestamp = '';
+                        if (entryWithCreatedAt.createdAt) {
+                            let createdAtDate: Date;
+                            if (entryWithCreatedAt.createdAt.toDate) {
+                                createdAtDate = entryWithCreatedAt.createdAt.toDate();
+                            } else if (entryWithCreatedAt.createdAt.seconds) {
+                                createdAtDate = new Date(entryWithCreatedAt.createdAt.seconds * 1000);
+                            } else {
+                                createdAtDate = new Date(entryWithCreatedAt.createdAt);
+                            }
+                            entryTimestamp = createdAtDate.toISOString();
+                        }
+                        
+                        exportData.push({
+                            'Transaction ID': originalTxId,
+                            'Entry Date': selectedDate,
+                            'Transaction Date': entry.date,
+                            'Entry Timestamp': entryTimestamp,
+                            'Transaction Type': getVoucherTypeLabel(entry.transactionType),
+                            'Transaction Type Code': entry.transactionType,
+                            'Account Code': accountCode,
+                            'Account Name': entry.accountName,
+                            'Account ID': entry.accountId,
+                            'Currency': entry.currency || 'USD',
+                            'Exchange Rate': entry.exchangeRate || 1,
+                            'FCY Amount': entry.fcyAmount || 0,
+                            'Debit (USD)': entry.debit > 0 ? entry.debit : '',
+                            'Credit (USD)': entry.credit > 0 ? entry.credit : '',
+                            'Narration': entry.narration || '',
+                            'Factory ID': entry.factoryId || '',
+                            'Is Adjustment': (entry as any).isAdjustment ? 'Yes' : 'No',
+                            'Is Reporting Only': (entry as any).isReportingOnly ? 'Yes' : 'No',
+                            'Entry Index': index + 1,
+                            'Total Entries in Transaction': txEntries.length,
+                            'Transaction Total Debit': txTotals.totalDebit,
+                            'Transaction Total Credit': txTotals.totalCredit,
+                            'Transaction Balance': txTotals.totalDebit - txTotals.totalCredit,
+                            'Is Balanced': Math.abs(txTotals.totalDebit - txTotals.totalCredit) <= 0.01 ? 'Yes' : 'NO - UNBALANCED',
+                            'Imbalance Amount': Math.abs(txTotals.totalDebit - txTotals.totalCredit) > 0.01 ? Math.abs(txTotals.totalDebit - txTotals.totalCredit) : '',
+                            'Is Aggregated Production': 'Yes'
+                        });
+                    });
+                    
+                    // Add summary row for this production transaction
+                    const txImbalance = Math.abs(txTotals.totalDebit - txTotals.totalCredit);
+                    exportData.push({
+                        'Transaction ID': originalTxId,
+                        'Entry Date': selectedDate,
+                        'Transaction Date': txEntries[0].date,
+                        'Entry Timestamp': '',
+                        'Transaction Type': getVoucherTypeLabel(TransactionType.PRODUCTION),
+                        'Transaction Type Code': TransactionType.PRODUCTION,
+                        'Account Code': '',
+                        'Account Name': '=== PRODUCTION TRANSACTION TOTAL ===',
+                        'Account ID': '',
+                        'Currency': 'USD',
+                        'Exchange Rate': '',
+                        'FCY Amount': '',
+                        'Debit (USD)': txTotals.totalDebit > 0 ? txTotals.totalDebit : '',
+                        'Credit (USD)': txTotals.totalCredit > 0 ? txTotals.totalCredit : '',
+                        'Narration': `Total for ${originalTxId}`,
+                        'Factory ID': txEntries[0].factoryId || '',
+                        'Is Adjustment': '',
+                        'Is Reporting Only': '',
+                        'Entry Index': '',
+                        'Total Entries in Transaction': txEntries.length,
+                        'Transaction Total Debit': txTotals.totalDebit,
+                        'Transaction Total Credit': txTotals.totalCredit,
+                        'Transaction Balance': txTotals.totalDebit - txTotals.totalCredit,
+                        'Is Balanced': txImbalance <= 0.01 ? 'Yes' : 'NO - UNBALANCED',
+                        'Imbalance Amount': txImbalance > 0.01 ? txImbalance : '',
+                        'Is Aggregated Production': 'Yes'
+                    });
+                });
+            } else {
+                // Regular transaction - export all entries
+                entries.forEach((entry, index) => {
+                    const accountCode = getAccountCode(entry.accountId);
+                    const entryWithCreatedAt = entry as any;
+                    
+                    // Get entry timestamp if available
+                    let entryTimestamp = '';
+                    if (entryWithCreatedAt.createdAt) {
+                        let createdAtDate: Date;
+                        if (entryWithCreatedAt.createdAt.toDate) {
+                            createdAtDate = entryWithCreatedAt.createdAt.toDate();
+                        } else if (entryWithCreatedAt.createdAt.seconds) {
+                            createdAtDate = new Date(entryWithCreatedAt.createdAt.seconds * 1000);
+                        } else {
+                            createdAtDate = new Date(entryWithCreatedAt.createdAt);
+                        }
+                        entryTimestamp = createdAtDate.toISOString();
+                    }
+                    
+                    exportData.push({
+                        'Transaction ID': transactionId,
+                        'Entry Date': selectedDate,
+                        'Transaction Date': entry.date,
+                        'Entry Timestamp': entryTimestamp,
+                        'Transaction Type': getVoucherTypeLabel(entry.transactionType),
+                        'Transaction Type Code': entry.transactionType,
+                        'Account Code': accountCode,
+                        'Account Name': entry.accountName,
+                        'Account ID': entry.accountId,
+                        'Currency': entry.currency || 'USD',
+                        'Exchange Rate': entry.exchangeRate || 1,
+                        'FCY Amount': entry.fcyAmount || 0,
+                        'Debit (USD)': entry.debit > 0 ? entry.debit : '',
+                        'Credit (USD)': entry.credit > 0 ? entry.credit : '',
+                        'Narration': entry.narration || '',
+                        'Factory ID': entry.factoryId || '',
+                        'Is Adjustment': (entry as any).isAdjustment ? 'Yes' : 'No',
+                        'Is Reporting Only': (entry as any).isReportingOnly ? 'Yes' : 'No',
+                        'Entry Index': index + 1,
+                        'Total Entries in Transaction': entries.length,
+                        'Transaction Total Debit': totals.totalDebit,
+                        'Transaction Total Credit': totals.totalCredit,
+                        'Transaction Balance': totals.totalDebit - totals.totalCredit,
+                        'Is Balanced': Math.abs(totals.totalDebit - totals.totalCredit) <= 0.01 ? 'Yes' : 'NO - UNBALANCED',
+                        'Imbalance Amount': Math.abs(totals.totalDebit - totals.totalCredit) > 0.01 ? Math.abs(totals.totalDebit - totals.totalCredit) : '',
+                        'Is Aggregated Production': 'No'
+                    });
+                });
+                
+                // Add a summary row after each transaction
+                const txImbalance = Math.abs(totals.totalDebit - totals.totalCredit);
+                exportData.push({
+                    'Transaction ID': transactionId,
+                    'Entry Date': selectedDate,
+                    'Transaction Date': firstEntry.date,
+                    'Entry Timestamp': '',
+                    'Transaction Type': getVoucherTypeLabel(firstEntry.transactionType),
+                    'Transaction Type Code': firstEntry.transactionType,
+                    'Account Code': '',
+                    'Account Name': '=== TRANSACTION TOTAL ===',
+                    'Account ID': '',
+                    'Currency': 'USD',
+                    'Exchange Rate': '',
+                    'FCY Amount': '',
+                    'Debit (USD)': totals.totalDebit > 0 ? totals.totalDebit : '',
+                    'Credit (USD)': totals.totalCredit > 0 ? totals.totalCredit : '',
+                    'Narration': `Total for ${transactionId}`,
+                    'Factory ID': firstEntry.factoryId || '',
+                    'Is Adjustment': '',
+                    'Is Reporting Only': '',
+                    'Entry Index': '',
+                    'Total Entries in Transaction': entries.length,
+                    'Transaction Total Debit': totals.totalDebit,
+                    'Transaction Total Credit': totals.totalCredit,
+                    'Transaction Balance': totals.totalDebit - totals.totalCredit,
+                    'Is Balanced': txImbalance <= 0.01 ? 'Yes' : 'NO - UNBALANCED',
+                    'Imbalance Amount': txImbalance > 0.01 ? txImbalance : '',
+                    'Is Aggregated Production': 'No'
+                });
+            }
+        });
+        
+        // Calculate grand totals
+        const grandTotalDebit = filteredEntries.reduce((sum, [_, entries]) => {
+            return sum + getTransactionTotals(entries).totalDebit;
+        }, 0);
+        const grandTotalCredit = filteredEntries.reduce((sum, [_, entries]) => {
+            return sum + getTransactionTotals(entries).totalCredit;
+        }, 0);
+        
+        // Add grand total row
+        exportData.push({
+            'Transaction ID': '',
+            'Entry Date': selectedDate,
+            'Transaction Date': '',
+            'Entry Timestamp': '',
+            'Transaction Type': '',
+            'Transaction Type Code': '',
+            'Account Code': '',
+            'Account Name': '=== GRAND TOTAL ===',
+            'Account ID': '',
+            'Currency': 'USD',
+            'Exchange Rate': '',
+            'FCY Amount': '',
+            'Debit (USD)': grandTotalDebit > 0 ? grandTotalDebit : '',
+            'Credit (USD)': grandTotalCredit > 0 ? grandTotalCredit : '',
+            'Narration': `Grand Total for ${selectedDate}`,
+            'Factory ID': state.currentFactory?.id || '',
+            'Is Adjustment': '',
+            'Is Reporting Only': '',
+            'Entry Index': '',
+            'Total Entries in Transaction': filteredEntries.length,
+            'Transaction Total Debit': grandTotalDebit,
+            'Transaction Total Credit': grandTotalCredit,
+            'Transaction Balance': grandTotalDebit - grandTotalCredit,
+            'Is Balanced': Math.abs(grandTotalDebit - grandTotalCredit) <= 0.01 ? 'Yes' : 'NO - UNBALANCED',
+            'Imbalance Amount': Math.abs(grandTotalDebit - grandTotalCredit) > 0.01 ? Math.abs(grandTotalDebit - grandTotalCredit) : '',
+            'Is Aggregated Production': ''
+        });
+        
+        // Create summary data for unbalanced transactions
+        const summaryData: any[] = [
+            {
+                'Summary': '=== DAYBOOK VALIDATION SUMMARY ===',
+                'Date': selectedDate,
+                'Factory': state.currentFactory?.name || 'All',
+                'Voucher Type Filter': voucherTypeFilter === 'ALL' ? 'All Types' : getVoucherTypeLabel(voucherTypeFilter),
+                'Total Transactions': filteredEntries.length,
+                'Balanced Transactions': filteredEntries.length - unbalancedTransactions.length,
+                'Unbalanced Transactions': unbalancedTransactions.length,
+                'Grand Total Debit': grandTotalDebit,
+                'Grand Total Credit': grandTotalCredit,
+                'Grand Total Imbalance': grandTotalDebit - grandTotalCredit
+            },
+            {}, // Empty row
+            {
+                'Summary': '=== UNBALANCED TRANSACTIONS ===',
+                'Date': '',
+                'Factory': '',
+                'Voucher Type Filter': '',
+                'Total Transactions': '',
+                'Balanced Transactions': '',
+                'Unbalanced Transactions': '',
+                'Grand Total Debit': '',
+                'Grand Total Credit': '',
+                'Grand Total Imbalance': ''
+            }
+        ];
+        
+        if (unbalancedTransactions.length > 0) {
+            summaryData.push({
+                'Summary': 'Transaction ID',
+                'Date': 'Transaction Type',
+                'Factory': 'Entry Count',
+                'Voucher Type Filter': 'Total Debit',
+                'Total Transactions': 'Total Credit',
+                'Balanced Transactions': 'Imbalance',
+                'Unbalanced Transactions': 'Status',
+                'Grand Total Debit': '',
+                'Grand Total Credit': '',
+                'Grand Total Imbalance': ''
+            });
+            
+            unbalancedTransactions.forEach(tx => {
+                summaryData.push({
+                    'Summary': tx.transactionId,
+                    'Date': tx.date,
+                    'Factory': tx.transactionType,
+                    'Voucher Type Filter': tx.entryCount,
+                    'Total Transactions': tx.totalDebit,
+                    'Balanced Transactions': tx.totalCredit,
+                    'Unbalanced Transactions': tx.imbalance,
+                    'Grand Total Debit': tx.imbalance > 0 ? 'Debit > Credit' : 'Credit > Debit',
+                    'Grand Total Credit': '',
+                    'Grand Total Imbalance': ''
+                });
+            });
+        } else {
+            summaryData.push({
+                'Summary': '✅ All transactions are balanced!',
+                'Date': '',
+                'Factory': '',
+                'Voucher Type Filter': '',
+                'Total Transactions': '',
+                'Balanced Transactions': '',
+                'Unbalanced Transactions': '',
+                'Grand Total Debit': '',
+                'Grand Total Credit': '',
+                'Grand Total Imbalance': ''
+            });
+        }
+        
+        // Create workbook and worksheets
+        const wb = XLSX.utils.book_new();
+        const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        
+        // Set column widths for summary sheet
+        const summaryColWidths = [
+            { wch: 30 }, // Summary
+            { wch: 12 }, // Date
+            { wch: 20 }, // Factory
+            { wch: 20 }, // Voucher Type Filter
+            { wch: 18 }, // Total Transactions
+            { wch: 20 }, // Balanced Transactions
+            { wch: 22 }, // Unbalanced Transactions
+            { wch: 18 }, // Grand Total Debit
+            { wch: 18 }, // Grand Total Credit
+            { wch: 20 }  // Grand Total Imbalance
+        ];
+        wsSummary['!cols'] = summaryColWidths;
+        
+        // Set column widths for better readability
+        const colWidths = [
+            { wch: 20 }, // Transaction ID
+            { wch: 12 }, // Entry Date
+            { wch: 12 }, // Transaction Date
+            { wch: 20 }, // Entry Timestamp
+            { wch: 25 }, // Transaction Type
+            { wch: 15 }, // Transaction Type Code
+            { wch: 12 }, // Account Code
+            { wch: 30 }, // Account Name
+            { wch: 15 }, // Account ID
+            { wch: 10 }, // Currency
+            { wch: 12 }, // Exchange Rate
+            { wch: 12 }, // FCY Amount
+            { wch: 12 }, // Debit (USD)
+            { wch: 12 }, // Credit (USD)
+            { wch: 40 }, // Narration
+            { wch: 15 }, // Factory ID
+            { wch: 12 }, // Is Adjustment
+            { wch: 15 }, // Is Reporting Only
+            { wch: 12 }, // Entry Index
+            { wch: 20 }, // Total Entries in Transaction
+            { wch: 20 }, // Transaction Total Debit
+            { wch: 20 }, // Transaction Total Credit
+            { wch: 18 }, // Transaction Balance
+            { wch: 15 }, // Is Balanced
+            { wch: 15 }, // Imbalance Amount
+            { wch: 20 }  // Is Aggregated Production
+        ];
+        ws['!cols'] = colWidths;
+        
+        // Add worksheets to workbook (Summary first, then Daybook)
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+        XLSX.utils.book_append_sheet(wb, ws, 'Daybook');
+        
+        // Generate filename
+        const dateStr = selectedDate.replace(/-/g, '');
+        const factoryName = state.currentFactory?.name || 'All';
+        const filename = `Daybook_${factoryName}_${dateStr}_${voucherTypeFilter === 'ALL' ? 'AllTypes' : voucherTypeFilter}.xlsx`;
+        
+        // Write file
+        XLSX.writeFile(wb, filename);
+    };
+
     return (
         <div className="space-y-6 animate-in fade-in h-full flex flex-col">
             {/* Filters */}
@@ -5026,6 +5611,14 @@ const DayBookReport: React.FC = () => {
                     </select>
                 </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleExportToExcel}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold flex items-center gap-2"
+                        disabled={filteredEntries.length === 0}
+                    >
+                        <Download size={16} />
+                        Export Excel
+                    </button>
                     <button
                         onClick={() => {
                             const printWindow = window.open('', '_blank');
