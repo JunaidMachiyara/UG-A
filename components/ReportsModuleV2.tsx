@@ -4091,12 +4091,13 @@ const CashMovementReport: React.FC = () => {
 
 // --- ACCOUNTS RECEIVABLE REPORT ---
 const AccountsReceivableReport: React.FC = () => {
-    const { state } = useData();
+    const { state, migrateReceivablesToCustomers } = useData();
     const [startDate, setStartDate] = useState(`${new Date().getFullYear()}-01-01`);
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [transactionFilter, setTransactionFilter] = useState<'RECEIPTS' | 'PAYMENTS' | 'SALES' | 'ALL'>('ALL');
     const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
     const [viewLedgerAccountId, setViewLedgerAccountId] = useState<string | null>(null);
+    const [isMigrating, setIsMigrating] = useState(false);
 
     // Get all customers
     const customers = useMemo(() => {
@@ -4298,8 +4299,42 @@ const AccountsReceivableReport: React.FC = () => {
                 </div>
             </div>
 
-            {/* Report Table */}
+            {/* Report Table + Utilities */}
             <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-slate-700">Customer Balances</h3>
+                    <button
+                        type="button"
+                        disabled={isMigrating}
+                        onClick={async () => {
+                            if (isMigrating) return;
+                            setIsMigrating(true);
+                            try {
+                                await migrateReceivablesToCustomers();
+                            } finally {
+                                setIsMigrating(false);
+                            }
+                        }}
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                            isMigrating
+                                ? 'bg-slate-200 border-slate-300 text-slate-500 cursor-not-allowed'
+                                : 'bg-white border-amber-300 text-amber-700 hover:bg-amber-50'
+                        }`}
+                        title="One-time utility to move legacy receivables from control account into individual customer accounts"
+                    >
+                        {isMigrating ? (
+                            <>
+                                <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                                <span>Migrating…</span>
+                            </>
+                        ) : (
+                            <>
+                                <AlertCircle size={14} className="text-amber-600" />
+                                <span>Run AR Migration Utility</span>
+                            </>
+                        )}
+                    </button>
+                </div>
                 <div className="flex-1 overflow-auto">
                     <table className="w-full text-sm text-left min-w-full">
                         <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">

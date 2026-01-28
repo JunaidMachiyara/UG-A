@@ -731,6 +731,7 @@ interface DataContextType {
     alignBalance: (entityId: string, entityType: 'partner' | 'account', targetBalance: number) => Promise<{ success: boolean; message: string; adjustmentAmount?: number; transactionId?: string }>;
     alignFinishedGoodsStock: () => Promise<void>;
     alignOriginalStock: () => Promise<void>;
+    migrateReceivablesToCustomers: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -6625,6 +6626,179 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => window.location.reload(), 2000);
     };
 
+    /**
+     * One-time migration utility:
+     * Move legacy sales invoice receivables that were posted to a shared
+     * Accounts Receivable control account into individual CUSTOMER partner accounts.
+     *
+     * Rules:
+     * - Processes ONLY Posted invoices for the current factory.
+     * - Skips invoices that already have a SALES_INVOICE debit to the customerId.
+     * - Identifies legacy invoices where the SALES_INVOICE debit goes to the AR control account.
+     * - For each such invoice, posts a JV:
+     *      DR Customer, CR AR Control, amount = debit on AR control in that invoice.
+     * - Does NOT touch Unposted invoices (you can post them normally).
+     */
+    const migrateReceivablesToCustomers = async () => {
+        if (!currentFactory?.id) {
+            alert('No factory selected. Please select a factory and try again.');
+            return;
+        }
+
+        if (!isFirestoreLoaded) {
+            alert('Firebase not loaded yet. Please wait a few seconds and try again.');
+            return;
+        }
+
+        // Try to locate the Accounts Receivable control account
+        const arControlAccount = state.accounts.find(a =>
+            a.type === AccountType.ASSET && (
+                a.name.toLowerCase().includes('accounts receivable') ||
+                a.name.toLowerCase().includes('trade debtors') ||
+                a.code === '1100'
+            )
+        );
+
+        if (!arControlAccount) {
+            alert('⚠️ Accounts Receivable control account not found.\n\nPlease create an ASSET account for Accounts Receivable (e.g. Code: 1100, Name: "Accounts Receivable") or adjust the utility logic before running.');
+            return;
+        }
+
+        // Consider only Posted invoices for this factory
+        const factoryInvoices = state.salesInvoices.filter(inv =>
+            (inv.factoryId === currentFactory.id) &&
+            inv.status === 'Posted'
+        );
+
+        if (factoryInvoices.length === 0) {
+            alert('No Posted sales invoices found for this factory.');
+            return;
+        }
+
+        type InvoiceToMigrate = { invoice: SalesInvoice; amountToMove: number };
+        const invoicesToMigrate: InvoiceToMigrate[] = [];
+
+        for (const invoice of factoryInvoices) {
+            const transactionId = `INV-${invoice.invoiceNo}`;
+            const entries = state.ledger.filter(e =>
+                e.transactionId === transactionId &&
+                !(e as any).isReportingOnly // ignore reporting-only
+            );
+
+            if (entries.length === 0) {
+                // Either not posted via this mechanism or already cleaned by another utility
+                continue;
+            }
+
+            // Already correctly debited to customer? Then skip.
+            const hasCustomerDebit = entries.some(e =>
+                e.accountId === invoice.customerId &&
+                (e.debit || 0) > 0
+            );
+            if (hasCustomerDebit) {
+                continue;
+            }
+
+            // Legacy behaviour: debit to AR control account instead of customer
+            const arDebits = entries.filter(e =>
+                e.accountId === arControlAccount.id &&
+                (e.debit || 0) > 0
+            );
+            const amountToMove = arDebits.reduce((sum, e) => sum + (e.debit || 0), 0);
+
+            if (amountToMove <= 0.01) {
+                continue;
+            }
+
+            invoicesToMigrate.push({ invoice, amountToMove });
+        }
+
+        if (invoicesToMigrate.length === 0) {
+            alert('✅ No legacy receivables found that need migration.\n\nAll Posted invoices already debit individual customer accounts, or there are no AR-control debits to move.');
+            return;
+        }
+
+        const confirmMessage =
+            `Found ${invoicesToMigrate.length} Posted sales invoice(s) where receivable is in the control account, not the customer.\n\n` +
+            `This utility will, for EACH of these invoices:\n` +
+            `  • Post a Journal Voucher JV-MIG-{InvoiceNo}\n` +
+            `  • Debit the CUSTOMER account\n` +
+            `  • Credit the Accounts Receivable control account (${arControlAccount.name})\n\n` +
+            `Invoices that already appear correctly in customer ledgers will NOT be modified.\n` +
+            `Unposted invoices are ignored (you can post them normally).\n\n` +
+            `Do you want to continue?`;
+
+        if (!confirm(confirmMessage)) {
+            return;
+        }
+
+        let migratedCount = 0;
+        const errors: string[] = [];
+
+        for (const { invoice, amountToMove } of invoicesToMigrate) {
+            try {
+                const customer = state.partners.find(p => p.id === invoice.customerId);
+                const customerName = customer?.name || 'Unknown Customer';
+                const transactionId = `JV-MIG-${invoice.invoiceNo}`;
+                const migrationDate = invoice.date;
+
+                const entries: Omit<LedgerEntry, 'id'>[] = [
+                    {
+                        date: migrationDate,
+                        transactionId,
+                        transactionType: TransactionType.JOURNAL_VOUCHER,
+                        accountId: invoice.customerId,
+                        accountName: customerName,
+                        factoryId: invoice.factoryId || currentFactory.id,
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: amountToMove,
+                        debit: amountToMove,
+                        credit: 0,
+                        narration: `AR migration from control to customer for invoice ${invoice.invoiceNo}`
+                    },
+                    {
+                        date: migrationDate,
+                        transactionId,
+                        transactionType: TransactionType.JOURNAL_VOUCHER,
+                        accountId: arControlAccount.id,
+                        accountName: arControlAccount.name,
+                        factoryId: invoice.factoryId || currentFactory.id,
+                        currency: 'USD',
+                        exchangeRate: 1,
+                        fcyAmount: amountToMove,
+                        debit: 0,
+                        credit: amountToMove,
+                        narration: `AR migration from control to ${customerName} for invoice ${invoice.invoiceNo}`
+                    }
+                ];
+
+                await postTransaction(entries);
+                migratedCount++;
+                console.log(`✅ Migrated receivable for invoice ${invoice.invoiceNo}: $${amountToMove.toFixed(2)}`);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Unknown error';
+                errors.push(`Invoice ${invoice.invoiceNo}: ${message}`);
+                console.error(`❌ Error migrating receivable for invoice ${invoice.invoiceNo}:`, error);
+            }
+        }
+
+        if (errors.length > 0) {
+            alert(
+                `⚠️ Receivable migration completed with some errors.\n\n` +
+                `Successfully migrated ${migratedCount} invoice(s).\n` +
+                `Encountered ${errors.length} error(s):\n\n` +
+                errors.join('\n')
+            );
+        } else {
+            alert(
+                `✅ Receivable migration complete!\n\n` +
+                `Successfully migrated ${migratedCount} invoice(s) from the AR control account to customer accounts.\n\n` +
+                `You can now refresh the Accounts Receivable report and individual customer ledgers to see updated balances.`
+            );
+        }
+    };
+
     return (
         <DataContext.Provider value={{
             state,
@@ -6702,7 +6876,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             fixMissingSalesInvoiceLedgerEntries,
             alignBalance,
             alignFinishedGoodsStock,
-            alignOriginalStock
+            alignOriginalStock,
+            migrateReceivablesToCustomers
         }}>
             {children}
         </DataContext.Provider>
