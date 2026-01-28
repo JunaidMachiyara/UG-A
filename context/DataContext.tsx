@@ -4990,92 +4990,74 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // - Discount Debit = discount (if any) ✓ Already done
         
         invoice.additionalCosts.forEach(cost => { 
-            // CRITICAL: Use the SAME formula as DataEntry.tsx to match invoice calculation
-            // DataEntry: amount * (exchangeRate / 1) = amount * exchangeRate
-            // This ensures consistency between invoice netTotal and ledger entries
             const amountUSD = cost.amount * cost.exchangeRate; 
             const providerName = state.partners.find(p => p.id === cost.providerId)?.name || 'Unknown Provider';
+            const isExpenseOnly = cost.costType === 'Customs' || cost.costType === 'Other';
             
-            // CREDIT: Revenue for additional costs (customer pays us for these)
-            entries.push({ 
-                date: invoice.date, 
-                transactionId, 
-                transactionType: TransactionType.SALES_INVOICE, 
-                accountId: revenueId, 
-                accountName: 'Sales Revenue (Additional Costs)', 
-                currency: 'USD', 
-                exchangeRate: 1, 
-                fcyAmount: amountUSD, 
-                debit: 0, 
-                credit: amountUSD, 
-                narration: `${cost.costType} Revenue: ${invoice.invoiceNo}`, 
-                factoryId: invoice.factoryId 
-            });
-            
-            // DEBIT: Expense account for additional costs (we incur this cost)
-            // Lookup expense account for additional costs - be more specific to avoid wrong accounts
-            // CRITICAL: Must be EXPENSE type, and exclude accounts like "Raw Material Consumption"
-            const additionalCostExpenseAccount = state.accounts.find(a => 
-                a.type === AccountType.EXPENSE &&
-                !a.name.toLowerCase().includes('raw material') &&
-                !a.name.toLowerCase().includes('consumption') &&
-                (a.name.toLowerCase().includes('additional cost') || 
-                 a.name.toLowerCase().includes('freight expense') ||
-                 a.name.toLowerCase().includes('shipping expense') ||
-                 a.name.toLowerCase().includes('logistics expense') ||
-                 (a.name.toLowerCase().includes('freight') && !a.name.toLowerCase().includes('raw')) ||
-                 (a.name.toLowerCase().includes('shipping') && !a.name.toLowerCase().includes('raw')) ||
-                 a.code === '5010')
-            );
-            
-            if (!additionalCostExpenseAccount) {
-                // If no specific expense account found, throw error (we need proper account setup)
-                throw new Error(`CRITICAL: No expense account found for additional costs! Please create an EXPENSE type account in Setup > Chart of Accounts:\n` +
-                    `- Name: "Additional Costs" or "Freight Expense" or "Shipping Expense"\n` +
-                    `- Code: 5010 (recommended)\n` +
-                    `- Type: EXPENSE\n\n` +
-                    `Current additional cost: ${cost.costType} - $${amountUSD.toFixed(2)}`);
-            }
-            
-            // DEBIT: Expense account
-            entries.push({ 
-                date: invoice.date, 
-                transactionId, 
-                transactionType: TransactionType.SALES_INVOICE, 
-                accountId: additionalCostExpenseAccount.id, 
-                accountName: additionalCostExpenseAccount.name, 
-                currency: 'USD', 
-                exchangeRate: 1, 
-                fcyAmount: amountUSD, 
-                debit: amountUSD, 
-                credit: 0, 
-                narration: `${cost.costType} Expense: ${invoice.invoiceNo}`, 
-                factoryId: invoice.factoryId 
-            });
-            
-            // CREDIT: Provider Payable - ONLY if there's an actual provider to pay
-            // For "Other" or "Customs" types without a provider, we don't owe anyone
-            // (Customer already paid us, we incur the expense, but no one to pay)
-            if (cost.providerId && cost.costType !== 'Other' && cost.costType !== 'Customs') {
+            if (isExpenseOnly) {
+                // Customs / Other: post as EXPENSE only (no revenue). Debit Expense, Credit provider or clearing.
+                const expenseAccount = cost.costType === 'Customs'
+                    ? state.accounts.find(a => a.type === AccountType.EXPENSE && (a.name.toLowerCase().includes('customs') || a.code === '5050'))
+                    : state.accounts.find(a => a.type === AccountType.EXPENSE && (a.name.toLowerCase().includes('miscellaneous') || a.name.toLowerCase().includes('other expense') || a.code === '5900'));
+                if (!expenseAccount) {
+                    throw new Error(`CRITICAL: No expense account for ${cost.costType}. Create EXPENSE: Customs "Customs & Duties" (5050), Other "Miscellaneous Expenses" (5900). Current: $${amountUSD.toFixed(2)}`);
+                }
                 entries.push({ 
-                    date: invoice.date, 
-                    transactionId, 
-                    transactionType: TransactionType.SALES_INVOICE, 
-                    accountId: cost.providerId, 
-                    accountName: providerName, 
-                    currency: cost.currency, 
-                    exchangeRate: cost.exchangeRate, 
-                    fcyAmount: cost.amount, 
-                    debit: 0, 
-                    credit: amountUSD, 
-                    narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, 
-                    factoryId: invoice.factoryId 
+                    date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                    accountId: expenseAccount.id, accountName: expenseAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: amountUSD, 
+                    debit: amountUSD, credit: 0, narration: `${cost.costType} Expense: ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
                 });
+                if (cost.providerId) {
+                    entries.push({ 
+                        date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                        accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, 
+                        debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
+                    });
+                } else {
+                    const clearingAccount = cost.costType === 'Customs'
+                        ? state.accounts.find(a => a.type === AccountType.LIABILITY && (a.name.toLowerCase().includes('customs') || a.code === '2202'))
+                        : state.accounts.find(a => a.type === AccountType.LIABILITY && ((a.name.toLowerCase().includes('payable') && a.name.toLowerCase().includes('other')) || a.code === '2001'));
+                    if (!clearingAccount) {
+                        throw new Error(`CRITICAL: No clearing account for ${cost.costType} (no provider). Add liability: Customs "Customs Duty Payable" (2202), Other "Accounts Payable - Other" (2001).`);
+                    }
+                    entries.push({ 
+                        date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                        accountId: clearingAccount.id, accountName: clearingAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: amountUSD, 
+                        debit: 0, credit: amountUSD, narration: `${cost.costType} (no provider): ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
+                    });
+                }
+            } else {
+                // Freight / Clearing / Commission: pass-through (Revenue + Expense + Provider)
+                entries.push({ 
+                    date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                    accountId: revenueId, accountName: 'Sales Revenue (Additional Costs)', currency: 'USD', exchangeRate: 1, fcyAmount: amountUSD, 
+                    debit: 0, credit: amountUSD, narration: `${cost.costType} Revenue: ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
+                });
+                const additionalCostExpenseAccount = state.accounts.find(a => 
+                    a.type === AccountType.EXPENSE &&
+                    !a.name.toLowerCase().includes('raw material') &&
+                    !a.name.toLowerCase().includes('consumption') &&
+                    (a.name.toLowerCase().includes('additional cost') || a.name.toLowerCase().includes('freight expense') ||
+                     a.name.toLowerCase().includes('shipping expense') || a.name.toLowerCase().includes('logistics expense') ||
+                     (a.name.toLowerCase().includes('freight') && !a.name.toLowerCase().includes('raw')) ||
+                     (a.name.toLowerCase().includes('shipping') && !a.name.toLowerCase().includes('raw')) || a.code === '5010')
+                );
+                if (!additionalCostExpenseAccount) {
+                    throw new Error(`CRITICAL: No expense account for additional costs (Freight/Clearing/Commission). Create EXPENSE e.g. "Freight Expense" or code 5010. Current: ${cost.costType} $${amountUSD.toFixed(2)}`);
+                }
+                entries.push({ 
+                    date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                    accountId: additionalCostExpenseAccount.id, accountName: additionalCostExpenseAccount.name, currency: 'USD', exchangeRate: 1, fcyAmount: amountUSD, 
+                    debit: amountUSD, credit: 0, narration: `${cost.costType} Expense: ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
+                });
+                if (cost.providerId) {
+                    entries.push({ 
+                        date: invoice.date, transactionId, transactionType: TransactionType.SALES_INVOICE, 
+                        accountId: cost.providerId, accountName: providerName, currency: cost.currency, exchangeRate: cost.exchangeRate, fcyAmount: cost.amount, 
+                        debit: 0, credit: amountUSD, narration: `${cost.costType} Payable: ${invoice.invoiceNo}`, factoryId: invoice.factoryId 
+                    });
+                }
             }
-            // NOTE: For "Other" or "Customs" without provider:
-            // - Customer pays us (Revenue Credit) ✓
-            // - We incur expense (Expense Debit) ✓
-            // - No payable entry (we don't owe anyone, customer already paid) 
         });
         
         // Calculate COGS based on item avgCost and reduce Finished Goods inventory

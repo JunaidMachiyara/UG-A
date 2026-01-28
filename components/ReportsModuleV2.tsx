@@ -38,7 +38,8 @@ import {
     ChevronUp,
     Wallet,
     Users,
-    RefreshCw
+    RefreshCw,
+    AlertCircle
 } from 'lucide-react';
 import { CHART_COLORS, EXCHANGE_RATES } from '../constants';
 import { EntitySelector } from './EntitySelector';
